@@ -1,0 +1,79 @@
+{
+    "stride": {
+        "branch": "v16.0.0",
+        "description": "Stride Chain⛓: Multichain Liquid Staking",
+        "homepage": "https://www.stride.zone/",
+        "owner": "Stride-Labs",
+        "repo": "stride",
+        "rev": "v16.0.0",
+        "sha256": "03bd11ciamf6wkv56irna95dfr7gjyh0m7qq8y57s11zby8y7q3p",
+        "type": "tarball",
+        "url": "https://github.com/Stride-Labs/stride/archive/v16.0.0.tar.gz"
+    },
+    "chain-main": {
+        "branch": "master",
+        "description": "Crypto.org Chain⛓: Croeseid Testnet and beyond development",
+        "homepage": "https://crypto.org",
+        "owner": "crypto-org-chain",
+        "repo": "chain-main",
+        "rev": "7e7d49839283f6d77516f614c2e2ff7441771e5a",
+        "sha256": "1gm70jfd9rvi8shf6n7fjfvs4krdv3vjz50f44id3dv8fgg5zni1",
+        "type": "tarball",
+        "url": "https://github.com/crypto-org-chain/chain-main/archive/7e7d49839283f6d77516f614c2e2ff7441771e5a.tar.gz"
+    },
+    "cosmos-sdk": {
+        "branch": "main",
+        "description": ":chains: A Framework for Building High Value Public Blockchains :sparkles:",
+        "homepage": "https://cosmos.network/",
+        "owner": "cosmos",
+        "repo": "cosmos-sdk",
+        "rev": "b6c77e6c819f8a51166649eaef125d1bfb276f04",
+        "sha256": "09ns4yfxyfi7c7n5g69zv32m1rdssdl48c1akmv1y2vz6ayz4v02",
+        "type": "tarball",
+        "url": "https://github.com/cosmos/cosmos-sdk/archive/b6c77e6c819f8a51166649eaef125d1bfb276f04.tar.gz"
+    },
+    "gomod2nix": {
+        "branch": "master",
+        "description": "Convert applications using Go modules to Nix expressions",
+        "homepage": null,
+        "owner": "nix-community",
+        "repo": "gomod2nix",
+        "rev": "872b63ddd28f318489c929d25f1f0a3c6039c971",
+        "sha256": "1wh9rlhg2w42fsavh7wxvmw42l7m5wg290gnp571dq0qcr1z7kg1",
+        "type": "tarball",
+        "url": "https://github.com/nix-community/gomod2nix/archive/872b63ddd28f318489c929d25f1f0a3c6039c971.tar.gz"
+    },
+    "hermes": {
+        "branch": "v1.8.0",
+        "description": "Hermes IBC relayer - Formal specifications and Rust implementation",
+        "homepage": "",
+        "owner": "informalsystems",
+        "repo": "hermes",
+        "rev": "39036d1af7f3828974c16b258cd8885d70ebeaa5",
+        "sha256": "16piirbdgddvws9wbd0hcpwmgsk0plxalwlf9llqaaj3xj3dbl1i",
+        "type": "tarball",
+        "url": "https://github.com/informalsystems/hermes/archive/v1.8.0.tar.gz"
+    },
+    "niv": {
+        "branch": "master",
+        "description": "Easy dependency management for Nix projects",
+        "homepage": "https://github.com/nmattia/niv",
+        "owner": "nmattia",
+        "repo": "niv",
+        "rev": "e0ca65c81a2d7a4d82a189f1e23a48d59ad42070",
+        "sha256": "1pq9nh1d8nn3xvbdny8fafzw87mj7gsmp6pxkdl65w2g18rmcmzx",
+        "type": "tarball",
+        "url": "https://github.com/nmattia/niv/archive/e0ca65c81a2d7a4d82a189f1e23a48d59ad42070.tar.gz"
+    },
+    "nixpkgs": {
+        "branch": "release-22.11",
+        "description": "Nix Packages collection",
+        "homepage": "",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "adec507378397099733e23c7496793e8d01ecb79",
+        "sha256": "131cgm8llqdq5plbzydrgzhc6lf6bz191hfjzrblxiy6wfsmxzn7",
+        "type": "tarball",
+        "url": "https://github.com/NixOS/nixpkgs/archive/adec507378397099733e23c7496793e8d01ecb79.tar.gz"
+    }
+}

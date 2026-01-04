@@ -1,0 +1,288 @@
+#!/bin/bash
+
+# ============================================================================
+# Atoshi Chain - Local Development Node Startup Script
+# ============================================================================
+# This script initializes and starts a single-node Atoshi chain for development
+# and testing purposes.
+#
+# Chain ID: atoshi_88388-1 (Development/Testing)
+# ============================================================================
+
+# Development Chain ID (also used for testing)
+CHAINID="${CHAIN_ID:-atoshi_88388-1}"
+BASE_DENOM="aatos"
+DISPLAY_DENOM="atos"
+MONIKER="atoshi-dev-node"
+
+# Keyring configuration
+# WARNING: 'test' keyring is for development only, use 'file' or 'os' in production
+KEYRING="test"
+KEYALGO="eth_secp256k1"
+LOGLEVEL="info"
+
+# Set dedicated home directory for the atoshid instance
+HOMEDIR="$HOME/.atoshid-dev"
+
+# EVM tracing (uncomment to enable)
+# TRACE="--trace"
+TRACE=""
+
+# Feemarket params basefee
+BASEFEE=1000000000
+
+# Path variables
+CONFIG=$HOMEDIR/config/config.toml
+APP_TOML=$HOMEDIR/config/app.toml
+GENESIS=$HOMEDIR/config/genesis.json
+TMP_GENESIS=$HOMEDIR/config/tmp_genesis.json
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Print banner
+echo -e "${BLUE}"
+echo "╔═══════════════════════════════════════════════════════════════════╗"
+echo "║                                                                   ║"
+echo "║     █████╗ ████████╗ ██████╗ ███████╗██╗  ██╗██╗                  ║"
+echo "║    ██╔══██╗╚══██╔══╝██╔═══██╗██╔════╝██║  ██║██║                  ║"
+echo "║    ███████║   ██║   ██║   ██║███████╗███████║██║                  ║"
+echo "║    ██╔══██║   ██║   ██║   ██║╚════██║██╔══██║██║                  ║"
+echo "║    ██║  ██║   ██║   ╚██████╔╝███████║██║  ██║██║                  ║"
+echo "║    ╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝                  ║"
+echo "║                                                                   ║"
+echo "║           Privacy-Preserving EVM Blockchain                       ║"
+echo "║                                                                   ║"
+echo "╚═══════════════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+
+echo -e "${GREEN}Chain ID:${NC} $CHAINID"
+echo -e "${GREEN}Base Denom:${NC} $BASE_DENOM"
+echo -e "${GREEN}Display Denom:${NC} $DISPLAY_DENOM"
+echo -e "${GREEN}Home Directory:${NC} $HOMEDIR"
+echo ""
+
+# Validate dependencies are installed
+command -v jq >/dev/null 2>&1 || {
+	echo -e "${RED}Error: jq not installed. Please install jq first.${NC}"
+	echo "  macOS: brew install jq"
+	echo "  Ubuntu: sudo apt-get install jq"
+	exit 1
+}
+
+# Used to exit on first error (any non-zero exit code)
+set -e
+
+# Parse input flags
+install=true
+overwrite=""
+
+while [[ $# -gt 0 ]]; do
+	key="$1"
+	case $key in
+	-y)
+		echo -e "${YELLOW}Flag -y passed -> Overwriting the previous chain data.${NC}"
+		overwrite="y"
+		shift
+		;;
+	-n)
+		echo -e "${YELLOW}Flag -n passed -> Not overwriting the previous chain data.${NC}"
+		overwrite="n"
+		shift
+		;;
+	--no-install)
+		echo -e "${YELLOW}Flag --no-install passed -> Skipping installation of the atoshid binary.${NC}"
+		install=false
+		shift
+		;;
+	-h|--help)
+		echo "Usage: ./local_node.sh [OPTIONS]"
+		echo ""
+		echo "Options:"
+		echo "  -y              Overwrite existing chain data without prompting"
+		echo "  -n              Keep existing chain data and start node"
+		echo "  --no-install    Skip 'make install' step"
+		echo "  -h, --help      Show this help message"
+		echo ""
+		echo "Environment Variables:"
+		echo "  CHAIN_ID        Override default chain ID (default: atoshi_88388-1)"
+		echo ""
+		exit 0
+		;;
+	*)
+		echo -e "${RED}Unknown flag passed: $key -> Exiting script!${NC}"
+		exit 1
+		;;
+	esac
+done
+
+if [[ $install == true ]]; then
+	echo -e "${BLUE}Building and installing atoshid...${NC}"
+	make install
+	echo -e "${GREEN}Installation complete!${NC}"
+fi
+
+# User prompt if neither -y nor -n was passed as a flag
+# and an existing local node configuration is found.
+if [[ $overwrite = "" ]]; then
+	if [ -d "$HOMEDIR" ]; then
+		printf "\n${YELLOW}An existing folder at '%s' was found.${NC}\n" "$HOMEDIR"
+		echo "You can choose to delete this folder and start a new local node with new keys from genesis."
+		echo "When declined, the existing local node is started."
+		echo ""
+		echo -e "${BLUE}Overwrite the existing configuration and start a new local node? [y/n]${NC}"
+		read -r overwrite
+	else
+		overwrite="y"
+	fi
+fi
+
+# Setup local node if overwrite is set to Yes, otherwise skip setup
+if [[ $overwrite == "y" || $overwrite == "Y" ]]; then
+	echo -e "${BLUE}Setting up new Atoshi development node...${NC}"
+	
+	# Remove the previous folder
+	rm -rf "$HOMEDIR"
+
+	# Set client config
+	atoshid config set client chain-id "$CHAINID" --home "$HOMEDIR"
+	atoshid config set client keyring-backend "$KEYRING" --home "$HOMEDIR"
+
+	# ============================================================================
+	# Development Accounts
+	# ============================================================================
+	# These are pre-funded accounts for development and testing purposes.
+	# DO NOT use these mnemonics in production!
+	# ============================================================================
+
+	# Validator Key (Primary validator account)
+	VAL_KEY="validator"
+	VAL_MNEMONIC="gesture inject test cycle original hollow east ridge hen combine junk child bacon zero hope comfort vacuum milk pitch cage oppose unhappy lunar seat"
+
+	# Developer accounts for testing
+	USER1_KEY="dev0"
+	USER1_MNEMONIC="copper push brief egg scan entry inform record adjust fossil boss egg comic alien upon aspect dry avoid interest fury window hint race symptom"
+
+	USER2_KEY="dev1"
+	USER2_MNEMONIC="maximum display century economy unlock van census kite error heart snow filter midnight usage egg venture cash kick motor survey drastic edge muffin visual"
+
+	USER3_KEY="dev2"
+	USER3_MNEMONIC="will wear settle write dance topic tape sea glory hotel oppose rebel client problem era video gossip glide during yard balance cancel file rose"
+
+	USER4_KEY="dev3"
+	USER4_MNEMONIC="doll midnight silk carpet brush boring pluck office gown inquiry duck chief aim exit gain never tennis crime fragile ship cloud surface exotic patch"
+
+	# Import keys from mnemonics
+	echo -e "${BLUE}Importing development accounts...${NC}"
+	echo "$VAL_MNEMONIC" | atoshid keys add "$VAL_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	echo "$USER1_MNEMONIC" | atoshid keys add "$USER1_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	echo "$USER2_MNEMONIC" | atoshid keys add "$USER2_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	echo "$USER3_MNEMONIC" | atoshid keys add "$USER3_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	echo "$USER4_MNEMONIC" | atoshid keys add "$USER4_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+
+	# Initialize the chain
+	echo -e "${BLUE}Initializing chain...${NC}"
+	atoshid init $MONIKER -o --chain-id "$CHAINID" --home "$HOMEDIR"
+
+	# Change parameter token denominations to $BASE_DENOM
+	echo -e "${BLUE}Configuring genesis parameters...${NC}"
+	jq --arg base_denom "$BASE_DENOM" '.app_state["staking"]["params"]["bond_denom"]=$base_denom' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	jq --arg base_denom "$BASE_DENOM" '.app_state["gov"]["deposit_params"]["min_deposit"][0]["denom"]=$base_denom' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	jq --arg base_denom "$BASE_DENOM" '.app_state["gov"]["params"]["min_deposit"][0]["denom"]=$base_denom' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	jq --arg base_denom "$BASE_DENOM" '.app_state["inflation"]["params"]["mint_denom"]=$base_denom' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+
+	# Set gas limit in genesis
+	jq '.consensus_params["block"]["max_gas"]="10000000"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+
+	# Set base fee in genesis
+	jq '.app_state["feemarket"]["params"]["base_fee"]="'${BASEFEE}'"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+
+	# Enable prometheus metrics and all APIs for dev node
+	if [[ "$OSTYPE" == "darwin"* ]]; then
+		sed -i '' 's/prometheus = false/prometheus = true/' "$CONFIG"
+		sed -i '' 's/prometheus-retention-time = 0/prometheus-retention-time  = 1000000000000/g' "$APP_TOML"
+		sed -i '' 's/enabled = false/enabled = true/g' "$APP_TOML"
+		sed -i '' 's/enable = false/enable = true/g' "$APP_TOML"
+		# Don't enable Rosetta API by default
+		grep -q -F '[rosetta]' "$APP_TOML" && sed -i '' '/\[rosetta\]/,/^\[/ s/enable = true/enable = false/' "$APP_TOML"
+		# Don't enable memiavl by default
+		grep -q -F '[memiavl]' "$APP_TOML" && sed -i '' '/\[memiavl\]/,/^\[/ s/enable = true/enable = false/' "$APP_TOML"
+		# Don't enable versionDB by default
+		grep -q -F '[versiondb]' "$APP_TOML" && sed -i '' '/\[versiondb\]/,/^\[/ s/enable = true/enable = false/' "$APP_TOML"
+	else
+		sed -i 's/prometheus = false/prometheus = true/' "$CONFIG"
+		sed -i 's/prometheus-retention-time  = "0"/prometheus-retention-time  = "1000000000000"/g' "$APP_TOML"
+		sed -i 's/enabled = false/enabled = true/g' "$APP_TOML"
+		sed -i 's/enable = false/enable = true/g' "$APP_TOML"
+		# Don't enable Rosetta API by default
+		grep -q -F '[rosetta]' "$APP_TOML" && sed -i '/\[rosetta\]/,/^\[/ s/enable = true/enable = false/' "$APP_TOML"
+		# Don't enable memiavl by default
+		grep -q -F '[memiavl]' "$APP_TOML" && sed -i '/\[memiavl\]/,/^\[/ s/enable = true/enable = false/' "$APP_TOML"
+		# Don't enable versionDB by default
+		grep -q -F '[versiondb]' "$APP_TOML" && sed -i '/\[versiondb\]/,/^\[/ s/enable = true/enable = false/' "$APP_TOML"
+	fi
+
+	# Change proposal periods to pass within a reasonable time for local testing
+	sed -i.bak 's/"max_deposit_period": "172800s"/"max_deposit_period": "30s"/g' "$GENESIS"
+	sed -i.bak 's/"voting_period": "172800s"/"voting_period": "30s"/g' "$GENESIS"
+	sed -i.bak 's/"expedited_voting_period": "86400s"/"expedited_voting_period": "15s"/g' "$GENESIS"
+
+	# Set custom pruning settings
+	sed -i.bak 's/pruning = "default"/pruning = "custom"/g' "$APP_TOML"
+	sed -i.bak 's/pruning-keep-recent = "0"/pruning-keep-recent = "2"/g' "$APP_TOML"
+	sed -i.bak 's/pruning-interval = "0"/pruning-interval = "10"/g' "$APP_TOML"
+
+	# Allocate genesis accounts (cosmos formatted addresses)
+	# Validator: 100,000,000 ATOS
+	# Dev accounts: 1,000 ATOS each
+	echo -e "${BLUE}Allocating genesis accounts...${NC}"
+	atoshid genesis add-genesis-account "$(atoshid keys show "$VAL_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 100000000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
+	atoshid genesis add-genesis-account "$(atoshid keys show "$USER1_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
+	atoshid genesis add-genesis-account "$(atoshid keys show "$USER2_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
+	atoshid genesis add-genesis-account "$(atoshid keys show "$USER3_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
+	atoshid genesis add-genesis-account "$(atoshid keys show "$USER4_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
+
+	# Sign genesis transaction
+	echo -e "${BLUE}Creating genesis transaction...${NC}"
+	atoshid genesis gentx "$VAL_KEY" 1000000000000000000000$BASE_DENOM --gas-prices ${BASEFEE}$BASE_DENOM --keyring-backend "$KEYRING" --chain-id "$CHAINID" --home "$HOMEDIR"
+
+	# Collect genesis tx
+	atoshid genesis collect-gentxs --home "$HOMEDIR"
+
+	# Run this to ensure everything worked and that the genesis file is setup correctly
+	atoshid genesis validate-genesis --home "$HOMEDIR"
+
+	echo -e "${GREEN}Genesis setup complete!${NC}"
+fi
+
+# Print account information
+echo ""
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}Development Accounts:${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
+atoshid keys list --keyring-backend "$KEYRING" --home "$HOMEDIR"
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
+echo ""
+echo -e "${GREEN}RPC Endpoints:${NC}"
+echo "  Tendermint RPC: http://localhost:26657"
+echo "  EVM JSON-RPC:   http://localhost:8545"
+echo "  WebSocket:      ws://localhost:8546"
+echo "  REST API:       http://localhost:1317"
+echo "  gRPC:           localhost:9090"
+echo ""
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}Starting Atoshi node...${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════════${NC}"
+
+# Start the node
+atoshid start \
+	--metrics "$TRACE" \
+	--log_level $LOGLEVEL \
+	--minimum-gas-prices=0.0001$BASE_DENOM \
+	--json-rpc.api eth,txpool,personal,net,debug,web3 \
+	--home "$HOMEDIR" \
+	--chain-id "$CHAINID"

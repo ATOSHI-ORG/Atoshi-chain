@@ -1,0 +1,37 @@
+#
+# This codecov.yml is the default configuration for
+# all repositories on Codecov. You may adjust the settings
+# below in your own codecov.yml in your repository.
+#
+coverage:
+  precision: 2
+  round: down
+  range: 70...100
+
+  status:
+    # Learn more at https://docs.codecov.io/docs/commit-status
+    project:
+      default:
+        threshold: 1% # allow this much decrease on project
+        target: 90%
+    changes: false
+
+comment:
+  layout: "reach, diff, files"
+  behavior: default # update if exists else create new
+  require_changes: true
+
+ignore:
+  - "**/*.md"
+  - "cmd"
+  - "client"
+  - "proto"
+  - "third_party"
+  - "testutil"
+  - "**/test_*.go"
+  - "**/*.pb.go"
+  - "**/*.pb.gw.go"
+  - "x/**/module.go"
+  - "scripts"
+  - "ibc/testing"
+  - "version"

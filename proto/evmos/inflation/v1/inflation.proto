@@ -1,0 +1,82 @@
+// Copyright Tharsis Labs Ltd.(Evmos)
+// SPDX-License-Identifier:ENCL-1.0(https://github.com/evmos/evmos/blob/main/LICENSE)
+syntax = "proto3";
+package evmos.inflation.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/inflation/v1/types";
+
+// InflationDistribution defines the distribution in which inflation is
+// allocated through minting on each epoch (staking, incentives, community). It
+// excludes the team vesting distribution, as this is minted once at genesis.
+// The initial InflationDistribution can be calculated from the Evmos Token
+// Model like this:
+// mintDistribution1 = distribution1 / (1 - teamVestingDistribution)
+// 0.5333333         = 40%           / (1 - 25%)
+message InflationDistribution {
+  // staking_rewards defines the proportion of the minted minted_denom that is
+  // to be allocated as staking rewards
+  string staking_rewards = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // protolint:disable FIELDS_HAVE_COMMENT
+
+  // Deprecated: usage_incentives defines the proportion of the minted minted_denom that is
+  // to be allocated to the incentives module address
+  string usage_incentives = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true,
+    deprecated = true
+  ];
+  // community_pool defines the proportion of the minted minted_denom that is to
+  // be allocated to the community pool
+  string community_pool = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// ExponentialCalculation holds factors to calculate exponential inflation on
+// each period. Calculation reference:
+// periodProvision = exponentialDecay       *  bondingIncentive
+// f(x)            = (a * (1 - r) ^ x + c)  *  (1 + max_variance - bondedRatio *
+// (max_variance / bonding_target))
+message ExponentialCalculation {
+  // a defines the initial value
+  string a = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // r defines the reduction factor
+  string r = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // c defines the parameter for long term inflation
+  string c = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // bonding_target
+  string bonding_target = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // max_variance
+  string max_variance = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
