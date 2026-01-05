@@ -231,10 +231,19 @@ if [[ $overwrite == "y" || $overwrite == "Y" ]]; then
 	sed -i.bak 's/"voting_period": "172800s"/"voting_period": "30s"/g' "$GENESIS"
 	sed -i.bak 's/"expedited_voting_period": "86400s"/"expedited_voting_period": "15s"/g' "$GENESIS"
 
-	# Set custom pruning settings
-	sed -i.bak 's/pruning = "default"/pruning = "custom"/g' "$APP_TOML"
-	sed -i.bak 's/pruning-keep-recent = "0"/pruning-keep-recent = "2"/g' "$APP_TOML"
-	sed -i.bak 's/pruning-interval = "0"/pruning-interval = "10"/g' "$APP_TOML"
+	# Set custom pruning settings for development
+	# For dev environment, we use "nothing" to keep all historical states
+	# This allows querying any historical block state (required for MetaMask and debugging)
+	# Options: "default", "nothing", "everything", "custom"
+	#   - nothing: keep all states (best for development)
+	#   - everything: prune all states except current (smallest disk usage)
+	#   - default: keep last 100 states
+	#   - custom: configure pruning-keep-recent and pruning-interval
+	if [[ "$OSTYPE" == "darwin"* ]]; then
+		sed -i '' 's/pruning = "default"/pruning = "nothing"/g' "$APP_TOML"
+	else
+		sed -i 's/pruning = "default"/pruning = "nothing"/g' "$APP_TOML"
+	fi
 
 	# Allocate genesis accounts (cosmos formatted addresses)
 	# Validator: 100,000,000 ATOS
