@@ -16,8 +16,9 @@ DISPLAY_DENOM="atos"
 MONIKER="atoshi-dev-node"
 
 # Keyring configuration
-# WARNING: 'test' keyring is for development only, use 'file' or 'os' in production
-KEYRING="test"
+# Using 'file' backend for password-protected key storage
+# This is more secure than 'test' which allows anyone to export keys without password
+KEYRING="file"
 KEYALGO="eth_secp256k1"
 LOGLEVEL="info"
 
