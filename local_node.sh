@@ -183,27 +183,27 @@ if [[ $overwrite == "y" || $overwrite == "Y" ]]; then
 	
 	echo -e "${GREEN}[1/5] Importing validator account...${NC}"
 	echo -e "${YELLOW}Mnemonic: $VAL_MNEMONIC${NC}"
-	echo "$VAL_MNEMONIC" | atoshid keys add "$VAL_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	(echo "$VAL_MNEMONIC"; cat) | atoshid keys add "$VAL_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
 	echo ""
 	
 	echo -e "${GREEN}[2/5] Importing dev0 account...${NC}"
 	echo -e "${YELLOW}Mnemonic: $USER1_MNEMONIC${NC}"
-	echo "$USER1_MNEMONIC" | atoshid keys add "$USER1_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	(echo "$USER1_MNEMONIC"; cat) | atoshid keys add "$USER1_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
 	echo ""
 	
 	echo -e "${GREEN}[3/5] Importing dev1 account...${NC}"
 	echo -e "${YELLOW}Mnemonic: $USER2_MNEMONIC${NC}"
-	echo "$USER2_MNEMONIC" | atoshid keys add "$USER2_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	(echo "$USER2_MNEMONIC"; cat) | atoshid keys add "$USER2_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
 	echo ""
 	
 	echo -e "${GREEN}[4/5] Importing dev2 account...${NC}"
 	echo -e "${YELLOW}Mnemonic: $USER3_MNEMONIC${NC}"
-	echo "$USER3_MNEMONIC" | atoshid keys add "$USER3_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	(echo "$USER3_MNEMONIC"; cat) | atoshid keys add "$USER3_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
 	echo ""
 	
 	echo -e "${GREEN}[5/5] Importing dev3 account...${NC}"
 	echo -e "${YELLOW}Mnemonic: $USER4_MNEMONIC${NC}"
-	echo "$USER4_MNEMONIC" | atoshid keys add "$USER4_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
+	(echo "$USER4_MNEMONIC"; cat) | atoshid keys add "$USER4_KEY" --recover --keyring-backend "$KEYRING" --algo "$KEYALGO" --home "$HOMEDIR"
 	echo ""
 
 	# Initialize the chain
