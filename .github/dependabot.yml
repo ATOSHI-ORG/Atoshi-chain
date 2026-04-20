@@ -3,20 +3,23 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
+      day: monday
       time: "10:00"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
     labels:
       - dependencies
   - package-ecosystem: docker
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
+      day: monday
       time: "10:00"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
   - package-ecosystem: gomod
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
+      day: monday
       time: "10:00"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
