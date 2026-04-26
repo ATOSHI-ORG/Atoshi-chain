@@ -16,7 +16,7 @@ import (
 
 func init() {
 	cfg := sdk.GetConfig()
-	cfg.SetBech32PrefixForAccount("evmos", "evmospub")
+	cfg.SetBech32PrefixForAccount("atoshi", "atoshipub")
 }
 
 func TestIsSupportedKeys(t *testing.T) {
@@ -87,32 +87,32 @@ func TestGetEvmosAddressFromBech32(t *testing.T) {
 		},
 		{
 			"invalid bech32 address",
-			"evmos",
+			"atoshi",
 			"",
 			true,
 		},
 		{
 			"invalid address bytes",
-			"evmos1123",
+			"atoshi1123",
 			"",
 			true,
 		},
 		{
-			"evmos address",
-			"evmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueuafmxps",
-			"evmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueuafmxps",
+			"atoshi address",
+			"atoshi1qql8ag4cluz6r4dz28p3w00dnc9w8ueurcjxdh",
+			"atoshi1qql8ag4cluz6r4dz28p3w00dnc9w8ueurcjxdh",
 			false,
 		},
 		{
 			"cosmos address",
 			"cosmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueulg2gmc",
-			"evmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueuafmxps",
+			"atoshi1qql8ag4cluz6r4dz28p3w00dnc9w8ueurcjxdh",
 			false,
 		},
 		{
 			"osmosis address",
 			"osmo1qql8ag4cluz6r4dz28p3w00dnc9w8ueuhnecd2",
-			"evmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueuafmxps",
+			"atoshi1qql8ag4cluz6r4dz28p3w00dnc9w8ueurcjxdh",
 			false,
 		},
 	}
@@ -136,7 +136,7 @@ func TestEvmosCoinDenom(t *testing.T) {
 	}{
 		{
 			"valid denom - native coin",
-			"aevmos",
+			"aatos",
 			false,
 		},
 		{
@@ -235,7 +235,7 @@ func TestAccAddressFromBech32(t *testing.T) {
 
 func TestAddressConversion(t *testing.T) {
 	hex := "0x7cB61D4117AE31a12E393a1Cfa3BaC666481D02E"
-	bech32 := "evmos10jmp6sgh4cc6zt3e8gw05wavvejgr5pwjnpcky"
+	bech32 := "atoshi10jmp6sgh4cc6zt3e8gw05wavvejgr5pj8xy5h"
 
 	hexAddr := common.HexToAddress(hex)
 	require.Equal(t, bech32, EthToCosmosAddr(hexAddr).String())
