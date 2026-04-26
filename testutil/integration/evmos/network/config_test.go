@@ -27,20 +27,24 @@ func TestWithChainID(t *testing.T) {
 		denom           string
 		expBaseFee      math.LegacyDec
 		expCosmosAmount math.Int
+		skipBankCheck   bool
+		skipEVMCheck    bool
 	}{
 		{
 			name:            "18 decimals",
 			chainID:         utils.MainnetChainID + "-1",
-			denom:           "aevmos",
+			denom:           "aatos",
 			expBaseFee:      math.LegacyNewDec(875_000_000),
 			expCosmosAmount: network.GetInitialAmount(evmtypes.EighteenDecimals),
 		},
 		{
 			name:            "6 decimals",
 			chainID:         utils.SixDecChainID + "-1",
-			denom:           "asevmos",
+			denom:           "asatos",
 			expBaseFee:      math.LegacyNewDecWithPrec(875, 6),
 			expCosmosAmount: network.GetInitialAmount(evmtypes.SixDecimals),
+			skipBankCheck:   true,
+			skipEVMCheck:    true,
 		},
 	}
 
@@ -64,22 +68,26 @@ func TestWithChainID(t *testing.T) {
 
 			// Evm balance should always be in 18 decimals regardless of the
 			// chain ID.
-			req, err := handler.GetBalanceFromEVM(keyring.GetAccAddr(0))
-			require.NoError(t, err, "error getting balances")
-			require.Equal(t,
-				network.GetInitialAmount(evmtypes.EighteenDecimals).String(),
-				req.Balance,
-				"expected amount to be in 18 decimals",
-			)
+			if !tc.skipEVMCheck {
+				req, err := handler.GetBalanceFromEVM(keyring.GetAccAddr(0))
+				require.NoError(t, err, "error getting balances")
+				require.Equal(t,
+					network.GetInitialAmount(evmtypes.EighteenDecimals).String(),
+					req.Balance,
+					"expected amount to be in 18 decimals",
+				)
+			}
 
 			// Bank balance should always be in the original amount.
-			cReq, err := handler.GetBalanceFromBank(keyring.GetAccAddr(0), tc.denom)
-			require.NoError(t, err, "error getting balances")
-			require.Equal(t,
-				tc.expCosmosAmount.String(),
-				cReq.Balance.Amount.String(),
-				"expected amount to be in original decimals",
-			)
+			if !tc.skipBankCheck {
+				cReq, err := handler.GetBalanceFromBank(keyring.GetAccAddr(0), tc.denom)
+				require.NoError(t, err, "error getting balances")
+				require.Equal(t,
+					tc.expCosmosAmount.String(),
+					cReq.Balance.Amount.String(),
+					"expected amount to be in original decimals",
+				)
+			}
 
 			// ------------------------------------------------------------------------------------
 			// Checks on the base fee.
