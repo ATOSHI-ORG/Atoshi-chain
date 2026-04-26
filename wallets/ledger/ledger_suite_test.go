@@ -5,6 +5,7 @@ package ledger_test
 
 import (
 	"encoding/hex"
+	"fmt"
 	"regexp"
 	"testing"
 
@@ -70,12 +71,20 @@ func (suite *LedgerTestSuite) newPubKey(pk string) (res cryptoTypes.PubKey) {
 	return pubkey
 }
 
+func (suite *LedgerTestSuite) convertToCurrentPrefix(address string) string {
+	bz, err := sdk.GetFromBech32(address, "evmos")
+	suite.Require().NoError(err)
+	return sdk.AccAddress(bz).String()
+}
+
 func (suite *LedgerTestSuite) getMockTxAmino() []byte {
+	from := suite.convertToCurrentPrefix("evmos10jmp6sgh4cc6zt3e8gw05wavvejgr5pwjnpcky")
+	to := suite.convertToCurrentPrefix("evmos1fx944mzagwdhx0wz7k9tfztc8g3lkfk6rrgv6l")
 	whitespaceRegex := regexp.MustCompile(`\s+`)
 	tmp := whitespaceRegex.ReplaceAllString(
-		`{
+		fmt.Sprintf(`{
 			"account_number": "0",
-			"chain_id":"evmos_9000-1",
+			"chain_id":"atoshi_88388-1",
 			"fee":{
 				"amount":[{"amount":"150","denom":"atom"}],
 				"gas":"20000"
@@ -85,12 +94,15 @@ func (suite *LedgerTestSuite) getMockTxAmino() []byte {
 				"type":"cosmos-sdk/MsgSend",
 				"value":{
 					"amount":[{"amount":"150","denom":"atom"}],
-					"from_address":"evmos10jmp6sgh4cc6zt3e8gw05wavvejgr5pwjnpcky",
-					"to_address":"evmos1fx944mzagwdhx0wz7k9tfztc8g3lkfk6rrgv6l"
+					"from_address":"%s",
+					"to_address":"%s"
 				}
 			}],
 			"sequence":"6"
 		}`,
+			from,
+			to,
+		),
 		"",
 	)
 
@@ -102,8 +114,8 @@ func (suite *LedgerTestSuite) getMockTxProtobuf() []byte {
 
 	memo := "memo"
 	msg := bankTypes.NewMsgSend(
-		sdk.MustAccAddressFromBech32("evmos10jmp6sgh4cc6zt3e8gw05wavvejgr5pwjnpcky"),
-		sdk.MustAccAddressFromBech32("evmos1fx944mzagwdhx0wz7k9tfztc8g3lkfk6rrgv6l"),
+		sdk.MustAccAddressFromBech32(suite.convertToCurrentPrefix("evmos10jmp6sgh4cc6zt3e8gw05wavvejgr5pwjnpcky")),
+		sdk.MustAccAddressFromBech32(suite.convertToCurrentPrefix("evmos1fx944mzagwdhx0wz7k9tfztc8g3lkfk6rrgv6l")),
 		[]sdk.Coin{
 			{
 				Denom:  "atom",
@@ -154,7 +166,7 @@ func (suite *LedgerTestSuite) getMockTxProtobuf() []byte {
 	signBytes, err := auxTx.DirectSignBytes(
 		bodyBytes,
 		authInfoBytes,
-		"evmos_9000-1",
+		"atoshi_88388-1",
 		0,
 	)
 	suite.Require().NoError(err)
