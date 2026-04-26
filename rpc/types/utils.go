@@ -35,7 +35,7 @@ const ExceedBlockGasLimitError = "out of gas in location: block gas meter; gasWa
 // note: the transfer amount cannot be set to 0, otherwise this problem will not be triggered
 const StateDBCommitError = "failed to commit stateDB"
 
-// RawTxToEthTx returns a evm MsgEthereum transaction from raw tx bytes.
+// RawTxToEthTx returns an EVM MsgEthereum transaction from raw tx bytes.
 func RawTxToEthTx(clientCtx client.Context, txBz cmttypes.Tx) ([]*evmtypes.MsgEthereumTx, error) {
 	tx, err := clientCtx.TxConfig.TxDecoder()(txBz)
 	if err != nil {
