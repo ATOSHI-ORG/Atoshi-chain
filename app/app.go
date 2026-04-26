@@ -149,8 +149,14 @@ import (
 	"github.com/atoshi-chain/atoshi/v20/x/feemarket"
 	feemarketkeeper "github.com/atoshi-chain/atoshi/v20/x/feemarket/keeper"
 	feemarkettypes "github.com/atoshi-chain/atoshi/v20/x/feemarket/types"
+	oracle "github.com/atoshi-chain/atoshi/v20/x/oracle"
+	oraclekeeper "github.com/atoshi-chain/atoshi/v20/x/oracle/keeper"
+	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 	"github.com/atoshi-chain/atoshi/v20/x/staking"
 	stakingkeeper "github.com/atoshi-chain/atoshi/v20/x/staking/keeper"
+	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
+	tokenomicskeeper "github.com/atoshi-chain/atoshi/v20/x/tokenomics/keeper"
+	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 	"github.com/atoshi-chain/atoshi/v20/x/vesting"
 	vestingkeeper "github.com/atoshi-chain/atoshi/v20/x/vesting/keeper"
 	vestingtypes "github.com/atoshi-chain/atoshi/v20/x/vesting/types"
@@ -201,6 +207,12 @@ var (
 		evmtypes.ModuleName:            {authtypes.Minter, authtypes.Burner}, // used for secure addition and subtraction of balance using module account
 		inflationtypes.ModuleName:      {authtypes.Minter},
 		erc20types.ModuleName:          {authtypes.Minter, authtypes.Burner},
+		oracletypes.ModuleName:         nil,
+		tokenomicstypes.ModuleName:     {authtypes.Minter},
+		tokenomicstypes.MinerPoolName:       {authtypes.Minter},
+		tokenomicstypes.ProjectPoolName:     {authtypes.Minter},
+		tokenomicstypes.MigrationPoolName:   {authtypes.Minter},
+		tokenomicstypes.MinerLockedPoolName: {authtypes.Minter},
 		ratelimittypes.ModuleName:      nil,
 	}
 )
@@ -262,6 +274,8 @@ type Atoshi struct {
 	Erc20Keeper     erc20keeper.Keeper
 	EpochsKeeper    epochskeeper.Keeper
 	VestingKeeper   vestingkeeper.Keeper
+	OracleKeeper    oraclekeeper.Keeper
+	TokenomicsKeeper tokenomicskeeper.Keeper
 
 	// the module manager
 	mm                 *module.Manager
@@ -471,6 +485,24 @@ func NewAtoshi(
 		authtypes.FeeCollectorName,
 	)
 
+	app.OracleKeeper = oraclekeeper.NewKeeper(
+		keys[oracletypes.StoreKey],
+		appCodec,
+		authtypes.NewModuleAddress(govtypes.ModuleName),
+	)
+
+	app.TokenomicsKeeper = tokenomicskeeper.NewKeeper(
+		keys[tokenomicstypes.StoreKey],
+		appCodec,
+		authtypes.NewModuleAddress(govtypes.ModuleName),
+		authtypes.FeeCollectorName,
+		app.AccountKeeper,
+		app.BankKeeper,
+		stakingKeeper,
+		app.DistrKeeper,
+		app.OracleKeeper,
+	)
+
 	// register the staking hooks
 	// NOTE: stakingKeeper above is passed by reference, so that it will contain these hooks
 	// NOTE: Distr, Slashing and Claim must be created before calling the Hooks method to avoid returning a Keeper without its table generated
@@ -647,6 +679,8 @@ func NewAtoshi(
 			app.GetSubspace(erc20types.ModuleName)),
 		epochs.NewAppModule(appCodec, app.EpochsKeeper),
 		vesting.NewAppModule(app.VestingKeeper, app.AccountKeeper, app.BankKeeper, *app.StakingKeeper.Keeper),
+		oracle.NewAppModule(app.OracleKeeper),
+		tokenomics.NewAppModule(app.TokenomicsKeeper),
 	)
 
 	// BasicModuleManager defines the module BasicManager which is in charge of setting up basic,
@@ -683,6 +717,8 @@ func NewAtoshi(
 		capabilitytypes.ModuleName,
 		// Note: epochs' begin should be "real" start of epochs, we keep epochs beginblock at the beginning
 		epochstypes.ModuleName,
+		oracletypes.ModuleName,
+		tokenomicstypes.ModuleName,
 		feemarkettypes.ModuleName,
 		evmtypes.ModuleName,
 		distrtypes.ModuleName,
@@ -698,6 +734,8 @@ func NewAtoshi(
 	app.mm.SetOrderEndBlockers(
 		govtypes.ModuleName,
 		stakingtypes.ModuleName,
+		oracletypes.ModuleName,
+		tokenomicstypes.ModuleName,
 		evmtypes.ModuleName,
 		feemarkettypes.ModuleName,
 		feegrant.ModuleName,
@@ -735,6 +773,8 @@ func NewAtoshi(
 		erc20types.ModuleName,
 		epochstypes.ModuleName,
 		ratelimittypes.ModuleName,
+		oracletypes.ModuleName,
+		tokenomicstypes.ModuleName,
 	)
 
 	app.configurator = module.NewConfigurator(app.appCodec, app.MsgServiceRouter(), app.GRPCQueryRouter())
