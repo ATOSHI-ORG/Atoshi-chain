@@ -17,7 +17,7 @@ import (
 
 func init() {
 	cfg := sdk.GetConfig()
-	cfg.SetBech32PrefixForAccount("evmos", "evmospub")
+	cfg.SetBech32PrefixForAccount("atoshi", "atoshipub")
 }
 
 func TestGetTransferSenderRecipient(t *testing.T) {
@@ -39,7 +39,7 @@ func TestGetTransferSenderRecipient(t *testing.T) {
 			name: "invalid sender",
 			data: transfertypes.FungibleTokenPacketData{
 				Sender:   "cosmos1",
-				Receiver: "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
+				Receiver: "atoshi1x2w87cvt5mqjncav4lxy8yfreynn273xf0p5a",
 				Amount:   "123456",
 			},
 			expSender:    "",
@@ -58,36 +58,36 @@ func TestGetTransferSenderRecipient(t *testing.T) {
 			expError:     true,
 		},
 		{
-			name: "valid - cosmos sender, evmos recipient",
+			name: "valid - cosmos sender, atoshi recipient",
 			data: transfertypes.FungibleTokenPacketData{
 				Sender:   "cosmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueulg2gmc",
 				Receiver: "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
 				Amount:   "123456",
 			},
-			expSender:    "evmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueuafmxps",
-			expRecipient: "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
+			expSender:    "atoshi1qql8ag4cluz6r4dz28p3w00dnc9w8ueurcjxdh",
+			expRecipient: "atoshi1x2w87cvt5mqjncav4lxy8yfreynn273xd9c3ct",
 			expError:     false,
 		},
 		{
-			name: "valid - evmos sender, cosmos recipient",
+			name: "valid - atoshi sender, cosmos recipient",
 			data: transfertypes.FungibleTokenPacketData{
 				Sender:   "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
 				Receiver: "cosmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueulg2gmc",
 				Amount:   "123456",
 			},
-			expSender:    "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
-			expRecipient: "evmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueuafmxps",
+			expSender:    "atoshi1x2w87cvt5mqjncav4lxy8yfreynn273xd9c3ct",
+			expRecipient: "atoshi1qql8ag4cluz6r4dz28p3w00dnc9w8ueurcjxdh",
 			expError:     false,
 		},
 		{
-			name: "valid - osmosis sender, evmos recipient",
+			name: "valid - osmosis sender, atoshi recipient",
 			data: transfertypes.FungibleTokenPacketData{
 				Sender:   "osmo1qql8ag4cluz6r4dz28p3w00dnc9w8ueuhnecd2",
 				Receiver: "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
 				Amount:   "123456",
 			},
-			expSender:    "evmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueuafmxps",
-			expRecipient: "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
+			expSender:    "atoshi1qql8ag4cluz6r4dz28p3w00dnc9w8ueurcjxdh",
+			expRecipient: "atoshi1x2w87cvt5mqjncav4lxy8yfreynn273xd9c3ct",
 			expError:     false,
 		},
 	}
@@ -129,7 +129,7 @@ func TestGetTransferAmount(t *testing.T) {
 				Data: transfertypes.ModuleCdc.MustMarshalJSON(
 					&transfertypes.FungibleTokenPacketData{
 						Sender:   "cosmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueulg2gmc",
-						Receiver: "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
+						Receiver: "atoshi1x2w87cvt5mqjncav4lxy8yfreynn273xf0p5a",
 						Amount:   "",
 					},
 				),
@@ -143,7 +143,7 @@ func TestGetTransferAmount(t *testing.T) {
 				Data: transfertypes.ModuleCdc.MustMarshalJSON(
 					&transfertypes.FungibleTokenPacketData{
 						Sender:   "cosmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueulg2gmc",
-						Receiver: "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
+						Receiver: "atoshi1x2w87cvt5mqjncav4lxy8yfreynn273xf0p5a",
 						Amount:   "test",
 					},
 				),
@@ -157,7 +157,7 @@ func TestGetTransferAmount(t *testing.T) {
 				Data: transfertypes.ModuleCdc.MustMarshalJSON(
 					&transfertypes.FungibleTokenPacketData{
 						Sender:   "cosmos1qql8ag4cluz6r4dz28p3w00dnc9w8ueulg2gmc",
-						Receiver: "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v",
+						Receiver: "atoshi1x2w87cvt5mqjncav4lxy8yfreynn273xf0p5a",
 						Amount:   "10000",
 					},
 				),
@@ -205,9 +205,9 @@ func TestGetReceivedCoin(t *testing.T) {
 			"channel-0",
 			"transfer",
 			"channel-0",
-			"transfer/channel-0/aevmos",
+			"transfer/channel-0/aatos",
 			"10",
-			sdk.Coin{Denom: "aevmos", Amount: math.NewInt(10)},
+			sdk.Coin{Denom: "aatos", Amount: math.NewInt(10)},
 		},
 		{
 			"transfer 2x ibc wrapped coin to destination which is its source",
@@ -246,14 +246,14 @@ func TestGetSentCoin(t *testing.T) {
 		expCoin   sdk.Coin
 	}{
 		{
-			"get unwrapped aevmos coin",
+			"get unwrapped aatos coin",
 			baseDenom,
 			"10",
 			sdk.Coin{Denom: baseDenom, Amount: math.NewInt(10)},
 		},
 		{
-			"get ibc wrapped aevmos coin",
-			"transfer/channel-0/aevmos",
+			"get ibc wrapped aatos coin",
+			"transfer/channel-0/aatos",
 			"10",
 			sdk.Coin{Denom: teststypes.AevmosIbcdenom, Amount: math.NewInt(10)},
 		},
@@ -300,21 +300,21 @@ func TestDeriveDecimalsFromDenom(t *testing.T) {
 		},
 		{
 			name:      "fail: invalid prefix",
-			baseDenom: "nevmos",
+			baseDenom: "natos",
 			expDec:    0,
 			expFail:   true,
-			expErrMsg: "Should be either micro ('u[...]') or atto ('a[...]'); got: \"nevmos\"",
+			expErrMsg: "Should be either micro ('u[...]') or atto ('a[...]'); got: \"natos\"",
 		},
 		{
 			name:      "success: micro 'u' prefix",
-			baseDenom: "uevmos",
+			baseDenom: "uatos",
 			expDec:    6,
 			expFail:   false,
 			expErrMsg: "",
 		},
 		{
 			name:      "success: atto 'a' prefix",
-			baseDenom: "aevmos",
+			baseDenom: "aatos",
 			expDec:    18,
 			expFail:   false,
 			expErrMsg: "",
