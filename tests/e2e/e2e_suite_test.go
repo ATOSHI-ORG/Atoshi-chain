@@ -18,7 +18,7 @@ import (
 
 const (
 	// defaultManagerNetwork defines the network used by the upgrade manager
-	defaultManagerNetwork = "evmos-local"
+	defaultManagerNetwork = "atoshi-local"
 
 	// blocksAfterUpgrade defines how many blocks must be produced after an upgrade is
 	// considered successful
@@ -53,7 +53,13 @@ func (s *IntegrationTestSuite) SetupSuite() {
 	s.Require().NoError(err, "can't load upgrade params")
 
 	s.upgradeManager, err = upgrade.NewManager(defaultManagerNetwork)
-	s.Require().NoError(err, "upgrade manager creation error")
+	if err != nil {
+		if strings.Contains(err.Error(), "docker") || strings.Contains(err.Error(), "unix.sock") {
+			s.T().Skipf("skipping e2e suite without docker: %v", err)
+			return
+		}
+		s.Require().NoError(err, "upgrade manager creation error")
+	}
 	if _, err := os.Stat(relatedBuildPath); errors.Is(err, os.ErrNotExist) {
 		err := os.Mkdir(relatedBuildPath, os.ModePerm)
 		s.Require().NoError(err, "can't create build tmp dir")
@@ -110,7 +116,7 @@ func (s *IntegrationTestSuite) proposeUpgrade(name, target string) {
 		s.upgradeParams.ChainID,
 		s.upgradeManager.UpgradeHeight,
 		proposalVersion,
-		"--fees=10000000000000000aevmos",
+		"--fees=10000000000000000aatos",
 		"--gas=500000",
 	)
 	s.Require().NoErrorf(
@@ -142,7 +148,7 @@ func (s *IntegrationTestSuite) proposeUpgrade(name, target string) {
 func (s *IntegrationTestSuite) voteForProposal(id int) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	exec, err := s.upgradeManager.CreateVoteProposalExec(s.upgradeParams.ChainID, id, "--fees=10000000000000000aevmos", "--gas=500000")
+	exec, err := s.upgradeManager.CreateVoteProposalExec(s.upgradeParams.ChainID, id, "--fees=10000000000000000aatos", "--gas=500000")
 	s.Require().NoError(err, "can't create vote for proposal exec")
 	outBuf, errBuf, err := s.upgradeManager.RunExec(ctx, exec)
 	s.Require().NoErrorf(
@@ -176,7 +182,7 @@ func (s *IntegrationTestSuite) upgrade(targetVersion upgrade.VersionConfig) {
 	s.checkProposalPassed(ctx)
 
 	s.T().Log("exporting state to local...")
-	// export node .evmosd to local build/
+	// export node .atoshid to local build/
 	err = s.upgradeManager.ExportState(buildDir)
 	s.Require().NoError(err, "can't export node container state to local")
 
@@ -199,7 +205,7 @@ func (s *IntegrationTestSuite) upgrade(targetVersion upgrade.VersionConfig) {
 
 	node := upgrade.NewNode(targetVersion.ImageName, targetVersion.ImageTag)
 	node.Mount(s.upgradeParams.MountPath)
-	node.SetCmd([]string{"evmosd", "start", fmt.Sprintf("--chain-id=%s", s.upgradeParams.ChainID), fmt.Sprintf("--home=%s.evmosd", rootDir)})
+	node.SetCmd([]string{"atoshid", "start", fmt.Sprintf("--chain-id=%s", s.upgradeParams.ChainID), fmt.Sprintf("--home=%s.atoshid", rootDir)})
 	err = s.upgradeManager.RunNode(node)
 	s.Require().NoError(err, "can't mount and run upgraded node container")
 
