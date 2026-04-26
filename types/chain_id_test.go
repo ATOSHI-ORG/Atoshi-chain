@@ -16,7 +16,7 @@ func TestParseChainID(t *testing.T) {
 		expInt   *big.Int
 	}{
 		{
-			"valid chain-id, single digit", "evmos_1-1", false, big.NewInt(1),
+			"valid chain-id, single digit", "atoshi_1-1", false, big.NewInt(1),
 		},
 		{
 			"valid chain-id, multiple digits", "aragonchain_256-1", false, big.NewInt(256),
@@ -37,25 +37,25 @@ func TestParseChainID(t *testing.T) {
 			"invalid chain-id, undefined identifier", "_1-1", true, nil,
 		},
 		{
-			"invalid chain-id, uppercases", "EVMOS_1-1", true, nil,
+			"invalid chain-id, uppercases", "ATOSHI_1-1", true, nil,
 		},
 		{
-			"invalid chain-id, mixed cases", "Evmos_1-1", true, nil,
+			"invalid chain-id, mixed cases", "Atoshi_1-1", true, nil,
 		},
 		{
 			"invalid chain-id, special chars", "$&*#!_1-1", true, nil,
 		},
 		{
-			"invalid eip155 chain-id, cannot start with 0", "evmos_001-1", true, nil,
+			"invalid eip155 chain-id, cannot start with 0", "atoshi_001-1", true, nil,
 		},
 		{
-			"invalid eip155 chain-id, cannot invalid base", "evmos_0x212-1", true, nil,
+			"invalid eip155 chain-id, cannot invalid base", "atoshi_0x212-1", true, nil,
 		},
 		{
-			"invalid eip155 chain-id, non-integer", "evmos_evmos_9000-1", true, nil,
+			"invalid eip155 chain-id, non-integer", "atoshi_atoshi_88388-1", true, nil,
 		},
 		{
-			"invalid epoch, undefined", "evmos_-", true, nil,
+			"invalid epoch, undefined", "atoshi_-", true, nil,
 		},
 		{
 			"blank chain ID", " ", true, nil,
@@ -67,7 +67,7 @@ func TestParseChainID(t *testing.T) {
 			"empty content for chain id, eip155 and epoch numbers", "_-", true, nil,
 		},
 		{
-			"long chain-id", "evmos_" + strings.Repeat("1", 45) + "-1", true, nil,
+			"long chain-id", "atoshi_" + strings.Repeat("1", 45) + "-1", true, nil,
 		},
 	}
 
