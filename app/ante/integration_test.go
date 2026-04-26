@@ -69,7 +69,7 @@ var _ = Describe("when sending a Cosmos transaction", Label("AnteHandler"), Orde
 
 			msg = &banktypes.MsgSend{
 				FromAddress: addr.String(),
-				ToAddress:   "evmos1dx67l23hz9l0k9hcher8xz04uj7wf3yu26l2yn",
+				ToAddress:   "atoshi1dx67l23hz9l0k9hcher8xz04uj7wf3yu26l2yn",
 				Amount:      sdk.Coins{sdk.Coin{Amount: transferAmt, Denom: s.network.GetBaseDenom()}},
 			}
 
@@ -124,7 +124,7 @@ var _ = Describe("when sending a Cosmos transaction", Label("AnteHandler"), Orde
 			addr, priv = testutiltx.NewAccAddressAndKey()
 
 			// this is a new address that does not exist on chain.
-			// Transfer 1 aevmos to this account so it is
+			// Transfer 1 aatos to this account so it is
 			// added on chain
 			err := s.factory.FundAccount(
 				s.keyring.GetKey(0),
@@ -142,7 +142,7 @@ var _ = Describe("when sending a Cosmos transaction", Label("AnteHandler"), Orde
 
 			msg = &banktypes.MsgSend{
 				FromAddress: addr.String(),
-				ToAddress:   "evmos1dx67l23hz9l0k9hcher8xz04uj7wf3yu26l2yn",
+				ToAddress:   "atoshi1dx67l23hz9l0k9hcher8xz04uj7wf3yu26l2yn",
 				Amount:      sdk.Coins{sdk.Coin{Amount: math.NewInt(1e14), Denom: s.network.GetBaseDenom()}},
 			}
 		})
@@ -203,7 +203,7 @@ var _ = Describe("when sending a Cosmos transaction", Label("AnteHandler"), Orde
 
 			msg = &banktypes.MsgSend{
 				FromAddress: addr.String(),
-				ToAddress:   "evmos1dx67l23hz9l0k9hcher8xz04uj7wf3yu26l2yn",
+				ToAddress:   "atoshi1dx67l23hz9l0k9hcher8xz04uj7wf3yu26l2yn",
 				Amount:      sdk.Coins{sdk.Coin{Amount: math.NewInt(1), Denom: s.network.GetBaseDenom()}},
 			}
 		})
