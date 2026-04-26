@@ -1,0 +1,73 @@
+syntax = "proto3";
+package atoshi.oracle.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "atoshi/oracle/v1/oracle.proto";
+import "atoshi/oracle/v1/genesis.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/oracle/types";
+
+// Query defines the oracle gRPC querier service.
+service Query {
+  // CurrentPrice returns the latest price data.
+  rpc CurrentPrice(QueryCurrentPriceRequest) returns (QueryCurrentPriceResponse) {
+    option (google.api.http).get = "/atoshi/oracle/v1/price";
+  }
+
+  // PriceHistory returns historical price data.
+  rpc PriceHistory(QueryPriceHistoryRequest) returns (QueryPriceHistoryResponse) {
+    option (google.api.http).get = "/atoshi/oracle/v1/price_history";
+  }
+
+  // TWAP returns the time-weighted average price.
+  rpc TWAP(QueryTWAPRequest) returns (QueryTWAPResponse) {
+    option (google.api.http).get = "/atoshi/oracle/v1/twap";
+  }
+
+  // Params returns the oracle module parameters.
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/atoshi/oracle/v1/params";
+  }
+}
+
+message QueryCurrentPriceRequest {}
+
+message QueryCurrentPriceResponse {
+  PriceData price_data = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryPriceHistoryRequest {
+  // limit is the max number of entries to return
+  uint32 limit = 1;
+}
+
+message QueryPriceHistoryResponse {
+  repeated PriceData prices = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryTWAPRequest {
+  // lookback_seconds defines the TWAP window
+  uint64 lookback_seconds = 1;
+}
+
+message QueryTWAPResponse {
+  string twap_price = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.customname) = "TWAPPrice",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string avg_volume = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}

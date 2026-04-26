@@ -1,0 +1,65 @@
+syntax = "proto3";
+package atoshi.tokenomics.v1;
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "atoshi/tokenomics/v1/tokenomics.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types";
+
+// Msg defines the tokenomics Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // ClaimMinerLockedReward lets a validator withdraw its unlocked mining share.
+  rpc ClaimMinerLockedReward(MsgClaimMinerLockedReward) returns (MsgClaimMinerLockedRewardResponse);
+
+  // ClaimProjectTreasuryReward lets the project treasury withdraw unlocked funds.
+  rpc ClaimProjectTreasuryReward(MsgClaimProjectTreasuryReward) returns (MsgClaimProjectTreasuryRewardResponse);
+
+  // ClaimMigrationTokens lets a user redeem the pre-mine migration airdrop via Merkle proof.
+  rpc ClaimMigrationTokens(MsgClaimMigrationTokens) returns (MsgClaimMigrationTokensResponse);
+
+  // UpdateParams updates module parameters via governance (including rotating the
+  // project treasury address and migration Merkle root).
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+}
+
+message MsgClaimMinerLockedReward {
+  option (cosmos.msg.v1.signer) = "validator_address";
+
+  string validator_address = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+}
+message MsgClaimMinerLockedRewardResponse {}
+
+message MsgClaimProjectTreasuryReward {
+  option (cosmos.msg.v1.signer) = "authority";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+}
+message MsgClaimProjectTreasuryRewardResponse {}
+
+message MsgClaimMigrationTokens {
+  option (cosmos.msg.v1.signer) = "claimer";
+
+  string claimer = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string amount = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // merkle_proof is the ordered set of sibling hashes from leaf to root.
+  repeated bytes merkle_proof = 3;
+}
+message MsgClaimMigrationTokensResponse {}
+
+message MsgUpdateParams {
+  option (amino.name) = "atoshi/x/tokenomics/MsgUpdateParams";
+  option (cosmos.msg.v1.signer) = "authority";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  Params params = 2 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+message MsgUpdateParamsResponse {}

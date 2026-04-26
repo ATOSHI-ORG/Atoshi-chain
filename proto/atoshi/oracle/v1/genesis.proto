@@ -1,0 +1,16 @@
+syntax = "proto3";
+package atoshi.oracle.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "atoshi/oracle/v1/oracle.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/oracle/types";
+
+// GenesisState defines the oracle module's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+
+  // price_history is the set of historical price data entries
+  repeated PriceData price_history = 2 [(gogoproto.nullable) = false];
+}
