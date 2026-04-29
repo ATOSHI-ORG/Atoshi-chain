@@ -235,17 +235,22 @@ if [[ $overwrite == "y" || $overwrite == "Y" ]]; then
 	echo -e "${YELLOW}Applying TEST-MODE parameter overrides${NC}"
 	echo -e "${YELLOW}  (energy: 60s recover, deploy: 1d; tokenomics: 10-block epoch, 3-day streak, 1k-block halving)${NC}"
 
+	# NOTE: int64 / uint64 fields must be JSON numbers, not strings.
+	# math.Int / math.LegacyDec fields (e.g. miner_pool_total) DO require
+	# strings because they are encoded with gogoproto.customtype — but we
+	# don't override those here. Don't add quotes around the values below.
+
 	# --- ENERGY: 60-second TxEnergy refill window (was 86400) ---
-	jq '.app_state.energy.params.tx_energy_max_accrue_window = "60"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	jq '.app_state.energy.params.tx_energy_max_accrue_window = 60' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
 	# --- ENERGY: DeployEnergy refill in 1 day at threshold holding (was 10) ---
-	jq '.app_state.energy.params.deploy_recover_days = "1"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	jq '.app_state.energy.params.deploy_recover_days = 1' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
 
 	# --- TOKENOMICS: price-check epoch every 10 blocks (was 17280, ~24h) ---
-	jq '.app_state.tokenomics.params.price_check_epoch_blocks = "10"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	jq '.app_state.tokenomics.params.price_check_epoch_blocks = 10' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
 	# --- TOKENOMICS: 3 epochs to trigger release (was 30) ---
 	jq '.app_state.tokenomics.params.consecutive_days_required = 3' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
 	# --- TOKENOMICS: halve block reward every 1000 blocks (was 25_228_800) ---
-	jq '.app_state.tokenomics.params.halving_interval_blocks = "1000"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	jq '.app_state.tokenomics.params.halving_interval_blocks = 1000' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
 
 	# --- ORACLE: whitelist the dev validator as an authorized feeder ---
 	# This lets MsgReportPrice succeed straight out of the box for testing.
