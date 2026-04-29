@@ -134,10 +134,23 @@ log "1) module reachable: query energy params"
 ok "energy params query OK, enabled = true"
 
 # ============================================================================
-log "2) wait for alice to accrue some energy (sleep 8s; recover ≈ 1.16/s)"
+# The energy keeper initializes an account's last_updated_time only on its
+# first touch (AnteHandler / msg_server). A query alone does not initialize.
+# So we send a tiny tx from alice -> bob first to register her account,
+# then wait, then check accrual.
+log "2a) warmup: alice -> bob (1 aatos) to initialize alice's energy account"
+"$ATOSHID" "${H[@]}" tx bank send alice "$BOB" "1$DENOM" --from alice "${TFL[@]}" >/dev/null
+sleep 3
+INIT_ENERGY=$(energy_acc "$ALICE" | jq -r '.settled.tx_energy_accrued')
+ok "alice account initialized, energy after warmup = $INIT_ENERGY"
+
+# ============================================================================
+# In test mode tx_energy_max_accrue_window = 60s, so capacity (50k for
+# alice's 60k ATOS holding) refills at ≈833/s. After 8s ≈ 6,664 gas units.
+log "2b) wait for alice to accrue energy (sleep 8s; rate ≈ 833/s)"
 sleep 8
 ALICE_ENERGY=$(energy_acc "$ALICE" | jq -r '.settled.tx_energy_accrued')
-[[ "$ALICE_ENERGY" -gt 0 ]] || fail "alice should have non-zero energy after 8s"
+[[ "$ALICE_ENERGY" -gt "$INIT_ENERGY" ]] || fail "alice's energy should have grown past $INIT_ENERGY after 8s, got $ALICE_ENERGY"
 ok "alice TxEnergy = $ALICE_ENERGY (capacity: $(energy_acc "$ALICE" | jq -r '.tx_energy_capacity'))"
 
 # ============================================================================

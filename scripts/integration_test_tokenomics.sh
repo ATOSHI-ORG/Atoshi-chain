@@ -98,7 +98,7 @@ jq --arg feeder "$FEEDER_ADDR" \
   .app_state.oracle.params.allowed_feeders = [$feeder]
   | .app_state.tokenomics.params.project_treasury_address = $treasury
   | .app_state.tokenomics.params.migration_merkle_root = $root
-  | .app_state.tokenomics.params.price_check_epoch_blocks = "5"
+  | .app_state.tokenomics.params.price_check_epoch_blocks = 5
 ' "$GENESIS" > "$GENESIS.tmp" && mv "$GENESIS.tmp" "$GENESIS"
 
 "$ATOSHID" "${ATOSHID_HOME[@]}" gentx validator 100000000000000000000$DENOM \
