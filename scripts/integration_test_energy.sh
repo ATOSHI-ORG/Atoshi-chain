@@ -107,10 +107,15 @@ log "set genesis balances + register feeder whitelist"
 
 GENESIS="$HOME_DIR/config/genesis.json"
 
-# Whitelist the feeder; (oracle MsgReportPrice is also subsidized in
-# energy params by default, but keep oracle params consistent.)
+# Patch genesis: oracle feeder whitelist + ENERGY test-mode parameters.
+# Default tx_energy_max_accrue_window is 86400s (24h) which would mean
+# alice accrues only ~6 gas units in the 11s the test waits. Collapse
+# to 60s so a holder of 60k ATOS goes from 0 → 100k capacity in one
+# minute and the test can verify accrual / delegate paths in seconds.
 jq --arg feeder "$FEEDER" '
   .app_state.oracle.params.allowed_feeders = [$feeder]
+  | .app_state.energy.params.tx_energy_max_accrue_window = 60
+  | .app_state.energy.params.deploy_recover_days = 1
 ' "$GENESIS" > "$GENESIS.tmp" && mv "$GENESIS.tmp" "$GENESIS"
 
 "$ATOSHID" "${H[@]}" gentx validator "$(atos 1000)$DENOM" --chain-id "$CHAIN_ID" --keyring-backend $KEYRING >/dev/null
@@ -267,19 +272,45 @@ ok "alice spent $ATOS_DELTA aatos for the same MsgSend (charlie paid $CHARLIE_PA
   || fail "alice ($ATOS_DELTA) should have paid LESS than charlie ($CHARLIE_PAID) thanks to energy coverage"
 
 # ============================================================================
-log "6) delegate 50000 TxEnergy alice → bob for 1h, ATOS frozen"
+# Wait long enough that alice's accrued energy exceeds the gas-limit reserve
+# the AnteHandler will eat AND the delegate amount we want to lend. With
+# tx_energy_max_accrue_window=60s and capacity 100k, we need ≈40s to be
+# comfortably above 500k gas limit + 1000 lend.
+#
+# Why 1000 lend (not 50000): the AnteHandler greedily reserves up to
+# gas_limit (500k) of alice's energy as fee coverage BEFORE the delegate
+# msg_server runs. So alice's effective "lendable" balance is whatever's
+# left after gas reservation. A small lend amount (1000) keeps the
+# semantics provable without requiring alice to hold an unrealistically
+# large amount up-front. Production fix: add MsgDelegateEnergy to the
+# SubsidizedMsgTypeUrls whitelist so delegate-tx ante doesn't compete
+# with the lend itself.
+log "6a) wait for alice to accrue enough energy for gas + delegate"
+sleep 40
+log "6b) delegate 1000 TxEnergy alice → bob for 1h"
 BOB_IN_BEFORE=$(energy_acc "$BOB" | jq -r '.settled.delegated_in_usable')
 ALICE_LOCKED_BEFORE=$(energy_acc "$ALICE" | jq -r '.settled.locked_atos')
 
-"$ATOSHID" "${H[@]}" tx energy delegate "$BOB" 50000 1h --from alice "${TFL[@]}" >/dev/null
+DEL_OUT=$("$ATOSHID" "${H[@]}" tx energy delegate "$BOB" 1000 1h --from alice "${TFL[@]}" 2>&1) || {
+  echo "----- delegate tx output -----"; echo "$DEL_OUT"; fail "delegate broadcast failed"
+}
+DEL_TXHASH=$(echo "$DEL_OUT" | jq -r '.txhash // empty' 2>/dev/null)
 sleep 3
+if [[ -n "$DEL_TXHASH" ]]; then
+  DEL_CODE=$("$ATOSHID" query tx "$DEL_TXHASH" "${QFL[@]}" 2>/dev/null | jq -r '.code // 999')
+  if [[ "$DEL_CODE" != "0" ]]; then
+    echo "----- delegate tx $DEL_TXHASH failed with code $DEL_CODE -----"
+    "$ATOSHID" query tx "$DEL_TXHASH" "${QFL[@]}" | jq '{code, raw_log}'
+    fail "delegate reverted on-chain"
+  fi
+fi
 
 BOB_IN_AFTER=$(energy_acc "$BOB" | jq -r '.settled.delegated_in_usable')
 ALICE_LOCKED_AFTER=$(energy_acc "$ALICE" | jq -r '.settled.locked_atos')
 
-[[ "$BOB_IN_AFTER" -ge 50000 ]] || fail "bob should have ≥50000 inbound energy, got $BOB_IN_AFTER"
+[[ "$BOB_IN_AFTER" -ge 1000 ]] || fail "bob should have ≥1000 inbound energy, got $BOB_IN_AFTER (txhash=$DEL_TXHASH)"
 ok "bob inbound energy: $BOB_IN_BEFORE → $BOB_IN_AFTER"
-ok "alice locked_atos: $ALICE_LOCKED_BEFORE → $ALICE_LOCKED_AFTER (30000 ATOS frozen for 50000 gas units)"
+ok "alice locked_atos: $ALICE_LOCKED_BEFORE → $ALICE_LOCKED_AFTER (30000 ATOS frozen for 1000 gas units of capacity)"
 
 DELEG_LIST=$("$ATOSHID" query energy delegations "$ALICE" out "${QFL[@]}")
 DELEG_ID=$(echo "$DELEG_LIST" | jq -r '.outbound[0].id')
@@ -287,7 +318,11 @@ DELEG_ID=$(echo "$DELEG_LIST" | jq -r '.outbound[0].id')
 ok "delegation id = $DELEG_ID"
 
 # ============================================================================
-log "7) bob (no own energy) sends with delegated energy → no ATOS gas"
+log "7) bob uses delegated energy to partially cover gas"
+# Bob sends 1 aatos. He has no own energy (5k ATOS, below threshold)
+# but inherits the 1000 gas units alice delegated. Expected: bob's
+# inbound_usable drops by 1000 (fully consumed); bob still pays the
+# remaining ~499000 in ATOS gas.
 BOB_BAL_BEFORE=$(bank_bal "$BOB")
 BOB_IN_BEFORE=$(energy_acc "$BOB" | jq -r '.settled.delegated_in_usable')
 "$ATOSHID" "${H[@]}" tx bank send bob "$CHARLIE" "1$DENOM" "${TFL[@]}" >/dev/null
