@@ -1,0 +1,66 @@
+syntax = "proto3";
+package atoshi.energy.v1;
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "atoshi/energy/v1/energy.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/energy/types";
+
+// Msg defines the energy module Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // DelegateEnergy lends TxEnergy from the signer to another address,
+  // freezing the ATOS that backs the delegation until expires_at.
+  rpc DelegateEnergy(MsgDelegateEnergy) returns (MsgDelegateEnergyResponse);
+
+  // UndelegateEnergy revokes an active delegation early. Only the
+  // delegator may call. Frees the locked ATOS, returns unused energy.
+  rpc UndelegateEnergy(MsgUndelegateEnergy) returns (MsgUndelegateEnergyResponse);
+
+  // UpdateParams is the governance entry point for retuning every
+  // parameter, including flipping the global enable flag.
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+}
+
+// MsgDelegateEnergy: lend TxEnergy from delegator to delegatee until
+// expires_at. The corresponding ATOS in delegator's bank balance is
+// frozen (cannot be transferred) for the duration.
+message MsgDelegateEnergy {
+  option (cosmos.msg.v1.signer) = "delegator";
+
+  string delegator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string delegatee = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 amount = 3;          // TxEnergy in gas units
+  int64 duration_seconds = 4; // expires at block_time + duration
+}
+message MsgDelegateEnergyResponse {
+  uint64 delegation_id = 1;
+  string locked_atos = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// MsgUndelegateEnergy: cancel an outbound delegation. Frees ATOS, removes
+// unused energy from the delegatee. Only callable by the original delegator.
+message MsgUndelegateEnergy {
+  option (cosmos.msg.v1.signer) = "delegator";
+
+  string delegator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 delegation_id = 2;
+}
+message MsgUndelegateEnergyResponse {}
+
+message MsgUpdateParams {
+  option (amino.name) = "atoshi/x/energy/MsgUpdateParams";
+  option (cosmos.msg.v1.signer) = "authority";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  Params params = 2 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+message MsgUpdateParamsResponse {}

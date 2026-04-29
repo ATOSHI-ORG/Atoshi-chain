@@ -1,0 +1,75 @@
+syntax = "proto3";
+package atoshi.energy.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "atoshi/energy/v1/energy.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/energy/types";
+
+// Query defines the energy module Query service.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/atoshi/energy/v1/params";
+  }
+  rpc Account(QueryAccountRequest) returns (QueryAccountResponse) {
+    option (google.api.http).get = "/atoshi/energy/v1/account/{address}";
+  }
+  rpc Delegations(QueryDelegationsRequest) returns (QueryDelegationsResponse) {
+    option (google.api.http).get = "/atoshi/energy/v1/delegations/{address}";
+  }
+  // EstimateFee tells the caller how much TxEnergy and ATOS gas-fee a tx
+  // with the given gas_limit would cost the given signer right now.
+  rpc EstimateFee(QueryEstimateFeeRequest) returns (QueryEstimateFeeResponse) {
+    option (google.api.http).get = "/atoshi/energy/v1/estimate_fee";
+  }
+}
+
+message QueryParamsRequest {}
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryAccountRequest {
+  string address = 1;
+}
+message QueryAccountResponse {
+  // settled is the account's energy state recomputed against current
+  // block time (so callers see live numbers, not stale stored values).
+  EnergyAccount settled = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+  // tx_energy_capacity is the current upper bound the account can hold
+  // given its eligible_balance.
+  uint64 tx_energy_capacity = 2;
+  // deploy_energy_capacity is the constant DeployEnergy ceiling.
+  uint64 deploy_energy_capacity = 3;
+}
+
+message QueryDelegationsRequest {
+  string address = 1;
+  // direction: "out" returns delegations created by this address;
+  // "in" returns delegations granting energy to this address;
+  // empty/"all" returns both.
+  string direction = 2;
+}
+message QueryDelegationsResponse {
+  repeated EnergyDelegation outbound = 1 [(gogoproto.nullable) = false];
+  repeated EnergyDelegation inbound = 2 [(gogoproto.nullable) = false];
+}
+
+message QueryEstimateFeeRequest {
+  string signer = 1;
+  uint64 gas_limit = 2;
+  // is_deploy = true draws from DeployEnergy first.
+  bool is_deploy = 3;
+}
+message QueryEstimateFeeResponse {
+  uint64 energy_used = 1;     // covered by accrued + delegated energy
+  uint64 shortfall_gas = 2;   // gas that has to be paid in ATOS
+  string atos_fee = 3 [       // shortfall_gas * insufficient_gas_price
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  bool free = 4;              // true when the msg type is whitelisted
+}
