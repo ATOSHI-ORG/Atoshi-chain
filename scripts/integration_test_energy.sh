@@ -272,26 +272,17 @@ ok "alice spent $ATOS_DELTA aatos for the same MsgSend (charlie paid $CHARLIE_PA
   || fail "alice ($ATOS_DELTA) should have paid LESS than charlie ($CHARLIE_PAID) thanks to energy coverage"
 
 # ============================================================================
-# Wait long enough that alice's accrued energy exceeds the gas-limit reserve
-# the AnteHandler will eat AND the delegate amount we want to lend. With
-# tx_energy_max_accrue_window=60s and capacity 100k, we need ≈40s to be
-# comfortably above 500k gas limit + 1000 lend.
-#
-# Why 1000 lend (not 50000): the AnteHandler greedily reserves up to
-# gas_limit (500k) of alice's energy as fee coverage BEFORE the delegate
-# msg_server runs. So alice's effective "lendable" balance is whatever's
-# left after gas reservation. A small lend amount (1000) keeps the
-# semantics provable without requiring alice to hold an unrealistically
-# large amount up-front. Production fix: add MsgDelegateEnergy to the
-# SubsidizedMsgTypeUrls whitelist so delegate-tx ante doesn't compete
-# with the lend itself.
-log "6a) wait for alice to accrue enough energy for gas + delegate"
-sleep 40
-log "6b) delegate 1000 TxEnergy alice → bob for 1h"
+# Wait briefly so alice has accrued >50000 energy. With capacity 100k and
+# 60s window, 35s is plenty (~58k accrued). MsgDelegateEnergy is on the
+# subsidized whitelist so the AnteHandler does NOT eat this energy as
+# fee coverage; the delegate msg_server sees the full balance.
+log "6a) wait for alice to accrue enough energy"
+sleep 35
+log "6b) delegate 50000 TxEnergy alice → bob for 1h"
 BOB_IN_BEFORE=$(energy_acc "$BOB" | jq -r '.settled.delegated_in_usable')
 ALICE_LOCKED_BEFORE=$(energy_acc "$ALICE" | jq -r '.settled.locked_atos')
 
-DEL_OUT=$("$ATOSHID" "${H[@]}" tx energy delegate "$BOB" 1000 1h --from alice "${TFL[@]}" 2>&1) || {
+DEL_OUT=$("$ATOSHID" "${H[@]}" tx energy delegate "$BOB" 50000 1h --from alice "${TFL[@]}" 2>&1) || {
   echo "----- delegate tx output -----"; echo "$DEL_OUT"; fail "delegate broadcast failed"
 }
 DEL_TXHASH=$(echo "$DEL_OUT" | jq -r '.txhash // empty' 2>/dev/null)
@@ -308,9 +299,9 @@ fi
 BOB_IN_AFTER=$(energy_acc "$BOB" | jq -r '.settled.delegated_in_usable')
 ALICE_LOCKED_AFTER=$(energy_acc "$ALICE" | jq -r '.settled.locked_atos')
 
-[[ "$BOB_IN_AFTER" -ge 1000 ]] || fail "bob should have ≥1000 inbound energy, got $BOB_IN_AFTER (txhash=$DEL_TXHASH)"
+[[ "$BOB_IN_AFTER" -ge 50000 ]] || fail "bob should have ≥50000 inbound energy, got $BOB_IN_AFTER (txhash=$DEL_TXHASH)"
 ok "bob inbound energy: $BOB_IN_BEFORE → $BOB_IN_AFTER"
-ok "alice locked_atos: $ALICE_LOCKED_BEFORE → $ALICE_LOCKED_AFTER (30000 ATOS frozen for 1000 gas units of capacity)"
+ok "alice locked_atos: $ALICE_LOCKED_BEFORE → $ALICE_LOCKED_AFTER (30000 ATOS frozen for 50000 gas units of capacity)"
 
 DELEG_LIST=$("$ATOSHID" query energy delegations "$ALICE" out "${QFL[@]}")
 DELEG_ID=$(echo "$DELEG_LIST" | jq -r '.outbound[0].id')

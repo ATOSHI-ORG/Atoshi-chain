@@ -29,6 +29,15 @@ func DefaultParams() Params {
 			"/atoshi.tokenomics.v1.MsgClaimMinerLockedReward",
 			"/atoshi.tokenomics.v1.MsgClaimProjectTreasuryReward",
 			"/atoshi.oracle.v1.MsgReportPrice",
+			// Delegate / undelegate of energy itself MUST be subsidized:
+			// the AnteHandler greedily reserves up to gas_limit worth of
+			// the signer's energy as fee coverage, which would empty the
+			// delegator's accrued energy BEFORE the delegate msg_server
+			// runs and try to lock some of it. Subsidizing these two
+			// messages is safe — both already require locking ATOS as
+			// collateral, which is the real anti-spam protection.
+			"/atoshi.energy.v1.MsgDelegateEnergy",
+			"/atoshi.energy.v1.MsgUndelegateEnergy",
 		},
 		PrivacyRelayerWhitelist: []string{},
 	}
