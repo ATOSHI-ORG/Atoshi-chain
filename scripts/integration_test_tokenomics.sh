@@ -78,10 +78,10 @@ log "validator=$VAL_ADDR feeder=$FEEDER_ADDR claimant=$CLAIMANT_ADDR"
 # Give validator a generous staking balance and the feeder/treasury enough
 # fee gas to broadcast.
 GENESIS="$HOME_DIR/config/genesis.json"
-"$ATOSHID" "${ATOSHID_HOME[@]}" genesis add-genesis-account validator 100000000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
-"$ATOSHID" "${ATOSHID_HOME[@]}" genesis add-genesis-account feeder    1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
-"$ATOSHID" "${ATOSHID_HOME[@]}" genesis add-genesis-account claimant  1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
-"$ATOSHID" "${ATOSHID_HOME[@]}" genesis add-genesis-account treasury  1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account validator 100000000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account feeder    1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account claimant  1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account treasury  1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
 
 # Build the migration snapshot: claimant gets 1000 aatos.
 SNAPSHOT_DIR="$HOME_DIR/migration"
@@ -101,10 +101,10 @@ jq --arg feeder "$FEEDER_ADDR" \
   | .app_state.tokenomics.params.price_check_epoch_blocks = "5"
 ' "$GENESIS" > "$GENESIS.tmp" && mv "$GENESIS.tmp" "$GENESIS"
 
-"$ATOSHID" "${ATOSHID_HOME[@]}" genesis gentx validator 100000000000000000000$DENOM \
+"$ATOSHID" "${ATOSHID_HOME[@]}" gentx validator 100000000000000000000$DENOM \
   --chain-id "$CHAIN_ID" --keyring-backend "$KEYRING" >/dev/null
-"$ATOSHID" "${ATOSHID_HOME[@]}" genesis collect-gentxs >/dev/null
-"$ATOSHID" "${ATOSHID_HOME[@]}" genesis validate >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" collect-gentxs >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" validate-genesis >/dev/null
 
 log "starting localnet (logs at $HOME_DIR/node.log)"
 "$ATOSHID" "${ATOSHID_HOME[@]}" start --minimum-gas-prices "0$DENOM" --log_level info \
