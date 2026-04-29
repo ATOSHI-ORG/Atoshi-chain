@@ -157,6 +157,9 @@ import (
 	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
 	tokenomicskeeper "github.com/atoshi-chain/atoshi/v20/x/tokenomics/keeper"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
+	energy "github.com/atoshi-chain/atoshi/v20/x/energy"
+	energykeeper "github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
+	energytypes "github.com/atoshi-chain/atoshi/v20/x/energy/types"
 	"github.com/atoshi-chain/atoshi/v20/x/vesting"
 	vestingkeeper "github.com/atoshi-chain/atoshi/v20/x/vesting/keeper"
 	vestingtypes "github.com/atoshi-chain/atoshi/v20/x/vesting/types"
@@ -213,6 +216,8 @@ var (
 		tokenomicstypes.ProjectPoolName:     {authtypes.Minter},
 		tokenomicstypes.MigrationPoolName:   {authtypes.Minter},
 		tokenomicstypes.MinerLockedPoolName: {authtypes.Minter},
+		energytypes.ModuleName:              nil,
+		energytypes.LockedEnergyPoolName:    nil,
 		ratelimittypes.ModuleName:      nil,
 	}
 )
@@ -276,6 +281,7 @@ type Atoshi struct {
 	VestingKeeper   vestingkeeper.Keeper
 	OracleKeeper    oraclekeeper.Keeper
 	TokenomicsKeeper tokenomicskeeper.Keeper
+	EnergyKeeper    energykeeper.Keeper
 
 	// the module manager
 	mm                 *module.Manager
@@ -503,6 +509,15 @@ func NewAtoshi(
 		app.OracleKeeper,
 	)
 
+	app.EnergyKeeper = energykeeper.NewKeeper(
+		appCodec,
+		keys[energytypes.StoreKey],
+		app.AccountKeeper,
+		app.BankKeeper,
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		atoshitypes.BaseDenom,
+	)
+
 	// register the staking hooks
 	// NOTE: stakingKeeper above is passed by reference, so that it will contain these hooks
 	// NOTE: Distr, Slashing and Claim must be created before calling the Hooks method to avoid returning a Keeper without its table generated
@@ -681,6 +696,7 @@ func NewAtoshi(
 		vesting.NewAppModule(app.VestingKeeper, app.AccountKeeper, app.BankKeeper, *app.StakingKeeper.Keeper),
 		oracle.NewAppModule(app.OracleKeeper),
 		tokenomics.NewAppModule(app.TokenomicsKeeper),
+		energy.NewAppModule(app.EnergyKeeper),
 	)
 
 	// BasicModuleManager defines the module BasicManager which is in charge of setting up basic,
@@ -719,6 +735,7 @@ func NewAtoshi(
 		epochstypes.ModuleName,
 		oracletypes.ModuleName,
 		tokenomicstypes.ModuleName,
+		energytypes.ModuleName,
 		feemarkettypes.ModuleName,
 		evmtypes.ModuleName,
 		distrtypes.ModuleName,
@@ -736,6 +753,7 @@ func NewAtoshi(
 		stakingtypes.ModuleName,
 		oracletypes.ModuleName,
 		tokenomicstypes.ModuleName,
+		energytypes.ModuleName,
 		evmtypes.ModuleName,
 		feemarkettypes.ModuleName,
 		feegrant.ModuleName,
@@ -775,6 +793,7 @@ func NewAtoshi(
 		ratelimittypes.ModuleName,
 		oracletypes.ModuleName,
 		tokenomicstypes.ModuleName,
+		energytypes.ModuleName,
 	)
 
 	app.configurator = module.NewConfigurator(app.appCodec, app.MsgServiceRouter(), app.GRPCQueryRouter())
