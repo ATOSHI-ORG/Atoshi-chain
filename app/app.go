@@ -928,6 +928,7 @@ func (app *Atoshi) setAnteHandler(txConfig client.TxConfig, maxGasWanted uint64)
 		SigGasConsumer:         ante.SigVerificationGasConsumer,
 		MaxTxGasWanted:         maxGasWanted,
 		TxFeeChecker:           ethante.NewDynamicFeeChecker(app.FeeMarketKeeper),
+		EnergyKeeper:           &app.EnergyKeeper,
 	}
 
 	if err := options.Validate(); err != nil {
@@ -941,6 +942,7 @@ func (app *Atoshi) setPostHandler() {
 	options := post.HandlerOptions{
 		FeeCollectorName: authtypes.FeeCollectorName,
 		BankKeeper:       app.BankKeeper,
+		EnergyKeeper:     &app.EnergyKeeper,
 	}
 
 	if err := options.Validate(); err != nil {
