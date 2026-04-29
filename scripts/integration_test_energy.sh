@@ -161,6 +161,20 @@ ACTUAL_CHAIN=$("$ATOSHID" status --node "$NODE_RPC" --home "$HOME_DIR" --output 
   | jq -r '.NodeInfo.network // .node_info.network // ""')
 [[ "$ACTUAL_CHAIN" == "$CHAIN_ID" ]] || fail "RPC at $NODE_RPC reports chain_id='$ACTUAL_CHAIN' (expected '$CHAIN_ID') — wrong node?"
 
+# Wait for the first block to be committed. Tx simulation (--gas auto)
+# fails with "atoshid is not ready; please wait for first block:
+# invalid height" or "unknown query path: unknown request" if we
+# broadcast before block 1.
+log "waiting for first block..."
+for i in $(seq 1 30); do
+  HEIGHT=$("$ATOSHID" status --node "$NODE_RPC" --home "$HOME_DIR" --output json 2>/dev/null \
+    | jq -r '.SyncInfo.latest_block_height // .sync_info.latest_block_height // "0"')
+  [[ "$HEIGHT" =~ ^[0-9]+$ ]] && [[ "$HEIGHT" -ge 1 ]] && break
+  sleep 1
+done
+[[ "$HEIGHT" -ge 1 ]] || fail "no block produced after 30s; tail $HOME_DIR/node.log"
+ok "chain at height $HEIGHT"
+
 QFL=( --home "$HOME_DIR" --node "$NODE_RPC" --output json )
 TFL=( --home "$HOME_DIR" --chain-id "$CHAIN_ID" --keyring-backend $KEYRING --node "$NODE_RPC" --yes \
       --gas-prices "1$DENOM" --gas auto --gas-adjustment 1.5 --output json )
