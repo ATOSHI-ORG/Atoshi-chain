@@ -39,7 +39,14 @@ CHAIN_ID="atoshi_88388-1"
 HOME_DIR="$(mktemp -d /tmp/atoshid-energy-itest.XXXXXX)"
 KEYRING="test"
 DENOM="aatos"
-NODE_RPC="tcp://localhost:26657"
+# Use NON-default ports so we don't collide with a running local_node.sh
+# instance on the same machine. CometBFT defaults are 26656/26657; we shift
+# everything by +20.
+RPC_PORT=26677
+P2P_PORT=26676
+GRPC_PORT=9099
+EVM_PORT=8565
+NODE_RPC="tcp://localhost:${RPC_PORT}"
 ATOSHID="$ROOT/build/atoshid"
 
 # 1 ATOS = 1e18 aatos
@@ -106,7 +113,17 @@ jq --arg feeder "$FEEDER" '
 "$ATOSHID" "${H[@]}" collect-gentxs >/dev/null
 "$ATOSHID" "${H[@]}" validate-genesis >/dev/null
 
-log "starting localnet (logs at $HOME_DIR/node.log)"
+# Rewrite ports in config.toml / app.toml so we don't collide with other
+# atoshid instances on this machine.
+CONFIG="$HOME_DIR/config/config.toml"
+APP_TOML="$HOME_DIR/config/app.toml"
+sed -i.bak "s|^laddr = \"tcp://127.0.0.1:26657\"|laddr = \"tcp://127.0.0.1:${RPC_PORT}\"|" "$CONFIG"
+sed -i.bak "s|^laddr = \"tcp://0.0.0.0:26656\"|laddr = \"tcp://0.0.0.0:${P2P_PORT}\"|" "$CONFIG"
+sed -i.bak "s|^address = \"localhost:9090\"|address = \"localhost:${GRPC_PORT}\"|" "$APP_TOML"
+sed -i.bak "s|^address = \"127.0.0.1:8545\"|address = \"127.0.0.1:${EVM_PORT}\"|" "$APP_TOML"
+rm -f "$CONFIG.bak" "$APP_TOML.bak"
+
+log "starting localnet on rpc=${RPC_PORT} (logs at $HOME_DIR/node.log)"
 "$ATOSHID" "${H[@]}" start --minimum-gas-prices "0$DENOM" --log_level info \
   > "$HOME_DIR/node.log" 2>&1 &
 ATOSHID_PID=$!
@@ -115,10 +132,17 @@ for i in $(seq 1 30); do
   if "$ATOSHID" status --node "$NODE_RPC" >/dev/null 2>&1; then break; fi
   sleep 1
 done
-"$ATOSHID" status --node "$NODE_RPC" >/dev/null || fail "node did not start; tail $HOME_DIR/node.log"
+"$ATOSHID" status --node "$NODE_RPC" >/dev/null \
+  || fail "node did not start; tail $HOME_DIR/node.log"
 
-QFL=( --node "$NODE_RPC" --output json )
-TFL=( --chain-id "$CHAIN_ID" --keyring-backend $KEYRING --node "$NODE_RPC" --yes \
+# CRITICAL: confirm we're actually talking to OUR node, not a different
+# atoshid instance the operator might have running on the default port.
+ACTUAL_CHAIN=$("$ATOSHID" status --node "$NODE_RPC" --output json 2>/dev/null \
+  | jq -r '.NodeInfo.network // .node_info.network // ""')
+[[ "$ACTUAL_CHAIN" == "$CHAIN_ID" ]] || fail "RPC at $NODE_RPC reports chain_id='$ACTUAL_CHAIN' (expected '$CHAIN_ID') — wrong node?"
+
+QFL=( --home "$HOME_DIR" --node "$NODE_RPC" --output json )
+TFL=( --home "$HOME_DIR" --chain-id "$CHAIN_ID" --keyring-backend $KEYRING --node "$NODE_RPC" --yes \
       --gas-prices "1$DENOM" --gas auto --gas-adjustment 1.5 --output json )
 
 # helper: query alice's bank balance in aatos (string)

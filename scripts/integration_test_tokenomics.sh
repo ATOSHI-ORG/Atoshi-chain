@@ -33,7 +33,13 @@ CHAIN_ID="atoshi_88388-1"
 HOME_DIR="$(mktemp -d /tmp/atoshid-itest.XXXXXX)"
 KEYRING="test"
 DENOM="aatos"
-NODE_RPC="tcp://localhost:26657"
+# Use NON-default ports so we don't collide with a running local_node.sh
+# instance on the same machine. Defaults are 26656/26657; shift by +30.
+RPC_PORT=26687
+P2P_PORT=26686
+GRPC_PORT=9092
+EVM_PORT=8575
+NODE_RPC="tcp://localhost:${RPC_PORT}"
 ATOSHID="$ROOT/build/atoshid"
 MERKLE_TOOL="$ROOT/build/migration-merkle"
 
@@ -106,7 +112,17 @@ jq --arg feeder "$FEEDER_ADDR" \
 "$ATOSHID" "${ATOSHID_HOME[@]}" collect-gentxs >/dev/null
 "$ATOSHID" "${ATOSHID_HOME[@]}" validate-genesis >/dev/null
 
-log "starting localnet (logs at $HOME_DIR/node.log)"
+# Rewrite ports in config.toml / app.toml to avoid colliding with another
+# atoshid running on the same host (e.g. local_node.sh dev chain).
+CONFIG="$HOME_DIR/config/config.toml"
+APP_TOML="$HOME_DIR/config/app.toml"
+sed -i.bak "s|^laddr = \"tcp://127.0.0.1:26657\"|laddr = \"tcp://127.0.0.1:${RPC_PORT}\"|" "$CONFIG"
+sed -i.bak "s|^laddr = \"tcp://0.0.0.0:26656\"|laddr = \"tcp://0.0.0.0:${P2P_PORT}\"|" "$CONFIG"
+sed -i.bak "s|^address = \"localhost:9090\"|address = \"localhost:${GRPC_PORT}\"|" "$APP_TOML"
+sed -i.bak "s|^address = \"127.0.0.1:8545\"|address = \"127.0.0.1:${EVM_PORT}\"|" "$APP_TOML"
+rm -f "$CONFIG.bak" "$APP_TOML.bak"
+
+log "starting localnet on rpc=${RPC_PORT} (logs at $HOME_DIR/node.log)"
 "$ATOSHID" "${ATOSHID_HOME[@]}" start --minimum-gas-prices "0$DENOM" --log_level info \
   > "$HOME_DIR/node.log" 2>&1 &
 ATOSHID_PID=$!
@@ -116,9 +132,16 @@ for i in $(seq 1 30); do
   if "$ATOSHID" status --node "$NODE_RPC" >/dev/null 2>&1; then break; fi
   sleep 1
 done
-"$ATOSHID" status --node "$NODE_RPC" >/dev/null || fail "node did not start; tail $HOME_DIR/node.log"
+"$ATOSHID" status --node "$NODE_RPC" >/dev/null \
+  || fail "node did not start; tail $HOME_DIR/node.log"
 
-TX_FLAGS=( --chain-id "$CHAIN_ID" --keyring-backend "$KEYRING" --node "$NODE_RPC" --yes --gas-prices "1$DENOM" --gas auto --gas-adjustment 1.5 --output json )
+# Confirm we are talking to OUR node and not another atoshid on the host.
+ACTUAL_CHAIN=$("$ATOSHID" status --node "$NODE_RPC" --output json 2>/dev/null \
+  | jq -r '.NodeInfo.network // .node_info.network // ""')
+[[ "$ACTUAL_CHAIN" == "$CHAIN_ID" ]] || fail "RPC at $NODE_RPC reports chain_id='$ACTUAL_CHAIN' (expected '$CHAIN_ID') — wrong node?"
+
+TX_FLAGS=( --home "$HOME_DIR" --chain-id "$CHAIN_ID" --keyring-backend "$KEYRING" --node "$NODE_RPC" --yes --gas-prices "1$DENOM" --gas auto --gas-adjustment 1.5 --output json )
+QUERY_FLAGS=( --home "$HOME_DIR" --node "$NODE_RPC" --output json )
 
 log "1) feeder reports price"
 "$ATOSHID" "${ATOSHID_HOME[@]}" tx oracle report-price 0.15 150000 itest \
@@ -126,21 +149,21 @@ log "1) feeder reports price"
 sleep 3
 
 log "2) querying oracle current-price"
-"$ATOSHID" query oracle current-price --node "$NODE_RPC" --output json | jq '.price_data | {price, volume_24h, source}'
+"$ATOSHID" query oracle current-price "${QUERY_FLAGS[@]}" | jq '.price_data | {price, volume_24h, source}'
 
 log "3) querying tokenomics views"
 for q in params release-status circulating-supply block-reward project-claimable; do
-  "$ATOSHID" query tokenomics "$q" --node "$NODE_RPC" --output json >/dev/null \
+  "$ATOSHID" query tokenomics "$q" "${QUERY_FLAGS[@]}" >/dev/null \
     || fail "query tokenomics $q failed"
   echo "  - tokenomics $q OK"
 done
 
 log "4) claimant redeems migration tokens"
-BEFORE="$("$ATOSHID" query bank balance "$CLAIMANT_ADDR" "$DENOM" --node "$NODE_RPC" --output json | jq -r '.balance.amount')"
+BEFORE="$("$ATOSHID" query bank balance "$CLAIMANT_ADDR" "$DENOM" "${QUERY_FLAGS[@]}" | jq -r '.balance.amount')"
 "$ATOSHID" "${ATOSHID_HOME[@]}" tx tokenomics claim-migration-tokens 1000 "$PROOF_HEX" \
   --from claimant "${TX_FLAGS[@]}" >/dev/null
 sleep 3
-AFTER="$("$ATOSHID" query bank balance "$CLAIMANT_ADDR" "$DENOM" --node "$NODE_RPC" --output json | jq -r '.balance.amount')"
+AFTER="$("$ATOSHID" query bank balance "$CLAIMANT_ADDR" "$DENOM" "${QUERY_FLAGS[@]}" | jq -r '.balance.amount')"
 DELTA=$(( AFTER - BEFORE ))
 [[ "$DELTA" -ge 1000 ]] || fail "expected balance to grow by >=1000 (paid gas), got delta=$DELTA"
 echo "  - migration claim credited (delta=$DELTA, gas-adjusted)"
