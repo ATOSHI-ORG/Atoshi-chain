@@ -40,12 +40,14 @@ HOME_DIR="$(mktemp -d /tmp/atoshid-energy-itest.XXXXXX)"
 KEYRING="test"
 DENOM="aatos"
 # Use NON-default ports so we don't collide with a running local_node.sh
-# instance on the same machine. CometBFT defaults are 26656/26657; we shift
-# everything by +20.
-RPC_PORT=26677
-P2P_PORT=26676
-GRPC_PORT=9099
-EVM_PORT=8565
+# instance on the same machine. CometBFT defaults are 26656/26657/26658;
+# Cosmos defaults are 9090/1317/8545. We shift everything by +20.
+RPC_PORT=26677     # CometBFT RPC      (default 26657)
+P2P_PORT=26676     # CometBFT P2P      (default 26656)
+ABCI_PORT=26678    # ABCI proxy_app    (default 26658)
+GRPC_PORT=9099     # Cosmos gRPC       (default 9090)
+API_PORT=1337      # Cosmos REST       (default 1317)
+EVM_PORT=8565      # Ethereum JSON-RPC (default 8545)
 NODE_RPC="tcp://localhost:${RPC_PORT}"
 ATOSHID="$ROOT/build/atoshid"
 
@@ -113,14 +115,16 @@ jq --arg feeder "$FEEDER" '
 "$ATOSHID" "${H[@]}" collect-gentxs >/dev/null
 "$ATOSHID" "${H[@]}" validate-genesis >/dev/null
 
-# Rewrite ports in config.toml / app.toml so we don't collide with other
-# atoshid instances on this machine.
+# Rewrite EVERY listen port in config.toml / app.toml so we don't collide
+# with another atoshid (e.g. local_node.sh on default ports).
 CONFIG="$HOME_DIR/config/config.toml"
 APP_TOML="$HOME_DIR/config/app.toml"
-sed -i.bak "s|^laddr = \"tcp://127.0.0.1:26657\"|laddr = \"tcp://127.0.0.1:${RPC_PORT}\"|" "$CONFIG"
-sed -i.bak "s|^laddr = \"tcp://0.0.0.0:26656\"|laddr = \"tcp://0.0.0.0:${P2P_PORT}\"|" "$CONFIG"
-sed -i.bak "s|^address = \"localhost:9090\"|address = \"localhost:${GRPC_PORT}\"|" "$APP_TOML"
-sed -i.bak "s|^address = \"127.0.0.1:8545\"|address = \"127.0.0.1:${EVM_PORT}\"|" "$APP_TOML"
+sed -i.bak "s|tcp://127.0.0.1:26657|tcp://127.0.0.1:${RPC_PORT}|g"  "$CONFIG"
+sed -i.bak "s|tcp://0.0.0.0:26656|tcp://0.0.0.0:${P2P_PORT}|g"      "$CONFIG"
+sed -i.bak "s|tcp://127.0.0.1:26658|tcp://127.0.0.1:${ABCI_PORT}|g" "$CONFIG"
+sed -i.bak "s|localhost:9090|localhost:${GRPC_PORT}|g"              "$APP_TOML"
+sed -i.bak "s|tcp://localhost:1317|tcp://localhost:${API_PORT}|g"   "$APP_TOML"
+sed -i.bak "s|127.0.0.1:8545|127.0.0.1:${EVM_PORT}|g"               "$APP_TOML"
 rm -f "$CONFIG.bak" "$APP_TOML.bak"
 
 log "starting localnet on rpc=${RPC_PORT} (logs at $HOME_DIR/node.log)"
@@ -128,16 +132,28 @@ log "starting localnet on rpc=${RPC_PORT} (logs at $HOME_DIR/node.log)"
   > "$HOME_DIR/node.log" 2>&1 &
 ATOSHID_PID=$!
 
+# Wait for RPC. If the chain process dies before answering, dump the log.
+NODE_UP=0
 for i in $(seq 1 30); do
-  if "$ATOSHID" status --node "$NODE_RPC" >/dev/null 2>&1; then break; fi
+  if ! kill -0 "$ATOSHID_PID" 2>/dev/null; then
+    echo "----- node.log (process exited) -----"
+    tail -50 "$HOME_DIR/node.log" || true
+    fail "atoshid process died during startup; see log above"
+  fi
+  if "$ATOSHID" status --node "$NODE_RPC" --home "$HOME_DIR" >/dev/null 2>&1; then
+    NODE_UP=1; break
+  fi
   sleep 1
 done
-"$ATOSHID" status --node "$NODE_RPC" >/dev/null \
-  || fail "node did not start; tail $HOME_DIR/node.log"
+if [[ "$NODE_UP" -ne 1 ]]; then
+  echo "----- node.log (timeout, process still running) -----"
+  tail -80 "$HOME_DIR/node.log" || true
+  fail "node RPC did not respond on $NODE_RPC after 30s"
+fi
 
 # CRITICAL: confirm we're actually talking to OUR node, not a different
 # atoshid instance the operator might have running on the default port.
-ACTUAL_CHAIN=$("$ATOSHID" status --node "$NODE_RPC" --output json 2>/dev/null \
+ACTUAL_CHAIN=$("$ATOSHID" status --node "$NODE_RPC" --home "$HOME_DIR" --output json 2>/dev/null \
   | jq -r '.NodeInfo.network // .node_info.network // ""')
 [[ "$ACTUAL_CHAIN" == "$CHAIN_ID" ]] || fail "RPC at $NODE_RPC reports chain_id='$ACTUAL_CHAIN' (expected '$CHAIN_ID') — wrong node?"
 
