@@ -223,6 +223,44 @@ if [[ $overwrite == "y" || $overwrite == "Y" ]]; then
 	# Set base fee in genesis
 	jq '.app_state["feemarket"]["params"]["base_fee"]="'${BASEFEE}'"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
 
+	# ========================================================================
+	# TEST-MODE parameter overrides for atoshi modules (oracle / tokenomics /
+	# energy). DO NOT use these values in production — they collapse the
+	# normal 24h / 30-day / 4-year economic windows down to seconds/minutes
+	# so a developer can exercise every code path in one afternoon.
+	#
+	# Production defaults live in each module's DefaultParams() and are not
+	# touched here.
+	# ========================================================================
+	echo -e "${YELLOW}Applying TEST-MODE parameter overrides${NC}"
+	echo -e "${YELLOW}  (energy: 60s recover, deploy: 1d; tokenomics: 10-block epoch, 3-day streak, 1k-block halving)${NC}"
+
+	# --- ENERGY: 60-second TxEnergy refill window (was 86400) ---
+	jq '.app_state.energy.params.tx_energy_max_accrue_window = "60"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	# --- ENERGY: DeployEnergy refill in 1 day at threshold holding (was 10) ---
+	jq '.app_state.energy.params.deploy_recover_days = "1"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+
+	# --- TOKENOMICS: price-check epoch every 10 blocks (was 17280, ~24h) ---
+	jq '.app_state.tokenomics.params.price_check_epoch_blocks = "10"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	# --- TOKENOMICS: 3 epochs to trigger release (was 30) ---
+	jq '.app_state.tokenomics.params.consecutive_days_required = 3' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+	# --- TOKENOMICS: halve block reward every 1000 blocks (was 25_228_800) ---
+	jq '.app_state.tokenomics.params.halving_interval_blocks = "1000"' "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+
+	# --- ORACLE: whitelist the dev validator as an authorized feeder ---
+	# This lets MsgReportPrice succeed straight out of the box for testing.
+	# In production, governance / multisig adds approved feeder addresses.
+	VAL_ADDR="$(atoshid keys show "$VAL_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")"
+	jq --arg feeder "$VAL_ADDR" \
+	   '.app_state.oracle.params.allowed_feeders = [$feeder]' \
+	   "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+
+	# --- TOKENOMICS: project_treasury_address = first validator's account ---
+	# Per design: project pool releases go to the genesis validator address.
+	jq --arg treasury "$VAL_ADDR" \
+	   '.app_state.tokenomics.params.project_treasury_address = $treasury' \
+	   "$GENESIS" >"$TMP_GENESIS" && mv "$TMP_GENESIS" "$GENESIS"
+
 	# Enable prometheus metrics and all APIs for dev node
 	if [[ "$OSTYPE" == "darwin"* ]]; then
 		sed -i '' 's/prometheus = false/prometheus = true/' "$CONFIG"
