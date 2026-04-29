@@ -51,8 +51,10 @@ EVM_PORT=8565      # Ethereum JSON-RPC (default 8545)
 NODE_RPC="tcp://localhost:${RPC_PORT}"
 ATOSHID="$ROOT/build/atoshid"
 
-# 1 ATOS = 1e18 aatos
-ATOS_18=1000000000000000000
+# 1 ATOS = 1e18 aatos. Use a helper that APPENDS 18 zeros to a count
+# (we can't use bash arithmetic — 10^18 overflows int64) so callers
+# write `$(atos 60000)aatos` for 60000 ATOS.
+atos() { printf '%s000000000000000000' "$1"; }
 
 cleanup() {
   if [[ -n "${ATOSHID_PID:-}" ]] && kill -0 "$ATOSHID_PID" 2>/dev/null; then
@@ -97,11 +99,11 @@ log "set genesis balances + register feeder whitelist"
 # validator: enough to bond. alice: 60k ATOS (capacity 100k energy).
 # bob: 5k (below threshold -> no energy). charlie: 1k (well below).
 # feeder: 1k (only needs gas; oracle MsgReportPrice is subsidized).
-"$ATOSHID" "${H[@]}" add-genesis-account "$VAL"     100000000000000000000000000$DENOM >/dev/null
-"$ATOSHID" "${H[@]}" add-genesis-account "$ALICE"   60000${ATOS_18}$DENOM             >/dev/null
-"$ATOSHID" "${H[@]}" add-genesis-account "$BOB"     5000${ATOS_18}$DENOM              >/dev/null
-"$ATOSHID" "${H[@]}" add-genesis-account "$CHARLIE" 1000${ATOS_18}$DENOM              >/dev/null
-"$ATOSHID" "${H[@]}" add-genesis-account "$FEEDER"  1000${ATOS_18}$DENOM              >/dev/null
+"$ATOSHID" "${H[@]}" add-genesis-account "$VAL"     "$(atos 100000000)$DENOM" >/dev/null  # 100M ATOS
+"$ATOSHID" "${H[@]}" add-genesis-account "$ALICE"   "$(atos 60000)$DENOM"     >/dev/null  #  60k ATOS, 2x threshold (capacity 100k energy)
+"$ATOSHID" "${H[@]}" add-genesis-account "$BOB"     "$(atos 5000)$DENOM"      >/dev/null  #   5k ATOS, below threshold
+"$ATOSHID" "${H[@]}" add-genesis-account "$CHARLIE" "$(atos 1000)$DENOM"      >/dev/null  #   1k ATOS, well below
+"$ATOSHID" "${H[@]}" add-genesis-account "$FEEDER"  "$(atos 1000)$DENOM"      >/dev/null  #   1k ATOS
 
 GENESIS="$HOME_DIR/config/genesis.json"
 
@@ -111,7 +113,7 @@ jq --arg feeder "$FEEDER" '
   .app_state.oracle.params.allowed_feeders = [$feeder]
 ' "$GENESIS" > "$GENESIS.tmp" && mv "$GENESIS.tmp" "$GENESIS"
 
-"$ATOSHID" "${H[@]}" gentx validator 1000${ATOS_18}$DENOM --chain-id "$CHAIN_ID" --keyring-backend $KEYRING >/dev/null
+"$ATOSHID" "${H[@]}" gentx validator "$(atos 1000)$DENOM" --chain-id "$CHAIN_ID" --keyring-backend $KEYRING >/dev/null
 "$ATOSHID" "${H[@]}" collect-gentxs >/dev/null
 "$ATOSHID" "${H[@]}" validate-genesis >/dev/null
 
@@ -249,17 +251,20 @@ DELTA=$(( BAL_BEFORE - BAL_AFTER ))
 ok "charlie paid $DELTA aatos (1 sent + $(( DELTA - 1 )) gas)"
 
 # ============================================================================
-log "5) alice (60k ATOS, has accrued energy) → energy covers gas, lower fee"
+log "5) alice (60k ATOS, has accrued energy) → energy covers some gas"
+# We can't assert ENERGY_DELTA > 0 because the 3-second confirmation
+# wait re-accrues more energy than the tx consumed. Instead compare the
+# ATOS spent against charlie's full fee: if energy is contributing,
+# alice MUST pay strictly less than charlie did for the same MsgSend.
+CHARLIE_PAID=$DELTA       # captured in step 4 above
 BAL_BEFORE=$(bank_bal "$ALICE")
-ENERGY_BEFORE=$(energy_acc "$ALICE" | jq -r '.settled.tx_energy_accrued')
 "$ATOSHID" "${H[@]}" tx bank send alice "$BOB" "1$DENOM" "${TFL[@]}" >/dev/null
 sleep 3
 BAL_AFTER=$(bank_bal "$ALICE")
-ENERGY_AFTER=$(energy_acc "$ALICE" | jq -r '.settled.tx_energy_accrued')
 ATOS_DELTA=$(( BAL_BEFORE - BAL_AFTER ))
-ENERGY_DELTA=$(( ENERGY_BEFORE - ENERGY_AFTER ))
-ok "alice spent $ATOS_DELTA aatos (1 sent + gas), energy delta = $ENERGY_DELTA"
-[[ "$ENERGY_DELTA" -gt 0 ]] || fail "alice's energy should have decreased"
+ok "alice spent $ATOS_DELTA aatos for the same MsgSend (charlie paid $CHARLIE_PAID)"
+[[ "$ATOS_DELTA" -lt "$CHARLIE_PAID" ]] \
+  || fail "alice ($ATOS_DELTA) should have paid LESS than charlie ($CHARLIE_PAID) thanks to energy coverage"
 
 # ============================================================================
 log "6) delegate 50000 TxEnergy alice → bob for 1h, ATOS frozen"

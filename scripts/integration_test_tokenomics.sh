@@ -91,13 +91,21 @@ GENESIS="$HOME_DIR/config/genesis.json"
 "$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account "$CLAIMANT_ADDR" 1000000000000000000000$DENOM >/dev/null
 "$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account "$TREASURY_ADDR" 1000000000000000000000$DENOM >/dev/null
 
-# Build the migration snapshot: claimant gets 1000 aatos.
+# Build the migration snapshot. Need ≥2 entries because the on-chain
+# ValidateBasic rejects an empty Merkle proof; with 1 entry the leaf
+# IS the root and the proof is empty. Use validator's address as the
+# second filler entry.
 SNAPSHOT_DIR="$HOME_DIR/migration"
 mkdir -p "$SNAPSHOT_DIR"
-echo "$CLAIMANT_ADDR,1000" > "$SNAPSHOT_DIR/snapshot.csv"
+{
+  echo "$CLAIMANT_ADDR,1000"
+  echo "$VAL_ADDR,2000"
+} > "$SNAPSHOT_DIR/snapshot.csv"
 "$MERKLE_TOOL" -in "$SNAPSHOT_DIR/snapshot.csv" -out "$SNAPSHOT_DIR" >/dev/null
 MERKLE_ROOT="$(tr -d '\n' < "$SNAPSHOT_DIR/root.txt")"
-PROOF_HEX="$(jq -r '.proofs[0].proof | join(",")' "$SNAPSHOT_DIR/proofs.json")"
+# Find the claimant's proof in proofs.json (entry order is preserved).
+PROOF_HEX="$(jq -r --arg a "$CLAIMANT_ADDR" '.proofs[] | select(.claimer==$a) | .proof | join(",")' "$SNAPSHOT_DIR/proofs.json")"
+[[ -n "$PROOF_HEX" ]] || fail "claimant proof not found in proofs.json"
 
 log "patching genesis: feeder whitelist + treasury + merkle root"
 jq --arg feeder "$FEEDER_ADDR" \
@@ -195,12 +203,29 @@ done
 
 log "4) claimant redeems migration tokens"
 BEFORE="$("$ATOSHID" query bank balance "$CLAIMANT_ADDR" "$DENOM" "${QUERY_FLAGS[@]}" | jq -r '.balance.amount')"
-"$ATOSHID" "${ATOSHID_HOME[@]}" tx tokenomics claim-migration-tokens 1000 "$PROOF_HEX" \
-  --from claimant "${TX_FLAGS[@]}" >/dev/null
+# Capture the tx output so we can inspect failures instead of silently
+# hiding them. Migration claim is in the SubsidizedMsgTypeUrls list, so
+# claimant pays NO gas — balance should grow by exactly 1000.
+CLAIM_OUT=$("$ATOSHID" "${ATOSHID_HOME[@]}" tx tokenomics claim-migration-tokens 1000 "$PROOF_HEX" \
+  --from claimant "${TX_FLAGS[@]}" 2>&1) || {
+    echo "----- claim tx output -----"
+    echo "$CLAIM_OUT"
+    fail "claim-migration-tokens broadcast failed"
+  }
+TXHASH=$(echo "$CLAIM_OUT" | jq -r '.txhash // empty' 2>/dev/null)
 sleep 3
+# Verify the tx actually succeeded on-chain (code 0).
+if [[ -n "$TXHASH" ]]; then
+  CODE=$("$ATOSHID" query tx "$TXHASH" "${QUERY_FLAGS[@]}" 2>/dev/null | jq -r '.code // 999')
+  if [[ "$CODE" != "0" ]]; then
+    echo "----- tx $TXHASH failed with code $CODE -----"
+    "$ATOSHID" query tx "$TXHASH" "${QUERY_FLAGS[@]}" | jq '{code, raw_log, gas_used}'
+    fail "claim tx reverted on-chain"
+  fi
+fi
 AFTER="$("$ATOSHID" query bank balance "$CLAIMANT_ADDR" "$DENOM" "${QUERY_FLAGS[@]}" | jq -r '.balance.amount')"
 DELTA=$(( AFTER - BEFORE ))
-[[ "$DELTA" -ge 1000 ]] || fail "expected balance to grow by >=1000 (paid gas), got delta=$DELTA"
-echo "  - migration claim credited (delta=$DELTA, gas-adjusted)"
+[[ "$DELTA" -ge 1000 ]] || fail "expected balance to grow by >=1000, got delta=$DELTA (txhash=$TXHASH)"
+echo "  - migration claim credited (delta=$DELTA, txhash=$TXHASH)"
 
 log "ALL CHECKS PASSED"
