@@ -15,6 +15,7 @@ import (
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/spf13/cobra"
 
+	"github.com/atoshi-chain/atoshi/v20/x/energy/client/cli"
 	"github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
 	"github.com/atoshi-chain/atoshi/v20/x/energy/types"
 )
@@ -53,8 +54,8 @@ func (AppModuleBasic) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *r
 		panic(err)
 	}
 }
-func (AppModuleBasic) GetTxCmd() *cobra.Command    { return nil } // CLI added in Phase 4
-func (AppModuleBasic) GetQueryCmd() *cobra.Command { return nil }
+func (AppModuleBasic) GetTxCmd() *cobra.Command    { return cli.NewTxCmd() }
+func (AppModuleBasic) GetQueryCmd() *cobra.Command { return cli.GetQueryCmd() }
 
 type AppModule struct {
 	AppModuleBasic
