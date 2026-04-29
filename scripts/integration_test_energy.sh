@@ -176,8 +176,12 @@ done
 ok "chain at height $HEIGHT"
 
 QFL=( --home "$HOME_DIR" --node "$NODE_RPC" --output json )
+# Use a fixed gas limit. --gas auto requires the chain's tx-simulation
+# gRPC path which atoshid does not currently expose to clients (it
+# returns "unknown query path: unknown request"). 500k is plenty for
+# normal sends and oracle reports; tweak per-tx if needed.
 TFL=( --home "$HOME_DIR" --chain-id "$CHAIN_ID" --keyring-backend $KEYRING --node "$NODE_RPC" --yes \
-      --gas-prices "1$DENOM" --gas auto --gas-adjustment 1.5 --output json )
+      --gas 500000 --gas-prices "1$DENOM" --output json )
 
 # helper: query alice's bank balance in aatos (string)
 bank_bal() {
