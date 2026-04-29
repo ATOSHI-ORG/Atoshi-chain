@@ -8,12 +8,19 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+
+	energyante "github.com/atoshi-chain/atoshi/v20/x/energy/ante"
+	energykeeper "github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
 )
 
 // HandlerOptions are the options required for constructing a PostHandler.
 type HandlerOptions struct {
 	FeeCollectorName string
 	BankKeeper       bankkeeper.Keeper
+	// EnergyKeeper is optional; when set the energy refund decorator is
+	// chained after the burn decorator so that any TxEnergy reserved
+	// in excess of actual gas usage is returned to the signer.
+	EnergyKeeper *energykeeper.Keeper
 }
 
 func (h HandlerOptions) Validate() error {
@@ -32,6 +39,9 @@ func (h HandlerOptions) Validate() error {
 func NewPostHandler(ho HandlerOptions) sdk.PostHandler {
 	postDecorators := []sdk.PostDecorator{
 		NewBurnDecorator(ho.FeeCollectorName, ho.BankKeeper),
+	}
+	if ho.EnergyKeeper != nil {
+		postDecorators = append(postDecorators, energyante.NewEnergyRefundDecorator(*ho.EnergyKeeper))
 	}
 
 	return sdk.ChainPostDecorators(postDecorators...)
