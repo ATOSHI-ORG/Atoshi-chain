@@ -78,10 +78,10 @@ log "validator=$VAL_ADDR feeder=$FEEDER_ADDR claimant=$CLAIMANT_ADDR"
 # Give validator a generous staking balance and the feeder/treasury enough
 # fee gas to broadcast.
 GENESIS="$HOME_DIR/config/genesis.json"
-"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account validator 100000000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
-"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account feeder    1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
-"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account claimant  1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
-"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account treasury  1000000000000000000000$DENOM --keyring-backend "$KEYRING" >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account "$VAL_ADDR"      100000000000000000000000000$DENOM >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account "$FEEDER_ADDR"   1000000000000000000000$DENOM >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account "$CLAIMANT_ADDR" 1000000000000000000000$DENOM >/dev/null
+"$ATOSHID" "${ATOSHID_HOME[@]}" add-genesis-account "$TREASURY_ADDR" 1000000000000000000000$DENOM >/dev/null
 
 # Build the migration snapshot: claimant gets 1000 aatos.
 SNAPSHOT_DIR="$HOME_DIR/migration"

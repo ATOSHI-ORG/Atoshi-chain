@@ -83,14 +83,16 @@ FEEDER=$(addr feeder)
 VAL=$(addr validator)
 
 log "set genesis balances + register feeder whitelist"
+# Use explicit addresses (already extracted via `keys show`) so there is no
+# ambiguity about how add-genesis-account resolves key names.
 # validator: enough to bond. alice: 60k ATOS (capacity 100k energy).
 # bob: 5k (below threshold -> no energy). charlie: 1k (well below).
 # feeder: 1k (only needs gas; oracle MsgReportPrice is subsidized).
-"$ATOSHID" "${H[@]}" add-genesis-account validator 100000000000000000000000000$DENOM --keyring-backend $KEYRING >/dev/null
-"$ATOSHID" "${H[@]}" add-genesis-account alice     60000${ATOS_18}$DENOM             --keyring-backend $KEYRING >/dev/null
-"$ATOSHID" "${H[@]}" add-genesis-account bob       5000${ATOS_18}$DENOM              --keyring-backend $KEYRING >/dev/null
-"$ATOSHID" "${H[@]}" add-genesis-account charlie   1000${ATOS_18}$DENOM              --keyring-backend $KEYRING >/dev/null
-"$ATOSHID" "${H[@]}" add-genesis-account feeder    1000${ATOS_18}$DENOM              --keyring-backend $KEYRING >/dev/null
+"$ATOSHID" "${H[@]}" add-genesis-account "$VAL"     100000000000000000000000000$DENOM >/dev/null
+"$ATOSHID" "${H[@]}" add-genesis-account "$ALICE"   60000${ATOS_18}$DENOM             >/dev/null
+"$ATOSHID" "${H[@]}" add-genesis-account "$BOB"     5000${ATOS_18}$DENOM              >/dev/null
+"$ATOSHID" "${H[@]}" add-genesis-account "$CHARLIE" 1000${ATOS_18}$DENOM              >/dev/null
+"$ATOSHID" "${H[@]}" add-genesis-account "$FEEDER"  1000${ATOS_18}$DENOM              >/dev/null
 
 GENESIS="$HOME_DIR/config/genesis.json"
 
@@ -132,6 +134,15 @@ log "1) module reachable: query energy params"
 "$ATOSHID" query energy params "${QFL[@]}" | jq -e '.params.energy_enabled == true' >/dev/null \
   || fail "energy params unreachable or disabled at genesis"
 ok "energy params query OK, enabled = true"
+
+# ============================================================================
+# Sanity: confirm chain actually loaded the genesis accounts. If this prints
+# "not found" we know the genesis-auth-state never made it into the keeper.
+log "1b) sanity: query auth account for alice + feeder"
+echo "  alice addr: $ALICE"
+"$ATOSHID" query auth account "$ALICE" --node "$NODE_RPC" --output json 2>&1 | head -5 || true
+echo "  feeder addr: $FEEDER"
+"$ATOSHID" query auth account "$FEEDER" --node "$NODE_RPC" --output json 2>&1 | head -5 || true
 
 # ============================================================================
 # The energy keeper initializes an account's last_updated_time only on its
