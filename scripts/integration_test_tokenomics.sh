@@ -127,7 +127,11 @@ sed -i.bak "s|127.0.0.1:8545|127.0.0.1:${EVM_PORT}|g"               "$APP_TOML"
 rm -f "$CONFIG.bak" "$APP_TOML.bak"
 
 log "starting localnet on rpc=${RPC_PORT} (logs at $HOME_DIR/node.log)"
-"$ATOSHID" "${ATOSHID_HOME[@]}" start --minimum-gas-prices "0$DENOM" --log_level info \
+# --chain-id is REQUIRED. Atoshi's AtoshiAppOptions(chainID) runs in
+# NewAtoshi() before genesis.json is parsed, so without the flag the
+# chain id is empty and the app panics with "unknown chain id:".
+"$ATOSHID" "${ATOSHID_HOME[@]}" start --chain-id "$CHAIN_ID" \
+  --minimum-gas-prices "0$DENOM" --log_level info \
   > "$HOME_DIR/node.log" 2>&1 &
 ATOSHID_PID=$!
 
