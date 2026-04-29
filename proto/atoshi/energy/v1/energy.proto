@@ -1,0 +1,130 @@
+syntax = "proto3";
+package atoshi.energy.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/energy/types";
+
+// Params holds all governance-tunable parameters for the energy module.
+// All numeric thresholds and the global enable flag are mutable via
+// MsgUpdateParams so we can re-tune the system after launch without a fork.
+message Params {
+  // energy_enabled is the global kill-switch. When false, the AnteHandler
+  // skips all energy logic and falls through to the standard fee path.
+  // Existing accrued energy and delegations are preserved.
+  bool energy_enabled = 1;
+
+  // tx_energy_holding_threshold is the amount of ATOS a holder needs to
+  // accrue one "tx-energy unit" worth (default 30,000 ATOS in aatos).
+  string tx_energy_holding_threshold = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // tx_energy_per_threshold is how much TxEnergy (in gas units) one
+  // "tx-energy unit" represents (default 50,000 — equivalent to ~1 ERC20
+  // transfer's gas).
+  uint64 tx_energy_per_threshold = 3;
+
+  // tx_energy_max_accrue_window is the seconds it takes to refill from
+  // 0 to capacity at the current holding (default 86400 = 24h).
+  int64 tx_energy_max_accrue_window = 4;
+
+  // deploy_holding_threshold is the ATOS amount that gives the full
+  // deploy quota every recover-window (default 1,000,000 ATOS).
+  string deploy_holding_threshold = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // deploy_energy_capacity is the constant per-account DeployEnergy cap in
+  // gas units (default 800,000 — ~1 ERC20 deployment).
+  uint64 deploy_energy_capacity = 6;
+
+  // deploy_recover_days is the number of days needed to refill from 0 at
+  // the threshold holding (default 10). Larger holdings refill faster.
+  int64 deploy_recover_days = 7;
+
+  // insufficient_gas_price is the gas price (in atoshi/gas) charged for the
+  // gas not covered by accrued energy (default 0.0021).
+  string insufficient_gas_price = 8 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // subsidized_msg_type_urls is a whitelist of Msg type URLs that bypass
+  // both energy deduction and fee collection (e.g. claim transactions,
+  // oracle feeder reports).
+  repeated string subsidized_msg_type_urls = 9;
+
+  // privacy_relayer_whitelist is the set of addresses allowed to act as
+  // privacy relayer pools (off-chain Shield gas payers). Energy
+  // delegations to non-whitelisted addresses are still allowed but do not
+  // automatically map to L2 quota.
+  repeated string privacy_relayer_whitelist = 10;
+}
+
+// EnergyAccount tracks a single account's accrued energy and delegation
+// commitments. Updated lazily — only when the account is touched (read,
+// receive coins, send coins, consume energy, delegate).
+message EnergyAccount {
+  // address is the bech32 owner.
+  string address = 1;
+
+  // tx_energy_accrued is the account's currently spendable TxEnergy
+  // (in gas units, before adding delegated_in_usable).
+  uint64 tx_energy_accrued = 2;
+
+  // deploy_energy_accrued is the currently spendable DeployEnergy.
+  uint64 deploy_energy_accrued = 3;
+
+  // last_balance_snapshot is the eligible_balance (bank balance minus
+  // locked_atos) recorded at last_updated_time. Future accrual is
+  // computed against this number until the next settle.
+  string last_balance_snapshot = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // last_updated_time is the unix second of the most recent settle.
+  int64 last_updated_time = 5;
+
+  // delegated_out is the sum of TxEnergy currently lent to other
+  // accounts. Subtracted from spendable energy.
+  uint64 delegated_out = 6;
+
+  // delegated_in_usable is the sum of TxEnergy lent to this account by
+  // others, still within their delegation period and not yet used.
+  uint64 delegated_in_usable = 7;
+
+  // locked_atos is the ATOS amount frozen because the owner has
+  // outstanding outbound delegations. Cannot be transferred until the
+  // delegations expire.
+  string locked_atos = 8 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// EnergyDelegation records a single outbound energy lend from delegator
+// to delegatee. The corresponding ATOS is frozen for the delegator.
+message EnergyDelegation {
+  uint64 id = 1;
+  string delegator = 2;
+  string delegatee = 3;
+  uint64 amount = 4;          // TxEnergy lent (gas units)
+  string locked_atos = 5 [    // ATOS frozen for the delegator's account
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  int64 start_time = 6;
+  int64 expires_at = 7;       // After this, EndBlocker auto-returns
+  uint64 used = 8;            // delegatee has already consumed this much
+}

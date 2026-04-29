@@ -1,0 +1,17 @@
+syntax = "proto3";
+package atoshi.energy.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "atoshi/energy/v1/energy.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/energy/types";
+
+// GenesisState is the energy module's genesis-time state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+  repeated EnergyAccount accounts = 2 [(gogoproto.nullable) = false];
+  repeated EnergyDelegation delegations = 3 [(gogoproto.nullable) = false];
+  // next_delegation_id is the auto-increment counter for delegation IDs.
+  uint64 next_delegation_id = 4;
+}
