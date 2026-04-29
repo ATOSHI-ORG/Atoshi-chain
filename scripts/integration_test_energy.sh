@@ -72,7 +72,7 @@ log "init chain $CHAIN_ID under $HOME_DIR"
 
 # Five test keys: validator, alice (whale), bob (delegatee), charlie (poor), feeder.
 for k in validator alice bob charlie feeder; do
-  "$ATOSHID" "${H[@]}" keys add "$k" --keyring-backend "$KEYRING" >/dev/null
+  "$ATOSHID" "${H[@]}" keys add "$k" --keyring-backend "$KEYRING" --algo eth_secp256k1 >/dev/null
 done
 
 addr() { "$ATOSHID" "${H[@]}" keys show "$1" -a --keyring-backend "$KEYRING"; }

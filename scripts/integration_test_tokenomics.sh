@@ -66,7 +66,7 @@ log "initializing chain $CHAIN_ID under $HOME_DIR"
 
 # Add validator + feeder + claimant + treasury keys.
 for key in validator feeder claimant treasury; do
-  "$ATOSHID" "${ATOSHID_HOME[@]}" keys add "$key" --keyring-backend "$KEYRING" >/dev/null
+  "$ATOSHID" "${ATOSHID_HOME[@]}" keys add "$key" --keyring-backend "$KEYRING" --algo eth_secp256k1 >/dev/null
 done
 VAL_ADDR="$("$ATOSHID" "${ATOSHID_HOME[@]}" keys show validator -a --keyring-backend "$KEYRING")"
 FEEDER_ADDR="$("$ATOSHID" "${ATOSHID_HOME[@]}" keys show feeder -a --keyring-backend "$KEYRING")"
