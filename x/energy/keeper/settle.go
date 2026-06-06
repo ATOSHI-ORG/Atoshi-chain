@@ -74,25 +74,43 @@ func (k Keeper) Settle(ctx sdk.Context, addr sdk.AccAddress) types.EnergyAccount
 	return acct
 }
 
-// OnBalanceChange is called by the bank Send hook (and any other code
-// that mutates an account's balance). It first settles using the OLD
-// snapshot, then snaps the new eligible balance, then caps any over-
-// capacity accrued energy down to the new ceiling.
+// OnBalanceChange is called by any code path that mutates an account's
+// balance AFTER the bank write has landed (delegation flows, migrations).
+// Hot-path bank sends route through ApplyBalanceChange in SendRestriction
+// instead, where the post-send balance is known by arithmetic and the
+// bank store has not yet been updated.
+//
+// It first settles using the OLD snapshot, then snaps the new eligible
+// balance, then caps any over-capacity accrued energy down to the new
+// ceiling.
 //
 // The cap-down step is deliberate: a holder that sells most of their
 // stake should not retain a giant prefilled energy buffer. Otherwise
 // rotating accounts could harvest energy with one wallet then move
 // the ATOS to another wallet for free transactions everywhere.
 func (k Keeper) OnBalanceChange(ctx sdk.Context, addr sdk.AccAddress) {
-	// Step 1: close the old epoch.
+	k.ApplyBalanceChange(ctx, addr, k.EligibleBalance(ctx, addr))
+}
+
+// ApplyBalanceChange is the snapshot-update primitive shared by
+// OnBalanceChange and SendRestriction. It accepts the post-change
+// eligible balance explicitly rather than reading it from bank, so the
+// bank send restriction (which runs before the bank write) can pass the
+// projected post-send amount and still produce a correct snapshot.
+//
+// A negative `newEligible` is clamped to zero — this lets callers freely
+// subtract amounts without worrying about underflow when an account is
+// drained to zero in the same tx.
+func (k Keeper) ApplyBalanceChange(ctx sdk.Context, addr sdk.AccAddress, newEligible math.Int) {
+	if newEligible.IsNil() || newEligible.IsNegative() {
+		newEligible = math.ZeroInt()
+	}
+
 	acct := k.Settle(ctx, addr)
 
-	// Step 2: read fresh eligible balance.
-	newEligible := k.EligibleBalance(ctx, addr)
 	acct.LastBalanceSnapshot = newEligible
 	acct.LastUpdatedTime = ctx.BlockTime().Unix()
 
-	// Step 3: cap accrued to the new (possibly lower) capacity.
 	params := k.GetParams(ctx)
 	newTxCap := types.TxEnergyCapacity(newEligible, params)
 	if acct.TxEnergyAccrued > newTxCap {

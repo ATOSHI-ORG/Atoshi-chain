@@ -25,7 +25,7 @@ body:
         If applicable please answer the below questions
         Why do we need this feature? 
         What issues may be addressed by introducing this feature?
-        What benefits does Evmos stand to gain by including this feature?
+        What benefits does Atoshi stand to gain by including this feature?
         Are there any disadvantages to including this feature?
       placeholder: Description of the issue being faced
     validations:

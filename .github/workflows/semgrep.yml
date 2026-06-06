@@ -15,7 +15,7 @@ jobs:
     if: (github.actor != 'dependabot[bot]')
     steps:
       - name: Permission issue fix
-        run: git config --global --add safe.directory /__w/evmos/evmos
+        run: git config --global --add safe.directory /__w/Atoshi-chain/Atoshi-chain
       - uses: actions/checkout@v4
       - name: Get Diff
         uses: technote-space/get-diff-action@v6.1.2

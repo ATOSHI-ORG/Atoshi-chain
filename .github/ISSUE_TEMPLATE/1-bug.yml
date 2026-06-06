@@ -26,7 +26,7 @@ body:
       required: true
   - type: input
     attributes:
-      label: Evmos Version
+      label: Atoshi Version
       description: If applicable, specify which version you're using
       placeholder: 0.16.0, 0.16.1, main, etc.
     validations:

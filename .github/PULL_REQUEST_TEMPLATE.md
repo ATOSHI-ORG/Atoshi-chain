@@ -20,7 +20,7 @@ I have...
 
 - [ ] tackled an existing issue or discussed with a team member
 - [ ] left instructions on how to review the changes
-- [ ] targeted the correct branch (see [PR Targeting](https://github.com/evmos/evmos/blob/main/CONTRIBUTING.md#pr-targeting))
+- [ ] targeted the correct branch (see [PR Targeting](https://github.com/ATOSHI-ORG/Atoshi-chain/blob/main/CONTRIBUTING.md#pr-targeting))
 
 ## Reviewers Checklist
 

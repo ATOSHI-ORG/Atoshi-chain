@@ -142,6 +142,7 @@ import (
 	ethante "github.com/atoshi-chain/atoshi/v20/app/ante/evm"
 	"github.com/atoshi-chain/atoshi/v20/app/post"
 	v20 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20"
+	v20_1 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_1"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -517,6 +518,15 @@ func NewAtoshi(
 		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
 		atoshitypes.BaseDenom,
 	)
+
+	// Wire the energy snapshot updater into bank's send restriction chain.
+	// Every transfer of the base denom (MsgSend, EVM, IBC, module<->account)
+	// flows through SendCoins, which invokes this restriction, which refreshes
+	// last_balance_snapshot for both the sender and the receiver. Without this
+	// hook, snapshots only update on the explicit OnBalanceChange call sites
+	// in delegation flows, so receiving wallets accrue energy against a stale
+	// (often zero) snapshot.
+	app.BankKeeper.AppendSendRestriction(app.EnergyKeeper.SendRestriction)
 
 	// register the staking hooks
 	// NOTE: stakingKeeper above is passed by reference, so that it will contain these hooks
@@ -1261,6 +1271,16 @@ func (app *Atoshi) setupUpgradeHandlers() {
 			app.mm, app.configurator,
 			app.AccountKeeper,
 			app.EvmKeeper,
+		),
+	)
+
+	// v20.1: refresh stale energy snapshots after wiring SendRestriction
+	// into bank. See app/upgrades/v20_1/constants.go for the change set.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v20_1.UpgradeName,
+		v20_1.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.EnergyKeeper,
 		),
 	)
 
