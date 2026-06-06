@@ -65,9 +65,9 @@ func CalculateEpochMintProvision(
 		epochProvision = reducedPeriodProvision.Quo(math.LegacyNewDec(epochsPerPeriod))
 	}
 
-	// Multiply epochMintProvision with power reduction (10^18 for evmos) as the
-	// calculation is based on `evmos` and the issued tokens need to be given in
-	// `aevmos`
+	// Multiply epochMintProvision with power reduction (10^18 for atos) as the
+	// calculation is based on `atos` and the issued tokens need to be given in
+	// `aatos`
 	epochProvision = epochProvision.Mul(math.LegacyNewDecFromInt(evmostypes.PowerReduction))
 	return epochProvision
 }

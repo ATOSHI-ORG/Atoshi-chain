@@ -142,6 +142,7 @@ import (
 	ethante "github.com/atoshi-chain/atoshi/v20/app/ante/evm"
 	"github.com/atoshi-chain/atoshi/v20/app/post"
 	v20 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20"
+	v20_1 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_1"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -149,8 +150,17 @@ import (
 	"github.com/atoshi-chain/atoshi/v20/x/feemarket"
 	feemarketkeeper "github.com/atoshi-chain/atoshi/v20/x/feemarket/keeper"
 	feemarkettypes "github.com/atoshi-chain/atoshi/v20/x/feemarket/types"
+	oracle "github.com/atoshi-chain/atoshi/v20/x/oracle"
+	oraclekeeper "github.com/atoshi-chain/atoshi/v20/x/oracle/keeper"
+	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 	"github.com/atoshi-chain/atoshi/v20/x/staking"
 	stakingkeeper "github.com/atoshi-chain/atoshi/v20/x/staking/keeper"
+	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
+	tokenomicskeeper "github.com/atoshi-chain/atoshi/v20/x/tokenomics/keeper"
+	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
+	energy "github.com/atoshi-chain/atoshi/v20/x/energy"
+	energykeeper "github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
+	energytypes "github.com/atoshi-chain/atoshi/v20/x/energy/types"
 	"github.com/atoshi-chain/atoshi/v20/x/vesting"
 	vestingkeeper "github.com/atoshi-chain/atoshi/v20/x/vesting/keeper"
 	vestingtypes "github.com/atoshi-chain/atoshi/v20/x/vesting/types"
@@ -201,6 +211,14 @@ var (
 		evmtypes.ModuleName:            {authtypes.Minter, authtypes.Burner}, // used for secure addition and subtraction of balance using module account
 		inflationtypes.ModuleName:      {authtypes.Minter},
 		erc20types.ModuleName:          {authtypes.Minter, authtypes.Burner},
+		oracletypes.ModuleName:         nil,
+		tokenomicstypes.ModuleName:     {authtypes.Minter},
+		tokenomicstypes.MinerPoolName:       {authtypes.Minter},
+		tokenomicstypes.ProjectPoolName:     {authtypes.Minter},
+		tokenomicstypes.MigrationPoolName:   {authtypes.Minter},
+		tokenomicstypes.MinerLockedPoolName: {authtypes.Minter},
+		energytypes.ModuleName:              nil,
+		energytypes.LockedEnergyPoolName:    nil,
 		ratelimittypes.ModuleName:      nil,
 	}
 )
@@ -262,6 +280,9 @@ type Atoshi struct {
 	Erc20Keeper     erc20keeper.Keeper
 	EpochsKeeper    epochskeeper.Keeper
 	VestingKeeper   vestingkeeper.Keeper
+	OracleKeeper    oraclekeeper.Keeper
+	TokenomicsKeeper tokenomicskeeper.Keeper
+	EnergyKeeper    energykeeper.Keeper
 
 	// the module manager
 	mm                 *module.Manager
@@ -471,6 +492,42 @@ func NewAtoshi(
 		authtypes.FeeCollectorName,
 	)
 
+	app.OracleKeeper = oraclekeeper.NewKeeper(
+		keys[oracletypes.StoreKey],
+		appCodec,
+		authtypes.NewModuleAddress(govtypes.ModuleName),
+	)
+
+	app.TokenomicsKeeper = tokenomicskeeper.NewKeeper(
+		keys[tokenomicstypes.StoreKey],
+		appCodec,
+		authtypes.NewModuleAddress(govtypes.ModuleName),
+		authtypes.FeeCollectorName,
+		app.AccountKeeper,
+		app.BankKeeper,
+		stakingKeeper,
+		app.DistrKeeper,
+		app.OracleKeeper,
+	)
+
+	app.EnergyKeeper = energykeeper.NewKeeper(
+		appCodec,
+		keys[energytypes.StoreKey],
+		app.AccountKeeper,
+		app.BankKeeper,
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		atoshitypes.BaseDenom,
+	)
+
+	// Wire the energy snapshot updater into bank's send restriction chain.
+	// Every transfer of the base denom (MsgSend, EVM, IBC, module<->account)
+	// flows through SendCoins, which invokes this restriction, which refreshes
+	// last_balance_snapshot for both the sender and the receiver. Without this
+	// hook, snapshots only update on the explicit OnBalanceChange call sites
+	// in delegation flows, so receiving wallets accrue energy against a stale
+	// (often zero) snapshot.
+	app.BankKeeper.AppendSendRestriction(app.EnergyKeeper.SendRestriction)
+
 	// register the staking hooks
 	// NOTE: stakingKeeper above is passed by reference, so that it will contain these hooks
 	// NOTE: Distr, Slashing and Claim must be created before calling the Hooks method to avoid returning a Keeper without its table generated
@@ -647,6 +704,9 @@ func NewAtoshi(
 			app.GetSubspace(erc20types.ModuleName)),
 		epochs.NewAppModule(appCodec, app.EpochsKeeper),
 		vesting.NewAppModule(app.VestingKeeper, app.AccountKeeper, app.BankKeeper, *app.StakingKeeper.Keeper),
+		oracle.NewAppModule(app.OracleKeeper),
+		tokenomics.NewAppModule(app.TokenomicsKeeper),
+		energy.NewAppModule(app.EnergyKeeper),
 	)
 
 	// BasicModuleManager defines the module BasicManager which is in charge of setting up basic,
@@ -683,6 +743,9 @@ func NewAtoshi(
 		capabilitytypes.ModuleName,
 		// Note: epochs' begin should be "real" start of epochs, we keep epochs beginblock at the beginning
 		epochstypes.ModuleName,
+		oracletypes.ModuleName,
+		tokenomicstypes.ModuleName,
+		energytypes.ModuleName,
 		feemarkettypes.ModuleName,
 		evmtypes.ModuleName,
 		distrtypes.ModuleName,
@@ -698,6 +761,9 @@ func NewAtoshi(
 	app.mm.SetOrderEndBlockers(
 		govtypes.ModuleName,
 		stakingtypes.ModuleName,
+		oracletypes.ModuleName,
+		tokenomicstypes.ModuleName,
+		energytypes.ModuleName,
 		evmtypes.ModuleName,
 		feemarkettypes.ModuleName,
 		feegrant.ModuleName,
@@ -735,6 +801,9 @@ func NewAtoshi(
 		erc20types.ModuleName,
 		epochstypes.ModuleName,
 		ratelimittypes.ModuleName,
+		oracletypes.ModuleName,
+		tokenomicstypes.ModuleName,
+		energytypes.ModuleName,
 	)
 
 	app.configurator = module.NewConfigurator(app.appCodec, app.MsgServiceRouter(), app.GRPCQueryRouter())
@@ -869,6 +938,7 @@ func (app *Atoshi) setAnteHandler(txConfig client.TxConfig, maxGasWanted uint64)
 		SigGasConsumer:         ante.SigVerificationGasConsumer,
 		MaxTxGasWanted:         maxGasWanted,
 		TxFeeChecker:           ethante.NewDynamicFeeChecker(app.FeeMarketKeeper),
+		EnergyKeeper:           &app.EnergyKeeper,
 	}
 
 	if err := options.Validate(); err != nil {
@@ -882,6 +952,7 @@ func (app *Atoshi) setPostHandler() {
 	options := post.HandlerOptions{
 		FeeCollectorName: authtypes.FeeCollectorName,
 		BankKeeper:       app.BankKeeper,
+		EnergyKeeper:     &app.EnergyKeeper,
 	}
 
 	if err := options.Validate(); err != nil {
@@ -1200,6 +1271,16 @@ func (app *Atoshi) setupUpgradeHandlers() {
 			app.mm, app.configurator,
 			app.AccountKeeper,
 			app.EvmKeeper,
+		),
+	)
+
+	// v20.1: refresh stale energy snapshots after wiring SendRestriction
+	// into bank. See app/upgrades/v20_1/constants.go for the change set.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v20_1.UpgradeName,
+		v20_1.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.EnergyKeeper,
 		),
 	)
 

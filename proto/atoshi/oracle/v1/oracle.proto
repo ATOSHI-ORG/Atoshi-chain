@@ -1,0 +1,55 @@
+syntax = "proto3";
+package atoshi.oracle.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/oracle/types";
+
+// PriceData represents a single price report from a feeder.
+message PriceData {
+  // price is the token price in USD (scaled by 10^18)
+  string price = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // volume_24h is the 24-hour trading volume in USD (scaled by 10^18)
+  string volume_24h = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.customname) = "Volume24h",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // timestamp is the block time when the price was reported
+  int64 timestamp = 3;
+
+  // feeder is the address of the feeder that submitted this report
+  string feeder = 4;
+
+  // source identifies the data source (e.g., "uniswap_v3", "atoshi_dex")
+  string source = 5;
+}
+
+// Params defines the parameters for the oracle module.
+message Params {
+  // allowed_feeders is the list of addresses authorized to submit price reports
+  repeated string allowed_feeders = 1;
+
+  // max_price_age_seconds is the maximum age of a price report before it's considered stale
+  uint64 max_price_age_seconds = 2;
+
+  // min_valid_reports is the minimum number of valid reports needed for consensus
+  uint32 min_valid_reports = 3;
+
+  // denom is the token denom being tracked (e.g., "aatos")
+  string denom = 4;
+
+  // twap_lookback_seconds defines the lookback window for TWAP calculation
+  uint64 twap_lookback_seconds = 5 [(gogoproto.customname) = "TWAPLookbackSeconds"];
+
+  // max_price_deviation_bps is the maximum allowed deviation between reports (basis points)
+  uint32 max_price_deviation_bps = 6;
+}

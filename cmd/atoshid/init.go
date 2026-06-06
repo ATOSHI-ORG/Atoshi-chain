@@ -94,7 +94,7 @@ func InitCmd(mbm module.BasicManager, defaultNodeHome string) *cobra.Command {
 			case clientCtx.ChainID != "":
 				chainID = clientCtx.ChainID
 			default:
-				chainID = fmt.Sprintf("evmos_9000-%v", cmtrand.Str(6))
+				chainID = fmt.Sprintf("atoshi_88388-%v", cmtrand.Str(6))
 			}
 
 			// Get bip39 mnemonic

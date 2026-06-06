@@ -1,0 +1,161 @@
+syntax = "proto3";
+package atoshi.tokenomics.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types";
+
+// Params holds all governance-tunable parameters for the tokenomics module.
+message Params {
+  // miner_pool_total is the cap of the miner reward pool (10% of supply).
+  string miner_pool_total = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // project_pool_total is the cap of the project treasury pool (89% of supply).
+  string project_pool_total = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // migration_pool_total is the cap of the pre-mine migration pool (1% of supply).
+  string migration_pool_total = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // immediate_reward_bps is the share of each block reward paid out immediately
+  // through x/distribution (basis points, default 2000 = 20%).
+  uint32 immediate_reward_bps = 4;
+
+  // locked_reward_bps is the share of each block reward locked per validator
+  // (basis points, default 8000 = 80%). immediate + locked must equal 10000.
+  uint32 locked_reward_bps = 5;
+
+  // halving_interval_blocks is the number of blocks between block-reward halvings.
+  int64 halving_interval_blocks = 6;
+
+  // initial_block_reward is the per-block miner reward before any halvings.
+  string initial_block_reward = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // price_base is the T0 USD price threshold (e.g. 0.15).
+  string price_base = 8 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // volume_base is the T0 24h USD volume threshold (e.g. 150000).
+  string volume_base = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // tier_multiplier scales the price/volume threshold per tier (e.g. 1.1).
+  string tier_multiplier = 10 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // consecutive_days_required is the streak length needed to trigger a release.
+  uint32 consecutive_days_required = 11;
+
+  // release_percentage_bps is the share of circulating supply released per trigger.
+  uint32 release_percentage_bps = 12;
+
+  // miner_release_share_bps is the share of each release that comes from the miner pool.
+  uint32 miner_release_share_bps = 13;
+
+  // project_release_share_bps is the share that comes from the project pool.
+  // miner + project share must equal 10000.
+  uint32 project_release_share_bps = 14;
+
+  // project_treasury_address is the bech32 address that receives project releases.
+  // Mutable via gov MsgUpdateParams.
+  string project_treasury_address = 15;
+
+  // price_check_epoch_blocks is how often (in blocks) the EndBlocker evaluates the
+  // price/volume streak. Defaults to ~24h.
+  int64 price_check_epoch_blocks = 16;
+
+  // migration_merkle_root is the hex-encoded Merkle root of the migration airdrop.
+  string migration_merkle_root = 17;
+
+  // migration_claim_end_time_unix is the unix-time deadline after which migration
+  // claims are rejected.
+  int64 migration_claim_end_time_unix = 18;
+}
+
+// MinerLockedBalance tracks a validator's locked mining rewards.
+message MinerLockedBalance {
+  string validator_address = 1;
+  string locked_accrued = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string locked_claimable = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string locked_claimed = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string immediate_received = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// ReleaseState tracks the global price-unlock state machine.
+message ReleaseState {
+  uint32 current_tier = 1;
+  uint32 consecutive_days = 2;
+  int64 last_check_block = 3;
+  int64 last_check_time_unix = 4;
+  string total_miner_released = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string total_project_released = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string total_immediate_distributed = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string total_miner_locked = 8 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// BlockRewardState tracks how much of the miner pool has already been distributed.
+message BlockRewardState {
+  string total_distributed = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint64 current_period = 2;
+}

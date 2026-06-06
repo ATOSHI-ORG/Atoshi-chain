@@ -16,6 +16,7 @@ import (
 
 	evmante "github.com/atoshi-chain/atoshi/v20/app/ante/evm"
 	anteutils "github.com/atoshi-chain/atoshi/v20/app/ante/utils"
+	energykeeper "github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 )
 
@@ -36,6 +37,7 @@ type HandlerOptions struct {
 	SigGasConsumer         func(meter storetypes.GasMeter, sig signing.SignatureV2, params authtypes.Params) error
 	MaxTxGasWanted         uint64
 	TxFeeChecker           ante.TxFeeChecker
+	EnergyKeeper           *energykeeper.Keeper
 }
 
 // Validate checks if the keepers are defined

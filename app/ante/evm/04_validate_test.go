@@ -264,7 +264,7 @@ func (suite *EvmAnteTestSuite) TestCheckTxFee() {
 				evmCoinDecimal := evmtypes.GetEVMCoinDecimals()
 				originalAmount = originalAmount.Quo(evmCoinDecimal.ConversionFactor())
 
-				coins := sdktypes.Coins{sdktypes.Coin{Denom: "aevmos", Amount: originalAmount}}
+				coins := sdktypes.Coins{sdktypes.Coin{Denom: "aatos", Amount: originalAmount}}
 
 				// This struct should hold values in the original representation
 				txFeeInfo := &tx.Fee{

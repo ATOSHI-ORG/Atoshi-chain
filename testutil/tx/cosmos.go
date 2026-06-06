@@ -21,7 +21,7 @@ import (
 
 var (
 	feeAmt     = math.Pow10(16)
-	DefaultFee = sdk.NewCoin(evmostypes.BaseDenom, sdkmath.NewIntFromUint64(uint64(feeAmt))) // 0.01 EVMOS
+	DefaultFee = sdk.NewCoin(evmostypes.BaseDenom, sdkmath.NewIntFromUint64(uint64(feeAmt))) // 0.01 ATOS
 )
 
 // CosmosTxArgs contains the params to create a cosmos tx
@@ -30,7 +30,7 @@ type CosmosTxArgs struct {
 	TxCfg client.TxConfig
 	// Priv is the private key that will be used to sign the tx
 	Priv cryptotypes.PrivKey
-	// ChainID is the chain's id on cosmos format, e.g. 'evmos_9000-1'
+	// ChainID is the chain's id on cosmos format, e.g. 'atoshi_88388-1'
 	ChainID string
 	// Gas to be used on the tx
 	Gas uint64

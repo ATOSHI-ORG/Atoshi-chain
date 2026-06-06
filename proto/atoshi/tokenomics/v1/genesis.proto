@@ -1,0 +1,22 @@
+syntax = "proto3";
+package atoshi.tokenomics.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "atoshi/tokenomics/v1/tokenomics.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types";
+
+// GenesisState defines the tokenomics module's genesis state.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+  ReleaseState release_state = 2 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+  BlockRewardState block_reward_state = 3 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+  repeated MinerLockedBalance miner_locked_balances = 4 [(gogoproto.nullable) = false];
+  // project_claimable is the math.Int amount of project pool currently claimable.
+  string project_claimable = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

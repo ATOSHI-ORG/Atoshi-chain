@@ -31,7 +31,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: docker.io
-          username: tharsishq
+          username: atoshiadmin
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push goleveldb image
@@ -41,7 +41,7 @@ jobs:
           push: true
           platforms: linux/amd64, linux/arm64
           build-args: DB_BACKEND=goleveldb
-          tags: tharsishq/evmos:latest, tharsishq/evmos:${{ steps.meta.outputs.tag }}
+          tags: atoshiadmin/atoshi:latest, atoshiadmin/atoshi:${{ steps.meta.outputs.tag }}
 
       - name: Build and push pebbledb image
         uses: docker/build-push-action@v6
@@ -50,4 +50,4 @@ jobs:
           push: true
           platforms: linux/amd64, linux/arm64
           build-args: DB_BACKEND=pebbledb
-          tags: tharsishq/evmos:latest-pebble, tharsishq/evmos:${{ steps.meta.outputs.tag }}-pebble
+          tags: atoshiadmin/atoshi:latest-pebble, atoshiadmin/atoshi:${{ steps.meta.outputs.tag }}-pebble

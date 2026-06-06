@@ -11,15 +11,16 @@ proto_dirs=$(find ./proto -path -prune -o -name '*.proto' -print0 | xargs -0 -n1
 for dir in $proto_dirs; do
 	proto_files=$(find "${dir}" -maxdepth 1 -name '*.proto')
 	for file in $proto_files; do
-		# Check if the go_package in the file is pointing to evmos
-		if grep -q "option go_package.*evmos" "$file"; then
+		# Check if the go_package in the file is pointing to evmos or atoshi-chain
+		if grep -qE "option go_package.*(evmos|atoshi-chain)" "$file"; then
 			buf generate --template proto/buf.gen.gogo.yaml "$file"
 		fi
 	done
 done
 
 # move proto files to the right places
-cp -r github.com/evmos/evmos/v*/* ./
+cp -r github.com/evmos/evmos/v*/* ./ 2>/dev/null || true
+cp -r github.com/atoshi-chain/atoshi/v*/* ./ 2>/dev/null || true
 rm -rf github.com
 
 sh ./scripts/protocgen-pulsar.sh

@@ -7,14 +7,23 @@
 <h3 align="center">Privacy-Preserving EVM Blockchain</h3>
 
 <p align="center">
-  <a href="https://github.com/atoshi-chain/atoshi/releases">
-    <img src="https://img.shields.io/github/v/release/atoshi-chain/atoshi?style=flat-square" alt="Release">
+  <a href="https://github.com/ATOSHI-ORG/Atoshi-chain/releases">
+    <img src="https://img.shields.io/github/v/release/ATOSHI-ORG/Atoshi-chain?style=flat-square" alt="Release">
   </a>
-  <a href="https://github.com/atoshi-chain/atoshi/blob/main/LICENSE">
+  <a href="https://github.com/ATOSHI-ORG/Atoshi-chain/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/license-ENCL--1.0-blue?style=flat-square" alt="License">
   </a>
-  <a href="https://goreportcard.com/report/github.com/atoshi-chain/atoshi">
-    <img src="https://goreportcard.com/badge/github.com/atoshi-chain/atoshi?style=flat-square" alt="Go Report Card">
+</p>
+
+<p align="center">
+  <a href="https://www.atoshi.org">
+    <img src="https://img.shields.io/badge/Website-atoshi.org-2962FF?style=flat-square&logo=google-chrome&logoColor=white" alt="Website">
+  </a>
+  <a href="https://x.com/atoshiofficial">
+    <img src="https://img.shields.io/badge/Follow-@atoshiofficial-000000?style=flat-square&logo=x&logoColor=white" alt="X (Twitter)">
+  </a>
+  <a href="https://t.me/atoshiofficial">
+    <img src="https://img.shields.io/badge/Telegram-@atoshiofficial-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram">
   </a>
 </p>
 
@@ -164,7 +173,7 @@ Atoshi implements a comprehensive privacy layer using Zero-Knowledge Proofs (ZK-
 
 ```bash
 # Clone the repository
-git clone https://github.com/atoshi-chain/atoshi.git
+git clone https://github.com/ATOSHI-ORG/Atoshi-chain.git
 cd atoshi
 
 # Build and install

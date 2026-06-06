@@ -15,7 +15,7 @@ import (
 	versiondbclient "github.com/crypto-org-chain/cronos/versiondb/client"
 
 	"github.com/atoshi-chain/atoshi/v20/app"
-	"github.com/atoshi-chain/atoshi/v20/cmd/evmosd/opendb"
+	"github.com/atoshi-chain/atoshi/v20/cmd/atoshid/opendb"
 )
 
 // ChangeSetCmd returns a Cobra command for interacting with change sets.

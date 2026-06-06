@@ -1,0 +1,76 @@
+syntax = "proto3";
+package atoshi.tokenomics.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "atoshi/tokenomics/v1/tokenomics.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types";
+
+// Query defines the tokenomics module Query service.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/atoshi/tokenomics/v1/params";
+  }
+  rpc MinerLockedBalance(QueryMinerLockedBalanceRequest) returns (QueryMinerLockedBalanceResponse) {
+    option (google.api.http).get = "/atoshi/tokenomics/v1/miner_locked_balance/{validator_address}";
+  }
+  rpc ReleaseStatus(QueryReleaseStatusRequest) returns (QueryReleaseStatusResponse) {
+    option (google.api.http).get = "/atoshi/tokenomics/v1/release_status";
+  }
+  rpc CirculatingSupply(QueryCirculatingSupplyRequest) returns (QueryCirculatingSupplyResponse) {
+    option (google.api.http).get = "/atoshi/tokenomics/v1/circulating_supply";
+  }
+  rpc BlockReward(QueryBlockRewardRequest) returns (QueryBlockRewardResponse) {
+    option (google.api.http).get = "/atoshi/tokenomics/v1/block_reward";
+  }
+  rpc ProjectClaimable(QueryProjectClaimableRequest) returns (QueryProjectClaimableResponse) {
+    option (google.api.http).get = "/atoshi/tokenomics/v1/project_claimable";
+  }
+}
+
+message QueryParamsRequest {}
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryMinerLockedBalanceRequest {
+  string validator_address = 1;
+}
+message QueryMinerLockedBalanceResponse {
+  MinerLockedBalance balance = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryReleaseStatusRequest {}
+message QueryReleaseStatusResponse {
+  ReleaseState state = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+}
+
+message QueryCirculatingSupplyRequest {}
+message QueryCirculatingSupplyResponse {
+  string circulating_supply = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryBlockRewardRequest {}
+message QueryBlockRewardResponse {
+  string current_reward = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint64 period = 2;
+}
+
+message QueryProjectClaimableRequest {}
+message QueryProjectClaimableResponse {
+  string claimable = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

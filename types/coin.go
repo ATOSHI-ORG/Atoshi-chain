@@ -17,7 +17,7 @@ const (
 	// - Crisis parameters: constant fee denomination used for spam prevention to check broken invariant
 	// - EVM parameters: denomination used for running EVM state transitions in Atoshi.
 	BaseDenom        string = "aatos"
-	BaseDenomTestnet string = "ataatos"
+	BaseDenomTestnet string = "aatos"
 
 	// BaseDenomUnit defines the base denomination unit for Atoshi.
 	// 1 atos = 1x10^{BaseDenomUnit} aatos
@@ -25,7 +25,7 @@ const (
 
 	// DisplayDenom defines the denomination displayed to users in client applications.
 	DisplayDenom        string = "atos"
-	DisplayDenomTestnet string = "tatos"
+	DisplayDenomTestnet string = "atos"
 
 	// DefaultGasPrice is default gas price for evm transactions
 	DefaultGasPrice = 20
