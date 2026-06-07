@@ -977,6 +977,12 @@ func (app *Atoshi) EndBlocker(ctx sdk.Context) (sdk.EndBlock, error) {
 // The DeliverTx method is intentionally decomposed to calculate the transactions per second.
 func (app *Atoshi) FinalizeBlock(req *abci.RequestFinalizeBlock) (res *abci.ResponseFinalizeBlock, err error) {
 	defer func() {
+		// res can be nil if BaseApp.FinalizeBlock panicked — guard against the
+		// nil deref so the original panic stack isn't masked by a secondary
+		// "invalid memory address" panic when we iterate TxResults.
+		if res == nil {
+			return
+		}
 		// TODO: Record the count along with the code and or reason so as to display
 		// in the transactions per second live dashboards.
 		for _, txRes := range res.TxResults {
