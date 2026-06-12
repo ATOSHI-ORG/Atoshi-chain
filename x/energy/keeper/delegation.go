@@ -62,13 +62,23 @@ func (k Keeper) Delegate(
 	}
 
 	// Verify free bank balance covers the lock.
-	bal := k.bankKeeper.GetBalance(ctx, delegator, k.baseDenom).Amount
+	//
+	// Audit Issue 5: prior code computed freeBalance = bal - currentLocked
+	// for the balance check. That double-counts the existing lock: when
+	// a previous Delegate ran, lockedATOS was moved to the locked module
+	// account via SendCoinsFromAccountToModule, so the live
+	// bank.GetBalance already excludes it. Subtracting LockedAtos again
+	// rejected legitimate follow-up delegations with ErrInsufficientBalance
+	// even when the delegator had the funds on hand. The cumulative
+	// LockedAtos tracking on the account is still needed for the per-
+	// account total (used by EligibleBalance/SetEnergyAccount below) —
+	// just not for the bank balance check.
 	currentLocked := delAcct.LockedAtos
 	if currentLocked.IsNil() {
 		currentLocked = math.ZeroInt()
 	}
-	freeBalance := bal.Sub(currentLocked)
-	if freeBalance.LT(lockedATOS) {
+	bal := k.bankKeeper.GetBalance(ctx, delegator, k.baseDenom).Amount
+	if bal.LT(lockedATOS) {
 		return 0, math.ZeroInt(), types.ErrInsufficientBalance
 	}
 
