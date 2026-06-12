@@ -122,6 +122,30 @@ func (k Keeper) EndBlocker(ctx sdk.Context) error {
 		return k.SetReleaseState(ctx, state)
 	}
 
+	// Audit Issue 3: reject stale oracle data. Previously the tier
+	// engine consumed whatever GetCurrentPrice returned, even if no
+	// feeder had reported in days. A malicious or absent feeder could
+	// have left a high-tier price persistently in the store, causing
+	// ConsecutiveDays to keep climbing and eventually trigger an
+	// undeserved miner/project release. Cross-check the price age
+	// against oracle.params.MaxPriceAgeSeconds; if stale, pause the
+	// streak (do NOT increment, do NOT reset — we treat staleness as
+	// "no signal" rather than "negative signal", so a brief feeder
+	// outage doesn't kill a legitimate ongoing streak).
+	oracleParams := k.oracleKeeper.GetParams(ctx)
+	now := ctx.BlockTime().Unix()
+	if priceData.Timestamp == 0 ||
+		(oracleParams.MaxPriceAgeSeconds > 0 &&
+			uint64(now-priceData.Timestamp) > oracleParams.MaxPriceAgeSeconds) {
+		k.Logger(ctx).Info("oracle price stale; skipping tier check",
+			"price_timestamp", priceData.Timestamp,
+			"now", now,
+			"max_age", oracleParams.MaxPriceAgeSeconds)
+		state.LastCheckBlock = ctx.BlockHeight()
+		state.LastCheckTimeUnix = now
+		return k.SetReleaseState(ctx, state)
+	}
+
 	requiredPrice := params.PriceBase.Mul(params.TierMultiplier.Power(uint64(state.CurrentTier)))
 	requiredVolume := params.VolumeBase.Mul(params.TierMultiplier.Power(uint64(state.CurrentTier)))
 

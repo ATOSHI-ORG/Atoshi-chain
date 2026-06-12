@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"cosmossdk.io/log"
 	"cosmossdk.io/math"
@@ -119,12 +120,20 @@ func (testDistrKeeper) FundCommunityPool(ctx context.Context, amount sdk.Coins, 
 }
 
 type testOracleKeeper struct {
-	price oracletypes.PriceData
-	err   error
+	price  oracletypes.PriceData
+	err    error
+	params *oracletypes.Params // optional override; nil → DefaultParams
 }
 
 func (ok testOracleKeeper) GetCurrentPrice(ctx sdk.Context) (oracletypes.PriceData, error) {
 	return ok.price, ok.err
+}
+
+func (ok testOracleKeeper) GetParams(ctx sdk.Context) oracletypes.Params {
+	if ok.params != nil {
+		return *ok.params
+	}
+	return oracletypes.DefaultParams()
 }
 
 func newKeeperForTest(t *testing.T, bk *testBankKeeper, sk testStakingKeeper, ok testOracleKeeper) (Keeper, sdk.Context) {
@@ -258,4 +267,115 @@ func TestClaimMigrationTokensWithValidMerkleProof(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, k.HasMigrationClaimed(ctx, claimer))
+}
+
+// Audit Issue 3 regression: EndBlocker's tier check previously consumed
+// whatever GetCurrentPrice returned without checking the price's
+// freshness. A stale high-tier price could persistently drive the
+// ConsecutiveDays counter upward and eventually trigger an undeserved
+// miner/project release. The fixed code rejects price data older than
+// oracle.params.MaxPriceAgeSeconds and treats staleness as "no signal"
+// (pauses the streak; does not reset it).
+
+// helper to make a fresh keeper with a controllable oracle.
+func newKeeperWithOracle(t *testing.T, ok testOracleKeeper) (Keeper, sdk.Context) {
+	bk := newTestBankKeeper()
+	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] =
+		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(1, 24)))
+	bk.balances[authtypes.NewModuleAddress("tokenomics_project_pool").String()] =
+		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(1, 24)))
+	sk := testStakingKeeper{totalBonded: math.NewInt(100)}
+	return newKeeperForTest(t, bk, sk, ok)
+}
+
+// Set release state so the next EndBlocker tick is forced to evaluate.
+func forceTierEvaluation(t *testing.T, k Keeper, ctx sdk.Context) {
+	st := k.GetReleaseState(ctx)
+	st.LastCheckBlock = 0 // force evaluation regardless of epoch
+	require.NoError(t, k.SetReleaseState(ctx, st))
+}
+
+func TestEndBlocker_RejectsStaleOraclePrice(t *testing.T) {
+	// Price timestamp is older than MaxPriceAgeSeconds (default 3600).
+	now := int64(1_700_000_000)
+	stalePrice := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"), // way above any tier
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 7200, // 2 hours stale
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: stalePrice})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, ctx)
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	// ConsecutiveDays must NOT have been incremented despite the
+	// high-tier price, because the price is stale.
+	got := k.GetReleaseState(ctx)
+	require.EqualValues(t, 0, got.ConsecutiveDays,
+		"stale oracle data must not advance the tier streak; got %d", got.ConsecutiveDays)
+}
+
+func TestEndBlocker_FreshPriceAdvancesStreak(t *testing.T) {
+	// Price timestamp is fresh (within MaxPriceAgeSeconds), price+volume
+	// above tier 0 thresholds → ConsecutiveDays should increment.
+	now := int64(1_700_000_000)
+	freshPrice := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 60, // 1 minute old
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: freshPrice})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, ctx)
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got := k.GetReleaseState(ctx)
+	require.EqualValues(t, 1, got.ConsecutiveDays,
+		"fresh high-tier price should advance the streak; got %d", got.ConsecutiveDays)
+}
+
+func TestEndBlocker_StalenessPausesNotResetsStreak(t *testing.T) {
+	// Build state with an existing streak; then go stale. Expectation:
+	// streak holds (doesn't reset to 0), but doesn't grow either.
+	now := int64(1_700_000_000)
+	stalePrice := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 7200, // stale
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: stalePrice})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+
+	// Pre-load a 5-day streak.
+	st := k.GetReleaseState(ctx)
+	st.ConsecutiveDays = 5
+	st.LastCheckBlock = 0
+	require.NoError(t, k.SetReleaseState(ctx, st))
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got := k.GetReleaseState(ctx)
+	require.EqualValues(t, 5, got.ConsecutiveDays,
+		"staleness must pause (not reset) an existing streak; got %d", got.ConsecutiveDays)
+}
+
+func TestEndBlocker_ZeroTimestampIsTreatedAsStale(t *testing.T) {
+	// Timestamp=0 is the zero-value default for an unset oracle entry.
+	// Should be treated as stale, not as "1970-01-01 timestamp".
+	now := int64(1_700_000_000)
+	zeroTs := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: 0,
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: zeroTs})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, ctx)
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got := k.GetReleaseState(ctx)
+	require.EqualValues(t, 0, got.ConsecutiveDays)
 }
