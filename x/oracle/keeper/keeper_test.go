@@ -96,3 +96,57 @@ func TestGetPriceHistory_EmptyStore(t *testing.T) {
 	got := k.GetPriceHistory(ctx, 10)
 	require.Empty(t, got)
 }
+
+// Audit Issue 10 regression: ExportGenesis → InitGenesis round-trip
+// must preserve the newest price as current. Previously InitGenesis
+// took PriceHistory[len-1], which after ExportGenesis is the OLDEST
+// entry; restarting from a snapshot would publish a stale price.
+func TestInitGenesis_PicksNewestPrice(t *testing.T) {
+	// Step 1: populate a source keeper with 3 history entries + a current.
+	src, srcCtx := newOracleKeeperForTest(t)
+
+	entries := []types.PriceData{
+		{Price: math.LegacyMustNewDecFromStr("0.10"), Volume24h: math.LegacyMustNewDecFromStr("1"), Timestamp: 1_700_000_100, Feeder: "oldest"},
+		{Price: math.LegacyMustNewDecFromStr("0.15"), Volume24h: math.LegacyMustNewDecFromStr("1"), Timestamp: 1_700_000_200, Feeder: "middle"},
+		{Price: math.LegacyMustNewDecFromStr("0.20"), Volume24h: math.LegacyMustNewDecFromStr("1"), Timestamp: 1_700_000_300, Feeder: "newest"},
+	}
+	for _, pd := range entries {
+		require.NoError(t, src.AppendPriceHistory(srcCtx, pd))
+	}
+	require.NoError(t, src.SetCurrentPrice(srcCtx, entries[2])) // newest
+
+	// Step 2: export from source.
+	gs := src.ExportGenesis(srcCtx)
+	require.Len(t, gs.PriceHistory, 3)
+	require.Equal(t, "newest", gs.PriceHistory[0].Feeder,
+		"ExportGenesis returns newest first")
+
+	// Step 3: init a fresh keeper from the exported state.
+	dst, dstCtx := newOracleKeeperForTest(t)
+	dst.InitGenesis(dstCtx, *gs)
+
+	current, err := dst.GetCurrentPrice(dstCtx)
+	require.NoError(t, err)
+	require.Equal(t, "newest", current.Feeder,
+		"InitGenesis must set the newest entry as current price, not the oldest")
+	require.Equal(t, int64(1_700_000_300), current.Timestamp)
+}
+
+// Even if a genesis file is hand-edited with entries in arbitrary
+// order, findLatestPrice picks by max timestamp.
+func TestInitGenesis_RobustToReorderedInput(t *testing.T) {
+	k, ctx := newOracleKeeperForTest(t)
+	// Deliberately scrambled: middle, newest, oldest.
+	gs := types.GenesisState{
+		Params: types.DefaultParams(),
+		PriceHistory: []types.PriceData{
+			{Price: math.LegacyMustNewDecFromStr("0.15"), Volume24h: math.LegacyMustNewDecFromStr("1"), Timestamp: 1_700_000_200, Feeder: "middle"},
+			{Price: math.LegacyMustNewDecFromStr("0.20"), Volume24h: math.LegacyMustNewDecFromStr("1"), Timestamp: 1_700_000_300, Feeder: "newest"},
+			{Price: math.LegacyMustNewDecFromStr("0.10"), Volume24h: math.LegacyMustNewDecFromStr("1"), Timestamp: 1_700_000_100, Feeder: "oldest"},
+		},
+	}
+	k.InitGenesis(ctx, gs)
+	current, err := k.GetCurrentPrice(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "newest", current.Feeder)
+}
