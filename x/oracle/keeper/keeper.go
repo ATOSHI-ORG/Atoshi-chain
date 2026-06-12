@@ -107,7 +107,11 @@ func (k Keeper) AppendPriceHistory(ctx sdk.Context, price types.PriceData) error
 // GetPriceHistory returns price data entries within a time range, newest first.
 func (k Keeper) GetPriceHistory(ctx sdk.Context, limit uint32) []types.PriceData {
 	store := ctx.KVStore(k.storeKey)
-	iter := storetypes.KVStoreReversePrefixIterator(store, []byte{byte(2)}) // prefixPriceHistory = 2
+	// Use the typed constant so the prefix stays in sync with keys.go.
+	// Audit Issue 9: hardcoded byte(2) pointed at prefixCurrentPrice, not
+	// prefixPriceHistory (= 3), causing history queries to return the
+	// single current-price entry instead of the actual history slice.
+	iter := storetypes.KVStoreReversePrefixIterator(store, types.KeyPrefixPriceHistory)
 	defer iter.Close()
 
 	var result []types.PriceData
