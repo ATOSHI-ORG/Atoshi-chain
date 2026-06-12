@@ -118,8 +118,30 @@ func TxEnergyCapacity(eligibleBalance math.Int, p Params) uint64 {
 		// guard against absurd holdings overflowing uint64; clamp to max
 		return ^uint64(0)
 	}
-	cap := units.Uint64() * p.TxEnergyPerThreshold
-	return cap
+	// Audit Issue 11: the prior `units.Uint64() * p.TxEnergyPerThreshold`
+	// only protected against `units` exceeding uint64. The multiplication
+	// itself could still wrap around if units × TxEnergyPerThreshold
+	// crossed 2^64. After the wrap, capacity collapses to a small number
+	// (or even 0), silently destroying the user's accrual ceiling.
+	// Saturate instead so the cap is clamped at MaxUint64 in the
+	// pathological case (which has no realistic legitimate trigger
+	// under default params but becomes reachable if governance retunes
+	// either parameter).
+	return saturatingMulU64(units.Uint64(), p.TxEnergyPerThreshold)
+}
+
+// saturatingMulU64 returns a*b clamped to ^uint64(0) on overflow.
+// Local copy intentional: types package cannot import the keeper
+// package, and the helper is identical in behavior to the keeper-side
+// saturatingMul used elsewhere in this module.
+func saturatingMulU64(a, b uint64) uint64 {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	if a > ^uint64(0)/b {
+		return ^uint64(0)
+	}
+	return a * b
 }
 
 // DeployRecoverPerSecond returns how many DeployEnergy units a holder
