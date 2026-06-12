@@ -229,10 +229,28 @@ func computeShortfallFee(
 // getTxPriority returns the SDK priority for a tx fee. Mirrors the
 // standard auth/ante implementation so behavior is unchanged when
 // energy is disabled.
+//
+// Audit Issue 12: the prior version initialized `p := int64(0)` before
+// the IsInt64 check. When a per-denom gasPrice overflowed int64 the
+// fallback was 0 — exactly opposite of the upstream Evmos SDK behavior,
+// which defaults to math.MaxInt64 in that case. The discrepancy meant
+// txs offering an extremely high fee got demoted to the back of the
+// mempool by this decorator, but would have been promoted to the front
+// by the standard SDK path. Mainnet operators relying on uniform
+// mempool ordering would observe inconsistent prioritization.
+//
+// Default to MaxInt64 on overflow to match SDK upstream:
+// https://github.com/evmos/cosmos-sdk/blob/v0.50.9-evmos/x/auth/ante/validator_tx_fee.go#L54-L68
+//
+// The literal here is math.MaxInt64 from the stdlib; we use the
+// constant directly because the file's `math` import is
+// cosmossdk.io/math, not the stdlib package.
+const maxInt64Priority = int64(^uint64(0) >> 1)
+
 func getTxPriority(fee sdk.Coins, gas int64) int64 {
 	var priority int64
 	for _, c := range fee {
-		p := int64(0)
+		p := maxInt64Priority
 		gasPrice := c.Amount.QuoRaw(gas)
 		if gasPrice.IsInt64() {
 			p = gasPrice.Int64()
