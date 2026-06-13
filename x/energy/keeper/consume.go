@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"fmt"
+	"sort"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -172,30 +173,62 @@ func (k Keeper) EstimateConsume(
 	return res
 }
 
-// attributeDelegatedConsumption walks the delegatee's inbound delegations
-// in id order and bumps their `Used` counter until `amount` is fully
-// attributed. If a delegation is fully used up, its index entries stay
-// in place — the EndBlocker / Undelegate cleanup will remove them.
+// attributeDelegatedConsumption attributes `amount` units of consumed
+// energy to the delegatee's inbound delegations.
+//
+// Audit Issue 7: the prior version iterated delegations in id order
+// (the natural order of the by-delegatee secondary index). Result:
+// a delegation with id=5 that expires in 1 day could be consumed
+// before a delegation with id=3 that expires in 30 minutes. The
+// shorter-tenor delegated energy then expires unused while the
+// longer-tenor one is consumed early — bad UX for both the delegator
+// (their longer commitment is wasted first) and the delegatee (they
+// don't extract maximum value from their soonest-expiring grants).
+//
+// The fix collects all inbound delegations, sorts by expires_at
+// ascending, and consumes oldest-deadline-first. Tie-break on id to
+// keep the order deterministic across nodes.
+//
+// If a delegation is fully used up, its index entries stay in place —
+// the EndBlocker / Undelegate cleanup will remove them.
 func (k Keeper) attributeDelegatedConsumption(ctx sdk.Context, delegatee sdk.AccAddress, amount uint64) error {
 	if amount == 0 {
 		return nil
 	}
+
+	// Phase 1: snapshot every inbound delegation with remaining capacity.
+	var candidates []types.EnergyDelegation
+	k.IterateDelegationsByDelegatee(ctx, delegatee.String(), func(d types.EnergyDelegation) bool {
+		if d.Amount > d.Used {
+			candidates = append(candidates, d)
+		}
+		return false
+	})
+
+	// Phase 2: sort by expires_at ascending (soonest first); tie-break
+	// on id for determinism. sort.Slice is stable enough here because
+	// id is unique per delegation.
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].ExpiresAt != candidates[j].ExpiresAt {
+			return candidates[i].ExpiresAt < candidates[j].ExpiresAt
+		}
+		return candidates[i].Id < candidates[j].Id
+	})
+
+	// Phase 3: consume in priority order.
 	remaining := amount
 	var toUpdate []types.EnergyDelegation
-	k.IterateDelegationsByDelegatee(ctx, delegatee.String(), func(d types.EnergyDelegation) bool {
+	for _, d := range candidates {
 		if remaining == 0 {
-			return true
-		}
-		if d.Amount <= d.Used {
-			return false
+			break
 		}
 		avail := d.Amount - d.Used
 		take := minU64(remaining, avail)
 		d.Used += take
 		remaining -= take
 		toUpdate = append(toUpdate, d)
-		return remaining == 0
-	})
+	}
+
 	for _, d := range toUpdate {
 		k.setDelegation(ctx, d)
 	}

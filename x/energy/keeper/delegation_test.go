@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"cosmossdk.io/math"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,4 +102,106 @@ func TestDelegate_TightBalanceCheck(t *testing.T) {
 
 	// Bank balance should now be exactly 0.
 	require.True(t, bank.balances[delegator.String()].IsZero())
+}
+
+// Audit Issue 7 regression: when a delegatee consumes energy across
+// multiple inbound delegations, the soonest-expiring delegation must
+// be consumed first. Prior code iterated by id order, so a longer-
+// tenor delegation with a small id could be consumed before a
+// shorter-tenor delegation with a larger id — wasting the
+// shorter-tenor energy that was about to expire anyway.
+func TestAttributeDelegatedConsumption_ConsumesSoonestExpiringFirst(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegatee := addr("delegatee_______________")
+
+	// Create 3 distinct delegators so we can place 3 delegations with
+	// different expires_at values and observe consumption order.
+	delegators := []sdk.AccAddress{
+		addr("delegator1______________"),
+		addr("delegator2______________"),
+		addr("delegator3______________"),
+	}
+	for _, d := range delegators {
+		bank.balances[d.String()] = math.NewIntWithDecimal(30_000, 18)
+		acct := k.Settle(ctx, d)
+		acct.TxEnergyAccrued = 50_000
+		k.SetEnergyAccount(ctx, acct)
+	}
+
+	// Set block time so we can reason about expires_at deterministically.
+	now := ctx.BlockTime().Unix()
+
+	// Three delegations with INVERTED id/expiry relationship:
+	//   delegator1 → id=1, duration=72h (expires latest)
+	//   delegator2 → id=2, duration=1h  (expires SOONEST)
+	//   delegator3 → id=3, duration=24h (expires middle)
+	//
+	// Old (buggy) code would consume in id order 1,2,3.
+	// New code should consume in expiry order 2,3,1.
+
+	id1, _, err := k.Delegate(ctx, delegators[0], delegatee, 10_000, 72*3600)
+	require.NoError(t, err)
+	id2, _, err := k.Delegate(ctx, delegators[1], delegatee, 10_000, 3600)
+	require.NoError(t, err)
+	id3, _, err := k.Delegate(ctx, delegators[2], delegatee, 10_000, 24*3600)
+	require.NoError(t, err)
+
+	// Verify the expires_at ordering matches our intent.
+	d1, ok := k.GetDelegation(ctx, id1)
+	require.True(t, ok)
+	d2, ok := k.GetDelegation(ctx, id2)
+	require.True(t, ok)
+	d3, ok := k.GetDelegation(ctx, id3)
+	require.True(t, ok)
+	require.Equal(t, now+72*3600, d1.ExpiresAt)
+	require.Equal(t, now+3600, d2.ExpiresAt)
+	require.Equal(t, now+24*3600, d3.ExpiresAt)
+
+	// Consume 12,000 energy. This fully drains d2 (10k expiring soonest)
+	// and partially drains d3 (the next-soonest); d1 should still be
+	// untouched after the call.
+	require.NoError(t, k.attributeDelegatedConsumption(ctx, delegatee, 12_000))
+
+	d1, _ = k.GetDelegation(ctx, id1)
+	d2, _ = k.GetDelegation(ctx, id2)
+	d3, _ = k.GetDelegation(ctx, id3)
+	require.EqualValues(t, 10_000, d2.Used,
+		"soonest-expiring delegation (id=2, 1h) must be drained first")
+	require.EqualValues(t, 2_000, d3.Used,
+		"middle-expiry delegation (id=3, 24h) takes the remainder")
+	require.EqualValues(t, 0, d1.Used,
+		"longest-tenor delegation (id=1, 72h) must NOT be touched")
+}
+
+// Tie-break: when two delegations share the same expires_at, the
+// lower-id one is consumed first. Keeps consumption deterministic
+// across nodes.
+func TestAttributeDelegatedConsumption_TieBreaksOnId(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegatee := addr("delegatee_______________")
+	delegators := []sdk.AccAddress{
+		addr("delegatorA______________"),
+		addr("delegatorB______________"),
+	}
+	for _, d := range delegators {
+		bank.balances[d.String()] = math.NewIntWithDecimal(30_000, 18)
+		acct := k.Settle(ctx, d)
+		acct.TxEnergyAccrued = 50_000
+		k.SetEnergyAccount(ctx, acct)
+	}
+
+	// Same duration → same expires_at (block time is constant in this ctx).
+	idA, _, err := k.Delegate(ctx, delegators[0], delegatee, 5_000, 3600)
+	require.NoError(t, err)
+	idB, _, err := k.Delegate(ctx, delegators[1], delegatee, 5_000, 3600)
+	require.NoError(t, err)
+
+	// Consume 4,000; should fully come out of the lower-id delegation.
+	require.NoError(t, k.attributeDelegatedConsumption(ctx, delegatee, 4_000))
+
+	dA, _ := k.GetDelegation(ctx, idA)
+	dB, _ := k.GetDelegation(ctx, idB)
+	require.EqualValues(t, 4_000, dA.Used,
+		"lower id should be consumed first when expires_at ties")
+	require.EqualValues(t, 0, dB.Used)
 }
