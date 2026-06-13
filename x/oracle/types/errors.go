@@ -9,4 +9,7 @@ var (
 	ErrInvalidSource      = errorsmod.Register(ModuleName, 5, "invalid source")
 	ErrPriceNotFound      = errorsmod.Register(ModuleName, 6, "price not found")
 	ErrStalePrice         = errorsmod.Register(ModuleName, 7, "stale price data")
+	// Audit Issue 4: reject reports whose price deviates from the
+	// current on-chain price by more than params.MaxPriceDeviationBps.
+	ErrPriceDeviationTooHigh = errorsmod.Register(ModuleName, 8, "price deviation exceeds MaxPriceDeviationBps")
 )

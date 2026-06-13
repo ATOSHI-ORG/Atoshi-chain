@@ -132,6 +132,171 @@ func TestInitGenesis_PicksNewestPrice(t *testing.T) {
 	require.Equal(t, int64(1_700_000_300), current.Timestamp)
 }
 
+// End-to-end ReportPrice test driving the msg server. First report
+// always accepted (no baseline). Second report within deviation is
+// accepted. Third report exceeding deviation is rejected and current
+// price stays at the second report.
+func TestReportPrice_EnforcesDeviationBps(t *testing.T) {
+	k, ctx := newOracleKeeperForTest(t)
+
+	// Allow-list one feeder and tighten params to 10% deviation.
+	params := types.DefaultParams()
+	params.AllowedFeeders = []string{sdk.AccAddress([]byte("feeder-0-test-account")).String()}
+	params.MaxPriceDeviationBps = 1000 // 10%
+	params.MinValidReports = 1          // disable multi-feeder gate for this test
+	require.NoError(t, k.SetParams(ctx, params))
+
+	srv := NewMsgServerImpl(k)
+
+	// Report 1: first observation, no baseline → accepted at 1.00.
+	_, err := srv.ReportPrice(ctx, &types.MsgReportPrice{
+		Feeder:    params.AllowedFeeders[0],
+		Price:     math.LegacyMustNewDecFromStr("1.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000"),
+		Source:    "test",
+	})
+	require.NoError(t, err)
+	cur, err := k.GetCurrentPrice(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "1.000000000000000000", cur.Price.String())
+
+	// Report 2: 5% up → accepted (within 10% cap).
+	_, err = srv.ReportPrice(ctx, &types.MsgReportPrice{
+		Feeder:    params.AllowedFeeders[0],
+		Price:     math.LegacyMustNewDecFromStr("1.05"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000"),
+		Source:    "test",
+	})
+	require.NoError(t, err)
+
+	// Report 3: 50% up vs 1.05 → rejected.
+	_, err = srv.ReportPrice(ctx, &types.MsgReportPrice{
+		Feeder:    params.AllowedFeeders[0],
+		Price:     math.LegacyMustNewDecFromStr("1.575"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000"),
+		Source:    "test",
+	})
+	require.Error(t, err, "deviation > 10% must be rejected")
+	require.ErrorIs(t, err, types.ErrPriceDeviationTooHigh)
+
+	// Current price must not have moved to the rejected value.
+	cur, err = k.GetCurrentPrice(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "1.050000000000000000", cur.Price.String())
+}
+
+// Audit Issue 4 (b): when MinValidReports > 1, a single feeder's
+// report must NOT update the current price; multiple distinct feeders
+// must contribute within the staleness window first. History should
+// still grow per-report so TWAP and downstream consumers have data.
+func TestReportPrice_MinValidReportsGate(t *testing.T) {
+	k, ctx := newOracleKeeperForTest(t)
+	ctx = ctx.WithBlockTime(time.Unix(1_700_000_000, 0))
+
+	params := types.DefaultParams()
+	params.AllowedFeeders = []string{
+		sdk.AccAddress([]byte("feeder-1-test-account")).String(),
+		sdk.AccAddress([]byte("feeder-2-test-account")).String(),
+		sdk.AccAddress([]byte("feeder-3-test-account")).String(),
+	}
+	params.MaxPriceDeviationBps = 0 // disable deviation cap for this test
+	params.MinValidReports = 2
+	params.MaxPriceAgeSeconds = 3600
+	require.NoError(t, k.SetParams(ctx, params))
+
+	srv := NewMsgServerImpl(k)
+
+	// Report from feeder1 only → history appended but current NOT set.
+	_, err := srv.ReportPrice(ctx, &types.MsgReportPrice{
+		Feeder:    params.AllowedFeeders[0],
+		Price:     math.LegacyMustNewDecFromStr("1.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000"),
+		Source:    "test",
+	})
+	require.NoError(t, err)
+
+	_, err = k.GetCurrentPrice(ctx)
+	require.ErrorIs(t, err, types.ErrPriceNotFound,
+		"with MinValidReports=2 and only feeder1 reporting, current should be unset")
+
+	// History should already have feeder1's entry.
+	hist := k.GetPriceHistory(ctx, 10)
+	require.Len(t, hist, 1)
+
+	// Advance block time by 1s so the second report gets a distinct
+	// PriceHistoryKey (the key is keyed by timestamp; same-block reports
+	// would collide — that is a separate latent issue tracked outside
+	// this audit fix, but here we sidestep it).
+	ctx = ctx.WithBlockTime(time.Unix(1_700_000_001, 0))
+
+	// Second distinct feeder reports → quorum met, current updates.
+	_, err = srv.ReportPrice(ctx, &types.MsgReportPrice{
+		Feeder:    params.AllowedFeeders[1],
+		Price:     math.LegacyMustNewDecFromStr("1.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1100"),
+		Source:    "test",
+	})
+	require.NoError(t, err)
+	cur, err := k.GetCurrentPrice(ctx)
+	require.NoError(t, err)
+	require.Equal(t, params.AllowedFeeders[1], cur.Feeder)
+}
+
+// Repeated reports from the SAME feeder don't satisfy MinValidReports.
+// Without this distinction, a single rogue feeder could trivially
+// fake the quorum.
+func TestReportPrice_SameFeederDoesNotSatisfyQuorum(t *testing.T) {
+	k, ctx := newOracleKeeperForTest(t)
+	ctx = ctx.WithBlockTime(time.Unix(1_700_000_000, 0))
+
+	params := types.DefaultParams()
+	params.AllowedFeeders = []string{sdk.AccAddress([]byte("feeder-1-test-account")).String()}
+	params.MaxPriceDeviationBps = 0
+	params.MinValidReports = 2
+	params.MaxPriceAgeSeconds = 3600
+	require.NoError(t, k.SetParams(ctx, params))
+
+	srv := NewMsgServerImpl(k)
+
+	for i := 0; i < 5; i++ {
+		_, err := srv.ReportPrice(ctx, &types.MsgReportPrice{
+			Feeder:    params.AllowedFeeders[0],
+			Price:     math.LegacyMustNewDecFromStr("1.00"),
+			Volume24h: math.LegacyMustNewDecFromStr("1000"),
+			Source:    "test",
+		})
+		require.NoError(t, err)
+	}
+
+	_, err := k.GetCurrentPrice(ctx)
+	require.ErrorIs(t, err, types.ErrPriceNotFound,
+		"5 reports from the same feeder must not satisfy MinValidReports=2")
+}
+
+// Audit Issue 4 (a): MaxPriceDeviationBps must reject reports
+// whose price moves more than the configured bps from the current
+// on-chain price. Default is 1000 bps (10%).
+func TestWithinDeviation_AcceptsAndRejects(t *testing.T) {
+	prev := math.LegacyMustNewDecFromStr("1.00")
+
+	// 5% move with 10% cap → accept
+	require.True(t, withinDeviation(prev, math.LegacyMustNewDecFromStr("1.05"), 1000))
+	require.True(t, withinDeviation(prev, math.LegacyMustNewDecFromStr("0.95"), 1000))
+
+	// 10% move with 10% cap → accept (boundary inclusive)
+	require.True(t, withinDeviation(prev, math.LegacyMustNewDecFromStr("1.10"), 1000))
+
+	// 15% move with 10% cap → reject
+	require.False(t, withinDeviation(prev, math.LegacyMustNewDecFromStr("1.15"), 1000))
+	require.False(t, withinDeviation(prev, math.LegacyMustNewDecFromStr("0.85"), 1000))
+
+	// 100x move with 10% cap → reject (the worst case Issue 4 calls out)
+	require.False(t, withinDeviation(prev, math.LegacyMustNewDecFromStr("100"), 1000))
+
+	// Zero-previous baseline → no cap applicable, always accept
+	require.True(t, withinDeviation(math.LegacyZeroDec(), math.LegacyMustNewDecFromStr("1.50"), 1000))
+}
+
 // Even if a genesis file is hand-edited with entries in arbitrary
 // order, findLatestPrice picks by max timestamp.
 func TestInitGenesis_RobustToReorderedInput(t *testing.T) {
