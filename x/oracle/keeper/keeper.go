@@ -95,7 +95,10 @@ func (k Keeper) GetCurrentPrice(ctx sdk.Context) (types.PriceData, error) {
 
 func (k Keeper) AppendPriceHistory(ctx sdk.Context, price types.PriceData) error {
 	store := ctx.KVStore(k.storeKey)
-	key := types.PriceHistoryKey(price.Timestamp)
+	// Key includes feeder so concurrent same-block reports from
+	// different feeders don't overwrite each other (surfaced during
+	// the audit Issue 4 fix; see PriceHistoryKey doc-comment).
+	key := types.PriceHistoryKey(price.Timestamp, price.Feeder)
 	bz, err := json.Marshal(price)
 	if err != nil {
 		return err
@@ -128,10 +131,13 @@ func (k Keeper) GetPriceHistory(ctx sdk.Context, limit uint32) []types.PriceData
 }
 
 // GetPricesSince returns all price entries since the given timestamp.
+// Range bounds use empty feeder so they sort lexicographically below
+// any actual entry at that timestamp — the iterator covers the full
+// (timestamp, feeder) range across all feeders for each block.
 func (k Keeper) GetPricesSince(ctx sdk.Context, sinceTimestamp int64) []types.PriceData {
 	store := ctx.KVStore(k.storeKey)
-	startKey := types.PriceHistoryKey(sinceTimestamp)
-	endKey := types.PriceHistoryKey(ctx.BlockTime().Unix() + 1)
+	startKey := types.PriceHistoryKey(sinceTimestamp, "")
+	endKey := types.PriceHistoryKey(ctx.BlockTime().Unix()+1, "")
 
 	iter := store.Iterator(startKey, endKey)
 	defer iter.Close()

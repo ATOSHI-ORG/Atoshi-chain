@@ -223,13 +223,9 @@ func TestReportPrice_MinValidReportsGate(t *testing.T) {
 	hist := k.GetPriceHistory(ctx, 10)
 	require.Len(t, hist, 1)
 
-	// Advance block time by 1s so the second report gets a distinct
-	// PriceHistoryKey (the key is keyed by timestamp; same-block reports
-	// would collide — that is a separate latent issue tracked outside
-	// this audit fix, but here we sidestep it).
-	ctx = ctx.WithBlockTime(time.Unix(1_700_000_001, 0))
-
 	// Second distinct feeder reports → quorum met, current updates.
+	// (The keys-collision fix lets this work even at the same block
+	// time; see TestPriceHistoryKey_NoCollisionWithinSameBlock.)
 	_, err = srv.ReportPrice(ctx, &types.MsgReportPrice{
 		Feeder:    params.AllowedFeeders[1],
 		Price:     math.LegacyMustNewDecFromStr("1.00"),
@@ -314,4 +310,59 @@ func TestInitGenesis_RobustToReorderedInput(t *testing.T) {
 	current, err := k.GetCurrentPrice(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "newest", current.Feeder)
+}
+
+// Surfaced during audit Issue 4 fix: PriceHistoryKey used to be
+// keyed by timestamp alone, so two reports landing in the same
+// block from different feeders would collide on the same KV key
+// and the second would overwrite the first. The key now includes
+// the feeder address; both reports must coexist in history.
+func TestPriceHistoryKey_NoCollisionWithinSameBlock(t *testing.T) {
+	k, ctx := newOracleKeeperForTest(t)
+	feederA := sdk.AccAddress([]byte("feeder-A-test-account")).String()
+	feederB := sdk.AccAddress([]byte("feeder-B-test-account")).String()
+	ts := ctx.BlockTime().Unix()
+
+	require.NoError(t, k.AppendPriceHistory(ctx, types.PriceData{
+		Price: math.LegacyMustNewDecFromStr("1.00"), Volume24h: math.LegacyMustNewDecFromStr("100"),
+		Timestamp: ts, Feeder: feederA,
+	}))
+	require.NoError(t, k.AppendPriceHistory(ctx, types.PriceData{
+		Price: math.LegacyMustNewDecFromStr("1.05"), Volume24h: math.LegacyMustNewDecFromStr("200"),
+		Timestamp: ts, Feeder: feederB,
+	}))
+
+	hist := k.GetPriceHistory(ctx, 10)
+	require.Len(t, hist, 2, "two same-timestamp reports from distinct feeders must both persist")
+
+	// Each feeder's report must be findable, not overwritten.
+	feeders := map[string]bool{}
+	for _, pd := range hist {
+		feeders[pd.Feeder] = true
+	}
+	require.True(t, feeders[feederA], "feederA's report missing from history")
+	require.True(t, feeders[feederB], "feederB's report missing from history")
+}
+
+// GetPricesSince also benefits from the key-with-feeder fix: it
+// must return all reports from all feeders within the timestamp
+// window, not just the last-written one per timestamp.
+func TestGetPricesSince_ReturnsAllFeedersAtSameTimestamp(t *testing.T) {
+	k, ctx := newOracleKeeperForTest(t)
+	ctx = ctx.WithBlockTime(time.Unix(1_700_000_000, 0))
+
+	feeders := []string{
+		sdk.AccAddress([]byte("feeder-X-test-account")).String(),
+		sdk.AccAddress([]byte("feeder-Y-test-account")).String(),
+		sdk.AccAddress([]byte("feeder-Z-test-account")).String(),
+	}
+	for _, f := range feeders {
+		require.NoError(t, k.AppendPriceHistory(ctx, types.PriceData{
+			Price: math.LegacyMustNewDecFromStr("1.00"), Volume24h: math.LegacyMustNewDecFromStr("100"),
+			Timestamp: ctx.BlockTime().Unix(), Feeder: f,
+		}))
+	}
+
+	got := k.GetPricesSince(ctx, ctx.BlockTime().Unix()-60)
+	require.Len(t, got, 3, "all three same-block reports must be retrievable")
 }
