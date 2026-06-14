@@ -70,7 +70,9 @@ func (d EnergyRefundDecorator) PostHandle(
 	if refund == 0 {
 		return next(ctx, tx, simulate, success)
 	}
-	d.energyKeeper.RefundEnergy(ctx, signer, refund)
+	// Audit Question 1: pass the ConsumeResult so RefundEnergy can apply
+	// LIFO order (refill delegated-in pool first, then own bucket).
+	d.energyKeeper.RefundEnergy(ctx, signer, refund, reserved)
 	return next(ctx, tx, simulate, success)
 }
 

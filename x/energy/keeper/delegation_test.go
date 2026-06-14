@@ -160,7 +160,8 @@ func TestAttributeDelegatedConsumption_ConsumesSoonestExpiringFirst(t *testing.T
 	// Consume 12,000 energy. This fully drains d2 (10k expiring soonest)
 	// and partially drains d3 (the next-soonest); d1 should still be
 	// untouched after the call.
-	require.NoError(t, k.attributeDelegatedConsumption(ctx, delegatee, 12_000))
+	_, err = k.attributeDelegatedConsumption(ctx, delegatee, 12_000)
+	require.NoError(t, err)
 
 	d1, _ = k.GetDelegation(ctx, id1)
 	d2, _ = k.GetDelegation(ctx, id2)
@@ -197,11 +198,132 @@ func TestAttributeDelegatedConsumption_TieBreaksOnId(t *testing.T) {
 	require.NoError(t, err)
 
 	// Consume 4,000; should fully come out of the lower-id delegation.
-	require.NoError(t, k.attributeDelegatedConsumption(ctx, delegatee, 4_000))
+	_, err = k.attributeDelegatedConsumption(ctx, delegatee, 4_000)
+	require.NoError(t, err)
 
 	dA, _ := k.GetDelegation(ctx, idA)
 	dB, _ := k.GetDelegation(ctx, idB)
 	require.EqualValues(t, 4_000, dA.Used,
 		"lower id should be consumed first when expires_at ties")
 	require.EqualValues(t, 0, dB.Used)
+}
+
+// Audit Question 1 regression: refund must follow LIFO order against
+// the consumption split (own-first, delegated-second). LIFO refund
+// returns the borrowed-from-delegators pool BEFORE crediting the
+// holder's own bucket. The delegator-friendly direction matters:
+// inbound delegations have an ExpiresAt deadline, so rolling unused
+// energy back onto the original delegation preserves the time-bounded
+// grant instead of silently converting it into permanent own energy
+// on the delegatee's account.
+//
+// Setup: delegatee owns 10k accrued, plus 5k inbound from a delegator
+// (DelegatedInUsable=5k). Consume 12k:
+//   - 10k own drained first → OwnDeducted=10k
+//   - 2k from delegated pool → DelegatedDeducted=2k, delegation.Used=2k
+//
+// Refund 8k. LIFO order:
+//   - First 2k refunds the delegated pool: DelegatedInUsable goes 3→5k,
+//     delegation.Used goes 2→0.
+//   - Remaining 6k credits TxEnergyAccrued: 0→6k.
+//
+// Pre-fix RefundEnergy(amount) credited ONLY TxEnergyAccrued, so
+// delegation.Used would stay at 2 and the delegator's grant would be
+// permanently depleted even though most of it went unused.
+func TestRefundEnergy_LIFOOrderRestoresDelegatedFirst(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	// Set both bank balances BEFORE any Settle call so the first-touch
+	// snapshot captures the right balance.
+	bank.balances[delegator.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+
+	// Delegator: enough balance to back a 5k delegation.
+	dAcct := k.Settle(ctx, delegator)
+	dAcct.TxEnergyAccrued = 100_000
+	k.SetEnergyAccount(ctx, dAcct)
+	delID, _, err := k.Delegate(ctx, delegator, delegatee, 5_000, 24*3600)
+	require.NoError(t, err)
+
+	// Delegatee: 10k own accrued (capacity comfortable so no cap-down).
+	eAcct := k.Settle(ctx, delegatee)
+	eAcct.TxEnergyAccrued = 10_000
+	k.SetEnergyAccount(ctx, eAcct)
+
+	// Consume 12k via direct call to populate ConsumeResult split.
+	res, err := k.Consume(ctx, delegatee, 12_000, false,
+		[]string{"/cosmos.bank.v1beta1.MsgSend"})
+	require.NoError(t, err)
+	require.EqualValues(t, 12_000, res.EnergyDeducted)
+	require.EqualValues(t, 10_000, res.OwnDeducted, "own should drain first")
+	require.EqualValues(t, 2_000, res.DelegatedDeducted, "delegated covers shortfall")
+	require.Len(t, res.DelegationConsumptions, 1)
+	require.EqualValues(t, delID, res.DelegationConsumptions[0].DelegationID)
+	require.EqualValues(t, 2_000, res.DelegationConsumptions[0].Amount)
+
+	// Sanity: post-consume state.
+	post := k.GetEnergyAccount(ctx, delegatee)
+	require.EqualValues(t, 0, post.TxEnergyAccrued)
+	require.EqualValues(t, 3_000, post.DelegatedInUsable)
+	d, ok := k.GetDelegation(ctx, delID)
+	require.True(t, ok)
+	require.EqualValues(t, 2_000, d.Used)
+
+	// LIFO refund: 8k total. First 2k should restore the delegation;
+	// remaining 6k goes to own TxEnergyAccrued.
+	k.RefundEnergy(ctx, delegatee, 8_000, res)
+
+	postRefund := k.GetEnergyAccount(ctx, delegatee)
+	require.EqualValues(t, 6_000, postRefund.TxEnergyAccrued,
+		"audit Q1: remaining refund (after delegated repaid) credits own bucket")
+	require.EqualValues(t, 5_000, postRefund.DelegatedInUsable,
+		"audit Q1: delegated pool restored to full 5k pre-consume state")
+
+	d2, ok := k.GetDelegation(ctx, delID)
+	require.True(t, ok)
+	require.EqualValues(t, 0, d2.Used,
+		"audit Q1: delegation.Used must roll back to zero — the time-bounded grant is intact")
+}
+
+// Audit Question 1 companion: when refund <= DelegatedDeducted, ALL of
+// it must go to the delegated pool, none to own.
+func TestRefundEnergy_LIFOSmallRefundStaysOnDelegatedPool(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	bank.balances[delegator.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+
+	dAcct := k.Settle(ctx, delegator)
+	dAcct.TxEnergyAccrued = 100_000
+	k.SetEnergyAccount(ctx, dAcct)
+	delID, _, err := k.Delegate(ctx, delegator, delegatee, 8_000, 24*3600)
+	require.NoError(t, err)
+
+	eAcct := k.Settle(ctx, delegatee)
+	eAcct.TxEnergyAccrued = 4_000
+	k.SetEnergyAccount(ctx, eAcct)
+
+	res, err := k.Consume(ctx, delegatee, 10_000, false,
+		[]string{"/cosmos.bank.v1beta1.MsgSend"})
+	require.NoError(t, err)
+	require.EqualValues(t, 4_000, res.OwnDeducted)
+	require.EqualValues(t, 6_000, res.DelegatedDeducted)
+
+	// Refund 3k — all should stay on the delegated pool (3k < 6k).
+	k.RefundEnergy(ctx, delegatee, 3_000, res)
+
+	postRefund := k.GetEnergyAccount(ctx, delegatee)
+	require.EqualValues(t, 0, postRefund.TxEnergyAccrued,
+		"small refund must NOT spill into own bucket")
+	require.EqualValues(t, 2_000+3_000, postRefund.DelegatedInUsable,
+		"all 3k credited to delegated pool (was 2k after consume, +3k = 5k)")
+
+	d, ok := k.GetDelegation(ctx, delID)
+	require.True(t, ok)
+	require.EqualValues(t, 6_000-3_000, d.Used,
+		"delegation.Used must roll back by exactly the refund amount")
 }
