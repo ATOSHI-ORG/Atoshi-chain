@@ -143,6 +143,7 @@ import (
 	"github.com/atoshi-chain/atoshi/v20/app/post"
 	v20 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20"
 	v20_1 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_1"
+	v20_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_2"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -1287,6 +1288,17 @@ func (app *Atoshi) setupUpgradeHandlers() {
 		v20_1.CreateUpgradeHandler(
 			app.mm, app.configurator,
 			app.EnergyKeeper,
+		),
+	)
+
+	// v20.2: bundles post-audit fixes. The handler force-disables
+	// x/inflation (audit Question 4) on live chains; all other audit
+	// fixes are code-only and take effect on binary swap.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v20_2.UpgradeName,
+		v20_2.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.InflationKeeper,
 		),
 	)
 
