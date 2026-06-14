@@ -197,3 +197,63 @@ func TestConsume_ShortfallWhenInsufficient(t *testing.T) {
 	require.EqualValues(t, 0, res.EnergyDeducted)
 	require.EqualValues(t, 21_000, res.ShortfallGas)
 }
+
+// Audit Issue 6 regression: cap-down on a balance drop must NOT cut
+// into DelegatedOut. If TxEnergyAccrued is forced below DelegatedOut,
+// ownAvail (= TxEnergyAccrued − DelegatedOut, clamped at 0) silently
+// loses the delegator's bookkeeping invariant — already-honored
+// delegations cannot be undelegated symmetrically.
+//
+// Setup: balance 60k → cap 100k, fill to 80k accrued, delegate out 70k
+// (DelegatedOut=70k, TxEnergyAccrued=80k → ownAvail=10k). Then sell
+// stake down to 25k → new cap = 25k.
+//
+// Pre-fix: TxEnergyAccrued would be slammed to 25k, far under
+// DelegatedOut=70k. ownAvail clamps to 0; even worse, the next
+// undelegation would underflow DelegatedOut bookkeeping.
+//
+// Post-fix: TxEnergyAccrued is floored at DelegatedOut=70k. The
+// holder's own 10k is fully cut (cap-down's intent), but the 70k
+// promised to delegatees is preserved.
+func TestApplyBalanceChange_CapDownFloorsAtDelegatedOut(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	a := addr("alice___________________")
+
+	bank.balances[a.String()] = math.NewIntWithDecimal(60_000, 18)
+	acct := k.Settle(ctx, a)
+	acct.TxEnergyAccrued = 80_000
+	acct.DelegatedOut = 70_000
+	k.SetEnergyAccount(ctx, acct)
+
+	bank.balances[a.String()] = math.NewIntWithDecimal(25_000, 18)
+	k.ApplyBalanceChange(ctx, a, math.NewIntWithDecimal(25_000, 18))
+
+	got := k.GetEnergyAccount(ctx, a)
+	require.EqualValues(t, 70_000, got.TxEnergyAccrued,
+		"cap-down must floor at DelegatedOut so delegated commitments survive")
+	require.EqualValues(t, 70_000, got.DelegatedOut,
+		"DelegatedOut itself must not be touched by cap-down")
+}
+
+// Audit Issue 6 companion: when newTxCap is ABOVE DelegatedOut, the
+// floor must not interfere — the holder's own excess still gets cut
+// to newTxCap normally.
+func TestApplyBalanceChange_CapDownAboveDelegatedOutCutsNormally(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	a := addr("alice___________________")
+
+	bank.balances[a.String()] = math.NewIntWithDecimal(60_000, 18)
+	acct := k.Settle(ctx, a)
+	acct.TxEnergyAccrued = 80_000
+	acct.DelegatedOut = 20_000
+	k.SetEnergyAccount(ctx, acct)
+
+	// Drop to 30k (newTxCap = 50k). 50k > DelegatedOut=20k, so normal
+	// cap-down applies.
+	bank.balances[a.String()] = math.NewIntWithDecimal(30_000, 18)
+	k.ApplyBalanceChange(ctx, a, math.NewIntWithDecimal(30_000, 18))
+
+	got := k.GetEnergyAccount(ctx, a)
+	require.EqualValues(t, 50_000, got.TxEnergyAccrued,
+		"floor must not raise the cap above newTxCap when DelegatedOut < newTxCap")
+}

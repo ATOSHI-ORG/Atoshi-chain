@@ -113,8 +113,26 @@ func (k Keeper) ApplyBalanceChange(ctx sdk.Context, addr sdk.AccAddress, newElig
 
 	params := k.GetParams(ctx)
 	newTxCap := types.TxEnergyCapacity(newEligible, params)
-	if acct.TxEnergyAccrued > newTxCap {
-		acct.TxEnergyAccrued = newTxCap
+	// Audit Issue 6: cap-down must NOT cut into DelegatedOut.
+	//
+	// ownAvail in consume.go is TxEnergyAccrued − DelegatedOut. DelegatedOut
+	// is energy already promised to other accounts: the delegatee's
+	// DelegatedInUsable was minted at delegation time and may have been
+	// spent. If a holder partially sells stake and the new cap drops
+	// below DelegatedOut, setting TxEnergyAccrued = newTxCap collapses the
+	// gap and would let the holder later under-credit undelegation
+	// (delegation.go subtracts DelegatedOut symmetrically with
+	// TxEnergyAccrued). Floor the cap-down at DelegatedOut. The economic
+	// intent of cap-down (deny a giant buffer to a now-poorer account) is
+	// preserved — only the holder's OWN unused portion is cut. The
+	// delegated portion can still be reclaimed via undelegation, which
+	// shrinks BOTH counters in lockstep.
+	effectiveCap := newTxCap
+	if effectiveCap < acct.DelegatedOut {
+		effectiveCap = acct.DelegatedOut
+	}
+	if acct.TxEnergyAccrued > effectiveCap {
+		acct.TxEnergyAccrued = effectiveCap
 	}
 	if acct.DeployEnergyAccrued > params.DeployEnergyCapacity {
 		acct.DeployEnergyAccrued = params.DeployEnergyCapacity
