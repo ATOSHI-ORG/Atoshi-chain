@@ -144,9 +144,111 @@ func DefaultGenesisState() *GenesisState {
 }
 
 // Validate enforces invariants on the tokenomics genesis state.
+//
+// Audit Recommendation-1 (round2): the pre-fix version only validated
+// Params and accepted any value for the four remaining fields
+// (ReleaseState, BlockRewardState, MinerLockedBalances,
+// ProjectClaimable). A malformed or hostile genesis file could ship
+// negative running totals, nil math.Int fields (which then panic on
+// arithmetic), or duplicate / malformed validator addresses in the
+// locked-balance table — all of which would corrupt the on-chain
+// tokenomics state before the chain produced its first block.
 func (gs GenesisState) Validate() error {
 	if err := gs.Params.Validate(); err != nil {
 		return fmt.Errorf("invalid tokenomics params: %w", err)
+	}
+	if err := validateReleaseState(gs.ReleaseState); err != nil {
+		return fmt.Errorf("invalid release_state: %w", err)
+	}
+	if err := validateBlockRewardState(gs.BlockRewardState); err != nil {
+		return fmt.Errorf("invalid block_reward_state: %w", err)
+	}
+	seen := make(map[string]struct{}, len(gs.MinerLockedBalances))
+	for i, bal := range gs.MinerLockedBalances {
+		if err := validateMinerLockedBalance(bal); err != nil {
+			return fmt.Errorf("invalid miner_locked_balances[%d]: %w", i, err)
+		}
+		if _, dup := seen[bal.ValidatorAddress]; dup {
+			return fmt.Errorf("invalid miner_locked_balances[%d]: duplicate validator %q", i, bal.ValidatorAddress)
+		}
+		seen[bal.ValidatorAddress] = struct{}{}
+	}
+	if gs.ProjectClaimable.IsNil() {
+		return fmt.Errorf("invalid project_claimable: nil")
+	}
+	if gs.ProjectClaimable.IsNegative() {
+		return fmt.Errorf("invalid project_claimable: must not be negative, got %s", gs.ProjectClaimable)
+	}
+	return nil
+}
+
+// validateReleaseState rejects nil math.Int fields and negative totals.
+// CurrentTier / ConsecutiveDays / block / time-unix fields are uint and
+// int64; zero is the legitimate genesis default for all of them.
+func validateReleaseState(s ReleaseState) error {
+	checks := []struct {
+		name string
+		v    math.Int
+	}{
+		{"total_miner_released", s.TotalMinerReleased},
+		{"total_project_released", s.TotalProjectReleased},
+		{"total_immediate_distributed", s.TotalImmediateDistributed},
+		{"total_miner_locked", s.TotalMinerLocked},
+	}
+	for _, c := range checks {
+		if c.v.IsNil() {
+			return fmt.Errorf("%s: nil", c.name)
+		}
+		if c.v.IsNegative() {
+			return fmt.Errorf("%s: must not be negative, got %s", c.name, c.v)
+		}
+	}
+	if s.LastCheckBlock < 0 {
+		return fmt.Errorf("last_check_block: must not be negative, got %d", s.LastCheckBlock)
+	}
+	if s.LastCheckTimeUnix < 0 {
+		return fmt.Errorf("last_check_time_unix: must not be negative, got %d", s.LastCheckTimeUnix)
+	}
+	return nil
+}
+
+func validateBlockRewardState(s BlockRewardState) error {
+	if s.TotalDistributed.IsNil() {
+		return fmt.Errorf("total_distributed: nil")
+	}
+	if s.TotalDistributed.IsNegative() {
+		return fmt.Errorf("total_distributed: must not be negative, got %s", s.TotalDistributed)
+	}
+	return nil
+}
+
+func validateMinerLockedBalance(bal MinerLockedBalance) error {
+	if _, err := sdk.ValAddressFromBech32(bal.ValidatorAddress); err != nil {
+		return fmt.Errorf("validator_address %q: %w", bal.ValidatorAddress, err)
+	}
+	checks := []struct {
+		name string
+		v    math.Int
+	}{
+		{"locked_accrued", bal.LockedAccrued},
+		{"locked_claimable", bal.LockedClaimable},
+		{"locked_claimed", bal.LockedClaimed},
+		{"immediate_received", bal.ImmediateReceived},
+	}
+	for _, c := range checks {
+		if c.v.IsNil() {
+			return fmt.Errorf("%s: nil", c.name)
+		}
+		if c.v.IsNegative() {
+			return fmt.Errorf("%s: must not be negative, got %s", c.name, c.v)
+		}
+	}
+	// Invariant: claimed + claimable ≤ accrued. Otherwise the genesis
+	// is claiming more than was ever distributed to this validator.
+	used := bal.LockedClaimed.Add(bal.LockedClaimable)
+	if used.GT(bal.LockedAccrued) {
+		return fmt.Errorf("locked_claimed + locked_claimable (%s) exceeds locked_accrued (%s)",
+			used, bal.LockedAccrued)
 	}
 	return nil
 }
