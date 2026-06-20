@@ -147,3 +147,46 @@ func TestSaturatingMulU64(t *testing.T) {
 	// At the boundary: a*b == MaxUint64 exactly should not saturate.
 	require.EqualValues(t, ^uint64(0), saturatingMulU64(^uint64(0), 1))
 }
+
+// Audit Issue-17 (round2, round1-issue11) regression: same overflow
+// class as TxEnergyCapacity but on the DeployRecoverPerSecond path.
+// Pre-fix the multiplication `units.Uint64() * p.DeployEnergyCapacity`
+// could wrap around uint64 and silently destroy a holder's recovery
+// rate. Post-fix the multiplication saturates at MaxUint64 BEFORE
+// the divide; the per-second rate is then MaxUint64 / denom — a
+// finite ceiling, never zero from wraparound.
+func TestDeployRecoverPerSecond_SaturatesOnMultiplyOverflow(t *testing.T) {
+	// Force units*capacity to overflow: threshold = 1, balance = 2^32 →
+	// units = 2^32. capacity = 2^33 → product = 2^65 → wraps to 0
+	// under raw mul, then 0 / denom = 0.
+	p := Params{
+		TxEnergyHoldingThreshold: math.NewInt(1),
+		TxEnergyPerThreshold:     1,
+		TxEnergyMaxAccrueWindow:  86400,
+		DeployHoldingThreshold:   math.NewInt(1),
+		DeployEnergyCapacity:     1 << 33, // 2^33
+		DeployRecoverDays:        1,
+		InsufficientGasPrice:     math.LegacyZeroDec(),
+	}
+	balance := math.NewInt(int64(1) << 32) // 2^32 units
+
+	got := DeployRecoverPerSecond(balance, p)
+	// Post-fix expectation: MaxUint64 / (1 day in seconds).
+	want := ^uint64(0) / (1 * 86_400)
+	require.Equal(t, want, got,
+		"audit Issue-17: rate must clamp via saturating multiply, not wrap to ~0")
+	require.NotEqual(t, uint64(0), got, "wraparound bug would produce 0 here")
+}
+
+// Sanity: ordinary balances and default params still produce the
+// expected per-second rate. Guards against the saturation helper
+// accidentally clamping legitimate values.
+func TestDeployRecoverPerSecond_ExactForDefaults(t *testing.T) {
+	p := DefaultParams()
+	atosUnit := math.NewIntWithDecimal(1, 18)
+	// 2,000,000 ATOS / 1,000,000 threshold = 2 units.
+	// 2 * 800,000 / (10 * 86400) = 1,600,000 / 864,000 ≈ 1 (integer)
+	got := DeployRecoverPerSecond(atosUnit.Mul(math.NewInt(2_000_000)), p)
+	want := uint64(2*800_000) / (10 * 86_400)
+	require.Equal(t, want, got)
+}

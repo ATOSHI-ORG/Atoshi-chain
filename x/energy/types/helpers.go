@@ -149,6 +149,23 @@ func saturatingMulU64(a, b uint64) uint64 {
 //
 // rate_per_day  = (balance / threshold) * capacity / recover_days
 // rate_per_sec  = rate_per_day / 86400
+//
+// Audit Issue-17 (round2, round1-issue11): the multiplication
+// `units.Uint64() * p.DeployEnergyCapacity` could wrap around uint64
+// if governance retuned `DeployEnergyCapacity` upward or if a holder
+// accumulated enough ATOS to push `units` past 2^64 / capacity. After
+// the wrap, the rate collapses to a small number — or zero after the
+// division — silently destroying the holder's recovery rate. The
+// same protection that x/energy applied to TxEnergyCapacity at
+// commit 86f431c also needs to apply here.
+//
+// We saturate the multiplication at MaxUint64 BEFORE the divide. The
+// divide itself can only shrink the value (denom is always positive
+// here, guarded above), so MaxUint64 / denom is still a sensible
+// finite ceiling on the per-second rate. No legitimate parameter
+// setting under default config can reach the saturation branch — it
+// only triggers if governance pushes capacity into multi-trillion
+// territory.
 func DeployRecoverPerSecond(eligibleBalance math.Int, p Params) uint64 {
 	if eligibleBalance.IsNil() || !eligibleBalance.IsPositive() ||
 		p.DeployHoldingThreshold.IsNil() || !p.DeployHoldingThreshold.IsPositive() {
@@ -166,7 +183,7 @@ func DeployRecoverPerSecond(eligibleBalance math.Int, p Params) uint64 {
 	if !units.IsUint64() {
 		return ^uint64(0)
 	}
-	return (units.Uint64() * p.DeployEnergyCapacity) / denom
+	return saturatingMulU64(units.Uint64(), p.DeployEnergyCapacity) / denom
 }
 
 // DefaultGenesisState is the energy module's default genesis.
