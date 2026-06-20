@@ -274,3 +274,78 @@ func TestApplyBalanceChange_CapDownAboveDelegatedOutCutsNormally(t *testing.T) {
 	require.EqualValues(t, 50_000, got.TxEnergyAccrued,
 		"floor must not raise the cap above newTxCap when DelegatedOut < newTxCap")
 }
+
+// Audit Issue-7 (round2, round1-issue6) end-to-end verification: the
+// round2 audit re-flagged the ownAvail / cap-down interaction in
+// Consume() with the same root cause as round1-issue6 (fixed at
+// commit 8000067 — floor cap-down at DelegatedOut). The round2 wording
+// is more end-to-end: "user transfers out ATOS → cap drops →
+// TxEnergyAccrued cap-downs → ownAvail computation goes wrong → DoS".
+//
+// This test mirrors that exact scenario through the real SendRestriction
+// hook path:
+//   1. Alice holds 60k ATOS (cap = 100k), accrued = 100k, DelegatedOut
+//      = 70k (committed to a delegatee already). ownAvail = 30k.
+//   2. Alice transfers half her ATOS to Bob. Post-send balance = 30k
+//      ATOS → new cap = 50k.
+//   3. SendRestriction hook fires ApplyBalanceChange(alice, 30k_eligible)
+//      → newTxCap=50k < DelegatedOut=70k → with the fix, TxEnergyAccrued
+//      is floored at DelegatedOut=70k (NOT slammed to 50k).
+//   4. Consume(alice, 20k, ...) succeeds: ownAvail = 70k - 70k = 0,
+//      delegated-in-usable is unused here, shortfall = 20k. No
+//      invariant violation, no DoS — the user lost own-energy ceiling
+//      (correct, they sold half their ATOS) but did NOT lose the
+//      delegated commitment.
+//
+// Pre-fix (round1 audit state): step 3 would have set TxEnergyAccrued
+// = 50k. Step 4's ownAvail = max(0, 50k - 70k) = 0 (clamped), AND
+// the next undelegation would under-credit because TxEnergyAccrued
+// (50k) < DelegatedOut (70k) — invariant breach. The delegator's
+// bookkeeping would be inconsistent.
+func TestConsume_AfterBalanceDrop_PreservesDelegatedCommitment(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	alice := addr("alice___________________")
+	bob := addr("bob_____________________")
+
+	bank.balances[alice.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.balances[bob.String()] = math.ZeroInt()
+
+	// Wire SendRestriction so a bank send fires the real cap-down path.
+	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
+		_, _ = k.SendRestriction(ctx, from, to, amt)
+	}
+
+	a := k.Settle(ctx, alice)
+	a.TxEnergyAccrued = 100_000
+	a.DelegatedOut = 70_000
+	k.SetEnergyAccount(ctx, a)
+
+	// Alice sells half her ATOS: 60k → 30k.
+	sold := math.NewIntWithDecimal(30_000, 18)
+	_, err := k.SendRestriction(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin("aatos", sold)))
+	require.NoError(t, err)
+	bank.balances[alice.String()] = math.NewIntWithDecimal(30_000, 18)
+	bank.balances[bob.String()] = sold
+
+	post := k.GetEnergyAccount(ctx, alice)
+	require.EqualValues(t, 70_000, post.TxEnergyAccrued,
+		"audit Issue-7: cap-down must floor at DelegatedOut so delegated commitment survives a balance drop")
+	require.EqualValues(t, 70_000, post.DelegatedOut,
+		"DelegatedOut itself must not be touched by cap-down")
+	require.True(t, post.TxEnergyAccrued >= post.DelegatedOut,
+		"audit Issue-7 invariant: TxEnergyAccrued ≥ DelegatedOut after balance change")
+
+	// Consume must now correctly classify gas as shortfall (no own avail,
+	// no delegated-in to draw on). DoS scenario from the audit would have
+	// thrown ErrInsufficientEnergy or under-counted shortfall; we expect
+	// a clean shortfall path.
+	res, err := k.Consume(ctx, alice, 20_000, false,
+		[]string{"/cosmos.bank.v1beta1.MsgSend"})
+	require.NoError(t, err, "Consume must not error after balance drop")
+	require.EqualValues(t, 0, res.OwnDeducted,
+		"ownAvail correctly collapsed to 0 (TxEnergyAccrued == DelegatedOut)")
+	require.EqualValues(t, 0, res.DelegatedDeducted,
+		"no inbound delegations on Alice's side")
+	require.EqualValues(t, 20_000, res.ShortfallGas,
+		"all 20k must fall through to shortfall; pre-fix this could have produced inconsistent accounting")
+}
