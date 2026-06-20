@@ -221,8 +221,11 @@ func (d EnergyDeductDecorator) AnteHandle(
 		return ctx, sdkerrors.ErrInsufficientFee.Wrapf("shortfall fee transfer: %v", err)
 	}
 
-	// Set tx priority based on the gas price the user offered.
-	priority := getTxPriority(stdFee, int64(gasLimit))
+	// Set tx priority based on the gas price the user offered. Pass the
+	// chain's base denom so non-base coins in the fee bag (e.g. IBC
+	// vouchers stapled to a tx for some unrelated reason) do not
+	// participate in priority calculation.
+	priority := getTxPriority(stdFee, int64(gasLimit), d.energyKeeper.BaseDenom())
 	ctx = ctx.WithPriority(priority)
 
 	return next(ctx, tx, simulate)
@@ -285,9 +288,31 @@ func computeShortfallFee(
 // cosmossdk.io/math, not the stdlib package.
 const maxInt64Priority = int64(^uint64(0) >> 1)
 
-func getTxPriority(fee sdk.Coins, gas int64) int64 {
+// Audit Issue-15 (round1-issue8): getTxPriority must only consider the
+// chain's base denom (aatos). The previous signature took no denom
+// and iterated every coin in the fee bag, treating each as if it
+// could move the priority needle. The chain is single-fee-denom
+// today, so the bug is latent — but as soon as governance enables
+// IBC vouchers, gov-staked alt-coins, or any non-base fee path, an
+// attacker could attach a high-amount alt-coin to a low-aatos tx and
+// either crowd into the mempool's front (if their alt-coin yielded
+// MaxInt64 priority and the min-selection happened to pick it) or
+// drag priority down (if the alt-coin yielded a tiny per-gas number
+// after QuoRaw — e.g. a 1-unit USDC fee divided by 200k gas = 0).
+//
+// Fix: filter on baseDenom. Non-base coins in the fee bag are
+// inert from a priority standpoint — they don't pay for gas
+// consumption (computeShortfallFee also reads only baseDenom), so
+// they should not influence the mempool ordering either.
+//
+// If no base-denom coin is present, priority stays 0 (lowest), which
+// matches "no valid fee offered → no preferential ordering".
+func getTxPriority(fee sdk.Coins, gas int64, baseDenom string) int64 {
 	var priority int64
 	for _, c := range fee {
+		if c.Denom != baseDenom {
+			continue
+		}
 		p := maxInt64Priority
 		gasPrice := c.Amount.QuoRaw(gas)
 		if gasPrice.IsInt64() {

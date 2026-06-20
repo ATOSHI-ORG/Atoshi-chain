@@ -21,7 +21,7 @@ func TestGetTxPriority_OverflowDefaultsToMaxInt64(t *testing.T) {
 	require.True(t, ok)
 	fee := sdk.NewCoins(sdk.NewCoin("aatos", amount))
 
-	got := getTxPriority(fee, 1)
+	got := getTxPriority(fee, 1, "aatos")
 	require.EqualValues(t, int64(math.MaxInt64), got,
 		"priority must clamp to MaxInt64 on int64 overflow, "+
 			"matching upstream SDK behavior; got %d", got)
@@ -35,28 +35,49 @@ func TestGetTxPriority_NormalGasPrice(t *testing.T) {
 	require.True(t, ok)
 	fee := sdk.NewCoins(sdk.NewCoin("aatos", amount))
 
-	got := getTxPriority(fee, 100_000)
+	got := getTxPriority(fee, 100_000, "aatos")
 	require.EqualValues(t, int64(1_000_000_000), got,
 		"expected gasPrice = 1 gwei (10^9); got %d", got)
 }
 
-// Multi-denom fee: the lowest per-denom priority wins (per SDK
-// semantics). Verifies the overflow branch interacts correctly with
-// the priority-min selection logic.
-func TestGetTxPriority_MultiDenomTakesMin(t *testing.T) {
-	// One denom with normal gas price, another with overflowing price.
+// Audit Issue-15 (round1-issue8) regression: non-base-denom coins in
+// the fee bag must NOT participate in priority calculation. Pre-fix,
+// getTxPriority iterated every coin and let the min-selection pick
+// up arbitrary alt-coin denominations — an attacker could pad a tx
+// with a tiny IBC voucher amount (e.g. 1 unit) to drive their
+// per-gas priority for that denom to zero (1 / 200k = 0 via integer
+// QuoRaw), then ride to the front of the mempool min-ordering.
+//
+// Post-fix the function takes baseDenom and skips everything else.
+// The bag below has a normal aatos fee plus a 1-unit IBC voucher
+// that, pre-fix, would have shrunk priority to 0; post-fix the
+// voucher is ignored and priority reflects the aatos gas price.
+func TestGetTxPriority_OnlyBaseDenomCounts(t *testing.T) {
 	normalAmt, ok := sdkmath.NewIntFromString("100000000000000")
 	require.True(t, ok)
-	hugeAmt, ok := sdkmath.NewIntFromString("36893488147419103232")
-	require.True(t, ok)
 	fee := sdk.NewCoins(
-		sdk.NewCoin("aatos", normalAmt), // priority 10^9
-		sdk.NewCoin("usdc", hugeAmt),    // priority MaxInt64 after fix
+		sdk.NewCoin("aatos", normalAmt),                // gasPrice 10^9
+		sdk.NewCoin("ibc/abc123", sdkmath.NewInt(1)),   // would give priority=0 pre-fix
+		sdk.NewCoin("usdc", sdkmath.NewInt(999_999_9)), // arbitrary noise
 	)
 
-	got := getTxPriority(fee, 100_000)
-	// Min of (10^9, MaxInt64) = 10^9.
-	require.EqualValues(t, int64(1_000_000_000), got)
+	got := getTxPriority(fee, 100_000, "aatos")
+	require.EqualValues(t, int64(1_000_000_000), got,
+		"audit Issue-15: non-base coins must be skipped; pre-fix a 1-unit IBC voucher would have dragged priority to 0")
+}
+
+// Audit Issue-15 (round1-issue8) companion: when the fee bag carries
+// NO base-denom coin at all, priority stays 0 (lowest). This matches
+// "no valid fee offered → no preferential ordering" — the chain
+// hasn't been paid in the unit that gas is denominated in.
+func TestGetTxPriority_NoBaseDenomReturnsZero(t *testing.T) {
+	fee := sdk.NewCoins(
+		sdk.NewCoin("ibc/abc123", sdkmath.NewInt(1_000_000)),
+		sdk.NewCoin("usdc", sdkmath.NewInt(50_000_000)),
+	)
+	got := getTxPriority(fee, 100_000, "aatos")
+	require.EqualValues(t, int64(0), got,
+		"audit Issue-15: a fee bag without aatos earns no priority")
 }
 
 // The local constant must equal stdlib math.MaxInt64.
