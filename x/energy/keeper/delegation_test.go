@@ -432,3 +432,88 @@ func TestUndelegate_PreventsConsumedEnergyReuseAcrossLoops(t *testing.T) {
 	_, _, err = k.Delegate(ctx, alice, carol, 50_000, 24*3600)
 	require.NoError(t, err)
 }
+
+// Audit Issue-8 (round2) regression: Delegate must NOT clobber the
+// energy-account writes performed by the SendRestriction hook during
+// the bank transfer.
+//
+// Setup: bank balance = 60k ATOS, TxEnergyAccrued inflated to 200k
+// (well above the natural cap for 60k balance). Delegate 50k energy
+// locks 30k ATOS — bank drops to 30k. SendRestriction fires
+// ApplyBalanceChange(delegator, 30k_eligible), which:
+//   - sets LastBalanceSnapshot = 30k ATOS,
+//   - cap-downs TxEnergyAccrued from 200k to TxEnergyCapacity(30k) = 50k
+//     (floored at DelegatedOut, which is 50k after the increment).
+//
+// Pre-fix: Delegate then SetEnergyAccount(stale delAcct) — restoring
+// TxEnergyAccrued to 200k and undoing the hook's cap-down. The
+// delegator silently keeps an energy ceiling backed by ATOS they no
+// longer hold.
+//
+// Post-fix: Delegate re-reads the account after the transfer,
+// applies the DelegatedOut/LockedAtos increments on top of the fresh
+// (hook-written) state, and persists. The hook's cap-down survives.
+func TestDelegate_DoesNotClobberHookWrites(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	bank.balances[delegator.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+
+	// Wire bank.SendRestriction-equivalent hook so SendCoins inside
+	// Delegate triggers the same ApplyBalanceChange path that runs in
+	// production. Without this, the fake bank moves balances silently
+	// and the bug Issue-8 fixes is invisible to the test.
+	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
+		_, _ = k.SendRestriction(ctx, from, to, amt)
+	}
+
+	a := k.Settle(ctx, delegator)
+	a.TxEnergyAccrued = 200_000 // intentionally above the post-lock cap
+	k.SetEnergyAccount(ctx, a)
+
+	_, _, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+
+	post := k.GetEnergyAccount(ctx, delegator)
+	require.EqualValues(t, 50_000, post.DelegatedOut)
+	require.EqualValues(t, 50_000, post.TxEnergyAccrued,
+		"audit Issue-8: hook's cap-down to 50k must survive — pre-fix code restored 200k from the stale delAcct copy")
+	require.True(t, post.LastBalanceSnapshot.Equal(math.NewIntWithDecimal(30_000, 18)),
+		"snapshot must reflect post-send eligible balance written by the hook")
+}
+
+// Audit Issue-8 (round2) companion: when a second Delegate runs on
+// the same account in the same block, both rounds must compose
+// correctly. Stale-copy bug would scramble the cumulative LockedAtos
+// counter on the second call.
+func TestDelegate_TwoBackToBackKeepsLockedAtosConsistent(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	bank.balances[delegator.String()] = math.NewIntWithDecimal(120_000, 18)
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+
+	a := k.Settle(ctx, delegator)
+	a.TxEnergyAccrued = 200_000
+	k.SetEnergyAccount(ctx, a)
+
+	_, locked1, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+	require.True(t, locked1.Equal(math.NewIntWithDecimal(30_000, 18)))
+
+	mid := k.GetEnergyAccount(ctx, delegator)
+	mid.TxEnergyAccrued = 200_000 // refill to simulate accrued recovery
+	k.SetEnergyAccount(ctx, mid)
+
+	_, locked2, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+	require.True(t, locked2.Equal(math.NewIntWithDecimal(30_000, 18)))
+
+	post := k.GetEnergyAccount(ctx, delegator)
+	require.True(t, post.LockedAtos.Equal(math.NewIntWithDecimal(60_000, 18)),
+		"audit Issue-8: cumulative LockedAtos must equal 60k after two 30k locks; stale-copy bug would mis-sum")
+	require.EqualValues(t, 100_000, post.DelegatedOut)
+}

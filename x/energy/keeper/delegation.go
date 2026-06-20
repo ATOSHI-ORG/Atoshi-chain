@@ -89,14 +89,34 @@ func (k Keeper) Delegate(
 		return 0, math.ZeroInt(), err
 	}
 
-	// Record on the delegator's account.
+	// Audit Issue-8 (round2): re-read the delegator account AFTER the
+	// bank transfer. The transfer fires bank.SendRestriction, which
+	// calls ApplyBalanceChange on the delegator and writes a fresh
+	// energy account to the KV store with the post-send
+	// LastBalanceSnapshot and possibly a cap-down'd TxEnergyAccrued
+	// (the bank balance just dropped by `lockedATOS`).
+	//
+	// The `delAcct` we read before the transfer is now STALE. If we
+	// kept using it, the SetEnergyAccount call below would clobber the
+	// hook's writes — re-instating the pre-send snapshot and undoing
+	// any TxEnergyAccrued cap-down. That is the "stale updates" leak
+	// the auditor flagged: the post-condition of Delegate would
+	// silently restore the pre-lock energy ceiling, inflating the
+	// delegator's effective capacity.
+	//
+	// Pull the fresh state, layer our INCREMENTAL changes (DelegatedOut
+	// + LockedAtos) on top. LastBalanceSnapshot / LastUpdatedTime /
+	// TxEnergyAccrued / DeployEnergyAccrued must remain whatever the
+	// hook just set — do not overwrite them.
+	delAcct = k.GetEnergyAccount(ctx, delegator)
 	delAcct.DelegatedOut += amount
 	delAcct.LockedAtos = currentLocked.Add(lockedATOS)
-	// Bank balance dropped: snapshot reflects the new eligible balance.
-	delAcct.LastBalanceSnapshot = k.EligibleBalance(ctx, delegator)
 	k.SetEnergyAccount(ctx, delAcct)
 
-	// Settle delegatee then bump their usable inbound.
+	// Settle delegatee then bump their usable inbound. The delegatee
+	// is not on the bank-transfer path so SendRestriction did not touch
+	// their account — Settle returns the live state and the increment
+	// below is safe.
 	deeAcct := k.Settle(ctx, delegatee)
 	deeAcct.DelegatedInUsable = saturatingAdd(deeAcct.DelegatedInUsable, amount)
 	k.SetEnergyAccount(ctx, deeAcct)

@@ -21,9 +21,16 @@ import (
 )
 
 // fakeBank returns whatever balance was last set, with no real coin movement.
+//
+// onSend is an optional hook that mirrors what bank.AppendSendRestriction
+// would do in production: fire after every base-denom send so that the
+// energy keeper can refresh the affected accounts' snapshots. Tests that
+// need to exercise the hook interaction (e.g. audit Issue-8) wire it
+// after constructing the keeper.
 type fakeBank struct {
 	balances map[string]math.Int
 	denom    string
+	onSend   func(from, to sdk.AccAddress, amt sdk.Coins)
 }
 
 func newFakeBank(denom string) *fakeBank {
@@ -38,7 +45,14 @@ func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom stri
 	return sdk.NewCoin(denom, v)
 }
 
-func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.AccAddress, _ string, amt sdk.Coins) error {
+func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.AccAddress, recipientModule string, amt sdk.Coins) error {
+	// Hook BEFORE bank write — matches production SendRestriction ordering
+	// (cosmos-sdk bank invokes restrictions before the store mutation, so
+	// the hook can read pre-send balances and compute projected post-send
+	// values via subtraction).
+	if b.onSend != nil {
+		b.onSend(sender, sdk.AccAddress([]byte("module/"+recipientModule)), amt)
+	}
 	cur := b.balances[sender.String()]
 	if cur.IsNil() {
 		cur = math.ZeroInt()
@@ -47,7 +61,10 @@ func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.Ac
 	return nil
 }
 
-func (b *fakeBank) SendCoinsFromModuleToAccount(_ context.Context, _ string, recipient sdk.AccAddress, amt sdk.Coins) error {
+func (b *fakeBank) SendCoinsFromModuleToAccount(_ context.Context, senderModule string, recipient sdk.AccAddress, amt sdk.Coins) error {
+	if b.onSend != nil {
+		b.onSend(sdk.AccAddress([]byte("module/"+senderModule)), recipient, amt)
+	}
 	cur := b.balances[recipient.String()]
 	if cur.IsNil() {
 		cur = math.ZeroInt()
