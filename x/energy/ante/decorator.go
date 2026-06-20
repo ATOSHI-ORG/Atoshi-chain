@@ -301,20 +301,45 @@ func getTxPriority(fee sdk.Coins, gas int64) int64 {
 }
 
 // isContractDeployMsg returns true if any msg in the tx is a contract
-// deployment. For Cosmos messages this maps to Wasm Instantiate or EVM
-// MsgEthereumTx with To == nil; for now we keep the heuristic minimal
-// and rely on type-url matching against a known set.
+// deployment that should be charged against the DeployEnergy bucket.
+//
+// Audit Issue-3 (round1-issue1): NO currently-reachable msg type
+// triggers DeployEnergy consumption under the present chain
+// configuration:
+//
+//   - The CosmWasm module (wasmd) is not integrated; none of the
+//     `/cosmwasm.wasm.v1.MsgInstantiateContract*` or
+//     `/cosmwasm.wasm.v1.MsgStoreCode` URLs can appear in a tx that
+//     this chain accepts.
+//
+//   - EVM deployment txs (`/ethermint.evm.v1.MsgEthereumTx`) DO NOT
+//     flow through this decorator. The Cosmos ante chain installs
+//     RejectMessagesDecorator BEFORE the energy fee step
+//     (see app/ante/cosmos.go), which explicitly rejects
+//     MsgEthereumTx; the EVM ante chain (MonoDecorator) handles
+//     those txs end-to-end and does its own gas accounting. The
+//     previous code's MsgEthereumTx branch was therefore unreachable
+//     in production AND misleading to reviewers — it implied a code
+//     path that does not exist.
+//
+// We keep the CosmWasm URL cases ready so that when wasmd is added
+// in a future release, DeployEnergy starts charging automatically
+// with no further wiring. We removed the MsgEthereumTx branch
+// because keeping it would re-introduce the same misleading dead
+// code the audit flagged; if EVM-side energy accounting becomes a
+// requirement it must be done in the EVM ante chain, not here.
+//
+// In the present configuration this function effectively always
+// returns false. That is intentional — there is no DeployEnergy
+// consumer right now. Consume() in consume.go handles isDeploy=false
+// cleanly (the deploy bucket is skipped and only the TxEnergy /
+// delegated-in pools are drawn from).
 func isContractDeployMsg(msgs []sdk.Msg) bool {
 	for _, m := range msgs {
 		switch sdk.MsgTypeURL(m) {
 		case "/cosmwasm.wasm.v1.MsgInstantiateContract",
 			"/cosmwasm.wasm.v1.MsgInstantiateContract2",
 			"/cosmwasm.wasm.v1.MsgStoreCode":
-			return true
-		case "/ethermint.evm.v1.MsgEthereumTx":
-			// EVM deployments are recognized by To == nil. The MonoDecorator
-			// handles them outside this Cosmos chain, so reaching here
-			// means the tx was wrapped as a Cosmos msg — treat as deploy.
 			return true
 		}
 	}
