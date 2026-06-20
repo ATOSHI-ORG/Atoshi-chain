@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 
+	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
@@ -37,8 +38,34 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 	fromBefore := k.bankKeeper.GetBalance(sdkCtx, from, k.baseDenom).Amount
 	toBefore := k.bankKeeper.GetBalance(sdkCtx, to, k.baseDenom).Amount
 
-	k.ApplyBalanceChange(sdkCtx, from, fromBefore.Sub(moved))
-	k.ApplyBalanceChange(sdkCtx, to, toBefore.Add(moved))
+	// Audit Question 2 (round2): the projected post-send "eligible
+	// balance" we pass into ApplyBalanceChange must match what
+	// EligibleBalance would return AFTER this transfer commits. With
+	// Q2, EligibleBalance = bank + LockedAtos, so we add each side's
+	// current LockedAtos to the projected bank balance. A pure bank
+	// send between two users does NOT change either side's
+	// LockedAtos counter (that counter is moved only by Delegate /
+	// releaseDelegation), so reading the current value is correct.
+	//
+	// Delegate / releaseDelegation update LockedAtos BEFORE calling
+	// the bank-side send so the new counter value is already in store
+	// when the hook fires — see x/energy/keeper/delegation.go.
+	fromLocked := k.lockedAtos(sdkCtx, from)
+	toLocked := k.lockedAtos(sdkCtx, to)
+
+	k.ApplyBalanceChange(sdkCtx, from, fromBefore.Sub(moved).Add(fromLocked))
+	k.ApplyBalanceChange(sdkCtx, to, toBefore.Add(moved).Add(toLocked))
 
 	return to, nil
+}
+
+// lockedAtos returns the addr's LockedAtos counter, defaulting to
+// zero when the counter is nil (account never initialized) or the
+// account has no ATOS locked.
+func (k Keeper) lockedAtos(ctx sdk.Context, addr sdk.AccAddress) math.Int {
+	acct := k.GetEnergyAccount(ctx, addr)
+	if acct.LockedAtos.IsNil() || !acct.LockedAtos.IsPositive() {
+		return math.ZeroInt()
+	}
+	return acct.LockedAtos
 }

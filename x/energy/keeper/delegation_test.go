@@ -435,24 +435,35 @@ func TestUndelegate_PreventsConsumedEnergyReuseAcrossLoops(t *testing.T) {
 
 // Audit Issue-8 (round2) regression: Delegate must NOT clobber the
 // energy-account writes performed by the SendRestriction hook during
-// the bank transfer.
+// the bank transfer. Combined with audit Q2 (round2), which makes
+// EligibleBalance count bank + LockedAtos, the per-tx accounting
+// must satisfy:
 //
-// Setup: bank balance = 60k ATOS, TxEnergyAccrued inflated to 200k
-// (well above the natural cap for 60k balance). Delegate 50k energy
-// locks 30k ATOS — bank drops to 30k. SendRestriction fires
-// ApplyBalanceChange(delegator, 30k_eligible), which:
-//   - sets LastBalanceSnapshot = 30k ATOS,
-//   - cap-downs TxEnergyAccrued from 200k to TxEnergyCapacity(30k) = 50k
-//     (floored at DelegatedOut, which is 50k after the increment).
+//   1. After Delegate, the snapshot equals (post-send bank balance)
+//      + (new LockedAtos counter) — the user's TOTAL stake, not
+//      just liquid bank.
+//   2. The hook's cap-down on TxEnergyAccrued sees the SUM, not the
+//      bank-only value. With balance preservation, cap-down only
+//      shaves above the natural ceiling for the user's full stake.
 //
-// Pre-fix: Delegate then SetEnergyAccount(stale delAcct) — restoring
-// TxEnergyAccrued to 200k and undoing the hook's cap-down. The
-// delegator silently keeps an energy ceiling backed by ATOS they no
-// longer hold.
+// Setup: bank = 60k ATOS, TxEnergyAccrued inflated to 200k. Delegate
+// 50k energy locks 30k ATOS. After the bank send:
+//   - bank = 30k (liquid)
+//   - LockedAtos = 30k (in module account)
+//   - eligible (Q2) = 30k + 30k = 60k  (same as pre-Delegate)
+//   - newTxCap = TxEnergyCapacity(60k) = 2 × 50k = 100k
+//   - floor at DelegatedOut (50k) = max(100k, 50k) = 100k
+//   - TxEnergyAccrued cap-down 200k → 100k
 //
-// Post-fix: Delegate re-reads the account after the transfer,
-// applies the DelegatedOut/LockedAtos increments on top of the fresh
-// (hook-written) state, and persists. The hook's cap-down survives.
+// Pre-Issue-8 fix: Delegate's final SetEnergyAccount(stale delAcct)
+// restored TxEnergyAccrued to 200k — the bug Issue-8 flagged.
+// Pre-Q2 fix: even after Issue-8's re-read, eligible would equal
+// bank only (30k), forcing cap-down to 50k — penalizing the
+// delegator for locking ATOS they still effectively own.
+//
+// Post both fixes: TxEnergyAccrued cap-downs to 100k. Snapshot
+// equals 60k (full stake). The delegator is cap-neutral relative
+// to their pre-delegation TxEnergyCapacity ceiling.
 func TestDelegate_DoesNotClobberHookWrites(t *testing.T) {
 	k, ctx, bank := newKeeperForTest(t)
 	delegator := addr("delegator_______________")
@@ -464,13 +475,13 @@ func TestDelegate_DoesNotClobberHookWrites(t *testing.T) {
 	// Wire bank.SendRestriction-equivalent hook so SendCoins inside
 	// Delegate triggers the same ApplyBalanceChange path that runs in
 	// production. Without this, the fake bank moves balances silently
-	// and the bug Issue-8 fixes is invisible to the test.
+	// and neither Issue-8 nor Q2 behavior is observable.
 	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
 		_, _ = k.SendRestriction(ctx, from, to, amt)
 	}
 
 	a := k.Settle(ctx, delegator)
-	a.TxEnergyAccrued = 200_000 // intentionally above the post-lock cap
+	a.TxEnergyAccrued = 200_000 // intentionally above the natural cap
 	k.SetEnergyAccount(ctx, a)
 
 	_, _, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
@@ -478,10 +489,10 @@ func TestDelegate_DoesNotClobberHookWrites(t *testing.T) {
 
 	post := k.GetEnergyAccount(ctx, delegator)
 	require.EqualValues(t, 50_000, post.DelegatedOut)
-	require.EqualValues(t, 50_000, post.TxEnergyAccrued,
-		"audit Issue-8: hook's cap-down to 50k must survive — pre-fix code restored 200k from the stale delAcct copy")
-	require.True(t, post.LastBalanceSnapshot.Equal(math.NewIntWithDecimal(30_000, 18)),
-		"snapshot must reflect post-send eligible balance written by the hook")
+	require.EqualValues(t, 100_000, post.TxEnergyAccrued,
+		"audit Q2 + Issue-8: cap-down respects bank+LockedAtos=60k → cap=100k; pre-fix would have shown 50k (bank only) or 200k (stale clobber)")
+	require.True(t, post.LastBalanceSnapshot.Equal(math.NewIntWithDecimal(60_000, 18)),
+		"audit Q2: snapshot reflects bank (30k) + LockedAtos (30k) = 60k total stake")
 }
 
 // Audit Issue-8 (round2) companion: when a second Delegate runs on
@@ -516,4 +527,91 @@ func TestDelegate_TwoBackToBackKeepsLockedAtosConsistent(t *testing.T) {
 	require.True(t, post.LockedAtos.Equal(math.NewIntWithDecimal(60_000, 18)),
 		"audit Issue-8: cumulative LockedAtos must equal 60k after two 30k locks; stale-copy bug would mis-sum")
 	require.EqualValues(t, 100_000, post.DelegatedOut)
+}
+
+// Audit Question 2 (round2) regression: EligibleBalance must include
+// LockedAtos. After Delegate, the delegator's TxEnergyCapacity must
+// be the SAME as before the delegation — the delegator's total stake
+// (liquid bank + locked module account) hasn't changed, only its
+// distribution. This guards against the pre-fix "double penalty"
+// where Delegate shrank both DelegatedOut (correctly preventing
+// double-spend) AND eligible balance (incorrectly penalizing the
+// holder for the existence of locked ATOS).
+func TestDelegate_IsCapNeutralOnEligibleBalance(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	bank.balances[delegator.String()] = math.NewIntWithDecimal(90_000, 18)
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
+		_, _ = k.SendRestriction(ctx, from, to, amt)
+	}
+
+	a := k.Settle(ctx, delegator)
+	a.TxEnergyAccrued = 50_000
+	k.SetEnergyAccount(ctx, a)
+
+	preEligible := k.EligibleBalance(ctx, delegator)
+	require.True(t, preEligible.Equal(math.NewIntWithDecimal(90_000, 18)),
+		"pre-Delegate eligible = bank balance only (LockedAtos=0)")
+
+	_, _, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+
+	postEligible := k.EligibleBalance(ctx, delegator)
+	require.True(t, postEligible.Equal(preEligible),
+		"audit Q2: Delegate is cap-neutral on EligibleBalance — got pre=%s post=%s",
+		preEligible, postEligible)
+
+	// Cross-check the components: bank dropped by 30k, LockedAtos rose
+	// by 30k, sum unchanged.
+	bankAmt := bank.GetBalance(ctx, delegator, "aatos").Amount
+	require.True(t, bankAmt.Equal(math.NewIntWithDecimal(60_000, 18)),
+		"bank balance must drop by lockedATOS=30k")
+	acct := k.GetEnergyAccount(ctx, delegator)
+	require.True(t, acct.LockedAtos.Equal(math.NewIntWithDecimal(30_000, 18)),
+		"LockedAtos counter must rise by 30k")
+	require.True(t, bankAmt.Add(acct.LockedAtos).Equal(preEligible),
+		"bank + LockedAtos must reconstitute the pre-Delegate eligible total")
+}
+
+// Audit Q2 round-trip: Delegate followed by Undelegate must restore
+// the original EligibleBalance bit-for-bit. The bank refund returns
+// the locked ATOS to liquid; the LockedAtos counter decrements to
+// zero; sum unchanged the whole way.
+func TestDelegateUndelegate_RoundTripPreservesEligibleBalance(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	bank.balances[delegator.String()] = math.NewIntWithDecimal(90_000, 18)
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
+		_, _ = k.SendRestriction(ctx, from, to, amt)
+	}
+
+	a := k.Settle(ctx, delegator)
+	a.TxEnergyAccrued = 50_000
+	k.SetEnergyAccount(ctx, a)
+
+	pre := k.EligibleBalance(ctx, delegator)
+
+	delID, _, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+	require.True(t, k.EligibleBalance(ctx, delegator).Equal(pre),
+		"eligible stable through Delegate")
+
+	require.NoError(t, k.Undelegate(ctx, delegator, delID))
+	post := k.EligibleBalance(ctx, delegator)
+	require.True(t, post.Equal(pre),
+		"audit Q2: eligible bit-for-bit restored after Delegate/Undelegate round trip — pre=%s post=%s",
+		pre, post)
+
+	// LockedAtos returns to zero, bank returns to 90k.
+	acct := k.GetEnergyAccount(ctx, delegator)
+	require.True(t, acct.LockedAtos.IsZero(),
+		"LockedAtos counter returns to zero after full undelegate")
+	require.True(t, bank.GetBalance(ctx, delegator, "aatos").Amount.Equal(math.NewIntWithDecimal(90_000, 18)),
+		"bank balance fully restored")
 }

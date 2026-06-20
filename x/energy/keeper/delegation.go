@@ -82,36 +82,46 @@ func (k Keeper) Delegate(
 		return 0, math.ZeroInt(), types.ErrInsufficientBalance
 	}
 
-	// Move the locked ATOS to the module account.
+	// Audit Question 2 (round2) — pair with Issue-8 (round2):
+	// Update the delegator counters (DelegatedOut, LockedAtos) BEFORE
+	// the bank send. Two invariants ride on this ordering:
+	//
+	//  1. Q2: EligibleBalance now equals bank + LockedAtos. When the
+	//     bank send fires SendRestriction → ApplyBalanceChange, the
+	//     hook reads LockedAtos from the store via GetEnergyAccount
+	//     to compute the projected post-send eligible. If LockedAtos
+	//     is still the OLD value at that moment, the projected
+	//     eligible = bank_post + LockedAtos_old, which is LOWER than
+	//     the user's actual post-delegate stake by `lockedATOS` —
+	//     causing an unnecessary cap-down on TxEnergyAccrued.
+	//     Pre-writing LockedAtos makes Delegate cap-neutral, matching
+	//     Q2's intent.
+	//
+	//  2. Issue-8: the prior fix re-read the account AFTER the bank
+	//     send to avoid clobbering hook writes. That workaround is
+	//     no longer needed: we don't write the delegator account
+	//     after the send at all, so there's nothing to clobber. The
+	//     hook is the sole writer of LastBalanceSnapshot /
+	//     LastUpdatedTime / TxEnergyAccrued cap-down on this code
+	//     path; our pre-send write only touches counters the hook
+	//     ignores (DelegatedOut, LockedAtos).
+	//
+	// Atomicity: if the bank send below fails, the cosmos-sdk runTx
+	// cached store discards both this pre-send SetEnergyAccount AND
+	// the bank failure together. No partial state.
+	delAcct.DelegatedOut += amount
+	delAcct.LockedAtos = currentLocked.Add(lockedATOS)
+	k.SetEnergyAccount(ctx, delAcct)
+
+	// Move the locked ATOS to the module account. SendRestriction
+	// reads the LockedAtos we just wrote and computes a stable
+	// projected eligible (= old eligible balance, since bank dropped
+	// and LockedAtos rose by the same `lockedATOS`).
 	if err := k.bankKeeper.SendCoinsFromAccountToModule(
 		ctx, delegator, types.LockedEnergyPoolName, sdk.NewCoins(sdk.NewCoin(k.baseDenom, lockedATOS)),
 	); err != nil {
 		return 0, math.ZeroInt(), err
 	}
-
-	// Audit Issue-8 (round2): re-read the delegator account AFTER the
-	// bank transfer. The transfer fires bank.SendRestriction, which
-	// calls ApplyBalanceChange on the delegator and writes a fresh
-	// energy account to the KV store with the post-send
-	// LastBalanceSnapshot and possibly a cap-down'd TxEnergyAccrued
-	// (the bank balance just dropped by `lockedATOS`).
-	//
-	// The `delAcct` we read before the transfer is now STALE. If we
-	// kept using it, the SetEnergyAccount call below would clobber the
-	// hook's writes — re-instating the pre-send snapshot and undoing
-	// any TxEnergyAccrued cap-down. That is the "stale updates" leak
-	// the auditor flagged: the post-condition of Delegate would
-	// silently restore the pre-lock energy ceiling, inflating the
-	// delegator's effective capacity.
-	//
-	// Pull the fresh state, layer our INCREMENTAL changes (DelegatedOut
-	// + LockedAtos) on top. LastBalanceSnapshot / LastUpdatedTime /
-	// TxEnergyAccrued / DeployEnergyAccrued must remain whatever the
-	// hook just set — do not overwrite them.
-	delAcct = k.GetEnergyAccount(ctx, delegator)
-	delAcct.DelegatedOut += amount
-	delAcct.LockedAtos = currentLocked.Add(lockedATOS)
-	k.SetEnergyAccount(ctx, delAcct)
 
 	// Settle delegatee then bump their usable inbound. The delegatee
 	// is not on the bank-transfer path so SendRestriction did not touch
@@ -172,16 +182,19 @@ func (k Keeper) releaseDelegation(ctx sdk.Context, d types.EnergyDelegation, eve
 		remaining = d.Amount - d.Used
 	}
 
-	// Refund locked ATOS to delegator.
-	if d.LockedAtos.IsPositive() {
-		if err := k.bankKeeper.SendCoinsFromModuleToAccount(
-			ctx, types.LockedEnergyPoolName, delegator, sdk.NewCoins(sdk.NewCoin(k.baseDenom, d.LockedAtos)),
-		); err != nil {
-			return err
-		}
-	}
-
-	// Update delegator account.
+	// Audit Question 2 (round2): apply delegator counter decrements
+	// BEFORE refunding the bank. Mirrors the Delegate path — when the
+	// bank refund fires SendRestriction → ApplyBalanceChange, the
+	// hook reads LockedAtos from store via GetEnergyAccount to
+	// compute the projected post-receive eligible balance. If
+	// LockedAtos is still the pre-release value at that moment, the
+	// projected eligible = bank_post + LockedAtos_old, which DOUBLE-
+	// COUNTS the recovered ATOS (it is in both the new bank balance
+	// AND the not-yet-decremented LockedAtos counter). Pre-writing
+	// the decrement keeps the projected eligible identical across the
+	// release: same total stake, just shifted from "locked" to
+	// "liquid" buckets. TxEnergyCapacity does not move; no spurious
+	// cap-down or cap-up.
 	delAcct := k.Settle(ctx, delegator)
 	// Audit Issue-2 (round2): when a delegation is released, the energy
 	// that the delegatee already CONSUMED (d.Used) must be deducted from
@@ -225,8 +238,19 @@ func (k Keeper) releaseDelegation(ctx sdk.Context, d types.EnergyDelegation, eve
 	} else {
 		delAcct.LockedAtos = math.ZeroInt()
 	}
-	delAcct.LastBalanceSnapshot = k.EligibleBalance(ctx, delegator)
 	k.SetEnergyAccount(ctx, delAcct)
+
+	// Refund locked ATOS to delegator. SendRestriction reads the
+	// just-written (decremented) LockedAtos and computes a stable
+	// projected eligible — same total stake as before the release,
+	// just shifted from locked to liquid.
+	if d.LockedAtos.IsPositive() {
+		if err := k.bankKeeper.SendCoinsFromModuleToAccount(
+			ctx, types.LockedEnergyPoolName, delegator, sdk.NewCoins(sdk.NewCoin(k.baseDenom, d.LockedAtos)),
+		); err != nil {
+			return err
+		}
+	}
 
 	// Update delegatee account: shrink DelegatedInUsable by the unused part.
 	deeAcct := k.Settle(ctx, delegatee)
