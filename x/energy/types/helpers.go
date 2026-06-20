@@ -203,7 +203,12 @@ func (msg MsgDelegateEnergy) ValidateBasic() error {
 	if msg.Amount == 0 {
 		return ErrInvalidAmount
 	}
-	if msg.DurationSeconds <= 0 {
+	// DurationSeconds == 0 means "use protocol default"
+	// (DefaultDelegationDurationSeconds, applied by the msg server).
+	// Only NEGATIVE values are rejected here — they have no sensible
+	// interpretation. The server normalizes 0 → default before
+	// reaching the keeper's Delegate, which still requires > 0.
+	if msg.DurationSeconds < 0 {
 		return ErrInvalidDuration
 	}
 	return nil
