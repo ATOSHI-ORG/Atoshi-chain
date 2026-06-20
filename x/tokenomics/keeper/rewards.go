@@ -31,6 +31,37 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 		currentReward = remaining
 	}
 
+	// Audit Issue-18 (round2): check totalBonded BEFORE any state
+	// mutation. The pre-fix code transferred the immediate share to
+	// the fee collector and updated releaseState IN MEMORY, then
+	// looked up totalBonded; if it was zero (genesis bootstrap before
+	// any validator bonds, or a degenerate scenario where all
+	// validators got unbonded), the function returned at line 54
+	// without calling SetBlockRewardState/SetReleaseState. Effect:
+	//   - bank moved aatos from MinerPool to FeeCollector (committed),
+	//   - releaseState.TotalImmediateDistributed never persisted,
+	//   - blockRewardState.TotalDistributed never persisted.
+	// Next block, currentReward repeats the SAME amount (TotalDistributed
+	// hasn't advanced), bank gets another chunk of coins, and the
+	// tokenomics accounting silently drifts further from bank reality.
+	// Over enough blocks the immediate share would over-distribute
+	// without the supply cap (MinerPoolTotal) catching up.
+	//
+	// Moving the check up front means: if no validator can receive
+	// locked rewards, we skip the whole block — no bank send, no
+	// releaseState bump, no drift. This is a safe no-op for chains
+	// with no bonded validators (which shouldn't be producing blocks
+	// at all under normal CometBFT consensus, but the audit's concern
+	// is the genesis bootstrap window where the first block may be
+	// processed before any validator bond is recorded).
+	totalBonded, err := k.stakingKeeper.TotalBondedTokens(ctx)
+	if err != nil {
+		return err
+	}
+	if totalBonded.IsZero() {
+		return nil
+	}
+
 	immediate := currentReward.MulRaw(int64(params.ImmediateRewardBps)).QuoRaw(10000)
 	locked := currentReward.Sub(immediate)
 
@@ -44,15 +75,6 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 	// Track immediate rewards globally as circulating supply.
 	releaseState.TotalImmediateDistributed = releaseState.TotalImmediateDistributed.Add(immediate)
 	releaseState.TotalMinerLocked = releaseState.TotalMinerLocked.Add(locked)
-
-	// Allocate locked rewards to validators by voting power. These rewards do NOT flow to delegators.
-	totalBonded, err := k.stakingKeeper.TotalBondedTokens(ctx)
-	if err != nil {
-		return err
-	}
-	if totalBonded.IsZero() {
-		return nil
-	}
 
 	remainingLocked := locked
 	index := int64(0)

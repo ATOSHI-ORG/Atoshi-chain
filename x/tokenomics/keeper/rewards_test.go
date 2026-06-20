@@ -379,3 +379,62 @@ func TestEndBlocker_ZeroTimestampIsTreatedAsStale(t *testing.T) {
 	got := k.GetReleaseState(ctx)
 	require.EqualValues(t, 0, got.ConsecutiveDays)
 }
+
+// Audit Issue-18 (round2) regression: when totalBonded is zero,
+// BeginBlocker must NOT mutate any state. Pre-fix the function
+// transferred the immediate share from MinerPool to FeeCollector and
+// updated releaseState IN MEMORY before checking totalBonded, then
+// returned early without persisting the in-memory updates. Result:
+//   - bank state: FeeCollector got the aatos (committed),
+//   - releaseState.TotalImmediateDistributed: not persisted,
+//   - blockRewardState.TotalDistributed: not persisted.
+// On the next block, the same currentReward would be computed again
+// (TotalDistributed unchanged) and another chunk would land in the
+// FeeCollector — silently over-distributing while tokenomics
+// accounting diverged from bank reality.
+//
+// Post-fix: the totalBonded zero-check runs BEFORE any bank send or
+// in-memory state mutation. With zero validators, BeginBlocker is a
+// clean no-op: bank balances and persisted state both unchanged.
+func TestBeginBlocker_NoStateChangeWhenNoBondedValidators(t *testing.T) {
+	bk := newTestBankKeeper()
+	minerPoolAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName)
+	feeCollectorAddr := authtypes.NewModuleAddress(authtypes.FeeCollectorName)
+	bk.balances[minerPoolAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewIntWithDecimal(1, 20)))
+
+	// Zero bonded validators — the audit's failing scenario.
+	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{totalBonded: math.ZeroInt()}, testOracleKeeper{})
+
+	params := k.GetParams(ctx)
+	params.InitialBlockReward = math.NewInt(100)
+	params.HalvingIntervalBlocks = 100
+	require.NoError(t, k.SetParams(ctx, params))
+
+	preBlockRewardState := k.GetBlockRewardState(ctx)
+	preReleaseState := k.GetReleaseState(ctx)
+	preMinerPool := bk.balances[minerPoolAddr.String()].AmountOf(atoshitypes.BaseDenom)
+	preFeeCollector := bk.balances[feeCollectorAddr.String()].AmountOf(atoshitypes.BaseDenom)
+
+	require.NoError(t, k.BeginBlocker(ctx.WithBlockHeight(1)))
+
+	postBlockRewardState := k.GetBlockRewardState(ctx)
+	postReleaseState := k.GetReleaseState(ctx)
+	postMinerPool := bk.balances[minerPoolAddr.String()].AmountOf(atoshitypes.BaseDenom)
+	postFeeCollector := bk.balances[feeCollectorAddr.String()].AmountOf(atoshitypes.BaseDenom)
+
+	// Bank state: NO immediate transfer should have happened.
+	require.True(t, preMinerPool.Equal(postMinerPool),
+		"audit Issue-18: MinerPool must NOT lose coins when no validators are bonded; pre=%s post=%s",
+		preMinerPool, postMinerPool)
+	require.True(t, preFeeCollector.Equal(postFeeCollector),
+		"audit Issue-18: FeeCollector must NOT receive immediate share when no validators are bonded; pre=%s post=%s",
+		preFeeCollector, postFeeCollector)
+
+	// Tokenomics accounting: counters must NOT advance.
+	require.True(t, preBlockRewardState.TotalDistributed.Equal(postBlockRewardState.TotalDistributed),
+		"audit Issue-18: TotalDistributed must not move")
+	require.True(t, preReleaseState.TotalImmediateDistributed.Equal(postReleaseState.TotalImmediateDistributed),
+		"audit Issue-18: TotalImmediateDistributed must not move")
+	require.True(t, preReleaseState.TotalMinerLocked.Equal(postReleaseState.TotalMinerLocked),
+		"audit Issue-18: TotalMinerLocked must not move")
+}
