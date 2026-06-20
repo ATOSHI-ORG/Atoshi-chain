@@ -16,8 +16,9 @@ import (
 //  1. elapsed = now - last_updated_time
 //  2. Refill TxEnergyAccrued at the rate implied by `last_balance_snapshot`
 //     up to TxEnergyCapacity(last_balance_snapshot).
-//  3. Refill DeployEnergyAccrued at DeployRecoverPerSecond(last_balance_snapshot)
-//     up to DeployEnergyCapacity (constant).
+//  3. Refill DeployEnergyAccrued via deployAddOverElapsed
+//     (multiplies before dividing for sub-second precision) up to
+//     DeployEnergyCapacity (constant).
 //  4. last_updated_time := now.
 //
 // We deliberately do NOT touch last_balance_snapshot here. Balance changes
@@ -55,9 +56,11 @@ func (k Keeper) Settle(ctx sdk.Context, addr sdk.AccAddress) types.EnergyAccount
 	}
 
 	// --- DeployEnergy refill ---
-	// Same rationale: DeployRecoverPerSecond rounds to 0 below ~5x
-	// threshold. Recompute as (units * cap * elapsed / (days * 86400))
-	// to keep precision.
+	// Same rationale as TxEnergy: a per-second rate rounds to 0
+	// below ~5x threshold. Compute as (units * cap * elapsed) / (days
+	// * 86400) to keep precision; the saturatingMul calls inside
+	// deployAddOverElapsed guard against uint64 overflow on
+	// pathologically retuned params.
 	if acct.DeployEnergyAccrued < params.DeployEnergyCapacity {
 		add := deployAddOverElapsed(acct.LastBalanceSnapshot, elapsed, params)
 		if add > 0 {

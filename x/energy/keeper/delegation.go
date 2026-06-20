@@ -40,10 +40,13 @@ func (k Keeper) Delegate(
 	if params.TxEnergyPerThreshold == 0 || params.TxEnergyHoldingThreshold.IsZero() {
 		return 0, math.ZeroInt(), fmt.Errorf("invalid params")
 	}
+	// Audit Recommendation-3 (round2): the previous code had a defensive
+	// `if thresholdUnits == 0 { thresholdUnits = 1 }` block here. It
+	// was unreachable: ceil division (amount + per - 1) / per with
+	// amount > 0 (guarded by ErrInvalidAmount at function entry) and
+	// per > 0 (guarded by the invalid params check immediately above)
+	// always yields >= 1. Removed.
 	thresholdUnits := (amount + params.TxEnergyPerThreshold - 1) / params.TxEnergyPerThreshold
-	if thresholdUnits == 0 {
-		thresholdUnits = 1
-	}
 	lockedATOS := params.TxEnergyHoldingThreshold.MulRaw(int64(thresholdUnits))
 
 	// Settle delegator first so their TxEnergyAccrued reflects the moment.
