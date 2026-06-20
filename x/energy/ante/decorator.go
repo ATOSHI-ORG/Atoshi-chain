@@ -242,13 +242,39 @@ func (d EnergyDeductDecorator) AnteHandle(
 }
 
 // computeShortfallFee returns the ATOS coins that should be charged for
-// `shortfallGas` gas units. We use the gas price the user offered in
-// the tx fee (pro-rated), bounded by params.InsufficientGasPrice.
+// `shortfallGas` gas units. We pro-rate the user's offered fee over
+// the shortfall portion of gas, with a hard floor at
+// params.InsufficientGasPrice.
 //
-// The user's offered price = tx_fee_amount / gas_limit. We charge:
-//   max(min(offeredPrice, params.gas_price), 0) * shortfallGas
-// per coin in the fee, denom by denom. In practice the fee is in
-// `aatos` only, so this is straightforward.
+// Audit Question 6 (round2): the prior implementation used integer
+// arithmetic without the floor on the non-zero-offered branch. A user
+// could submit fee = 1 aatos against gasLimit = 200_000:
+//   num = 1 × shortfallGas
+//   amt = num / 200_000 = 0   (integer division truncation)
+// chargeAtos.IsZero() then short-circuited the ante to next(), letting
+// the user pay literally one aatos in fee while consuming the chain's
+// gas for an arbitrary tx — a complete shortfall fee evasion.
+//
+// The zero-offered branch already floored at InsufficientGasPrice, but
+// a 1-aatos offer dodged that branch. The fix unifies both paths
+// through a single gas-price floor:
+//
+//   offeredPerGas := offered / gasLimit  (Dec to avoid truncation)
+//   if offeredPerGas < InsufficientGasPrice:
+//       offeredPerGas = InsufficientGasPrice
+//   amt := ceil(offeredPerGas × shortfallGas)
+//
+// Properties:
+//   - A user offering >= InsufficientGasPrice * gasLimit pays the
+//     pro-rated portion — same as the old code's intended path.
+//   - A user offering < InsufficientGasPrice * gasLimit (including 0,
+//     including the 1-aatos evasion shape) pays at least
+//     InsufficientGasPrice × shortfallGas — minimum economic cost.
+//   - shortfallGas == 0 or gasLimit == 0 still short-circuits to
+//     empty coins (no charge — Consume covered all gas).
+//   - If InsufficientGasPrice is unset (nil or non-positive) the
+//     floor disappears; the chain hasn't configured a minimum, so
+//     we charge whatever pro-rate yields (or nothing if also zero).
 func computeShortfallFee(
 	k keeper.Keeper, ctx sdk.Context, shortfallGas uint64, fee sdk.Coins, gasLimit uint64,
 ) sdk.Coins {
@@ -257,22 +283,37 @@ func computeShortfallFee(
 	}
 	denom := k.BaseDenom()
 	offered := fee.AmountOf(denom)
-	if offered.IsZero() {
-		// User offered no fee at all → fall back to the param gas price
-		// so we still collect SOMETHING (the alternative is letting
-		// users dodge the shortfall by setting tx.fee = 0).
-		params := k.GetParams(ctx)
-		if params.InsufficientGasPrice.IsNil() || !params.InsufficientGasPrice.IsPositive() {
-			return sdk.NewCoins()
-		}
-		amt := params.InsufficientGasPrice.MulInt64(int64(shortfallGas)).Ceil().TruncateInt()
-		return sdk.NewCoins(sdk.NewCoin(denom, amt))
+	params := k.GetParams(ctx)
+
+	// Step 1: compute the user's offered per-gas rate. Use LegacyDec
+	// so truncation doesn't happen here (integer Quo would lose
+	// fractional precision below 1 aatos/gas, and that fraction
+	// matters when shortfallGas < gasLimit).
+	gasLimitDec := math.LegacyNewDec(int64(gasLimit))
+	offeredPerGas := math.LegacyZeroDec()
+	if offered.IsPositive() {
+		offeredPerGas = math.LegacyNewDecFromInt(offered).Quo(gasLimitDec)
 	}
-	// Pro-rate: charge offered_fee * shortfallGas / gasLimit.
-	num := offered.Mul(math.NewIntFromUint64(shortfallGas))
-	amt := num.Quo(math.NewIntFromUint64(gasLimit))
-	if amt.IsNegative() {
-		amt = math.ZeroInt()
+
+	// Step 2: floor at InsufficientGasPrice. This is the single
+	// chokepoint that prevents the 1-aatos evasion the audit flagged.
+	if !params.InsufficientGasPrice.IsNil() && params.InsufficientGasPrice.IsPositive() &&
+		offeredPerGas.LT(params.InsufficientGasPrice) {
+		offeredPerGas = params.InsufficientGasPrice
+	}
+
+	// Step 3: if there is no rate at all (offered=0 AND
+	// InsufficientGasPrice unset), there is nothing to charge.
+	if !offeredPerGas.IsPositive() {
+		return sdk.NewCoins()
+	}
+
+	// Step 4: chargeAtos = ceil(rate × shortfallGas). Ceil rounds the
+	// fractional remainder UP so a sub-unit per-gas rate still
+	// collects something rather than silently truncating.
+	amt := offeredPerGas.MulInt64(int64(shortfallGas)).Ceil().TruncateInt()
+	if !amt.IsPositive() {
+		return sdk.NewCoins()
 	}
 	return sdk.NewCoins(sdk.NewCoin(denom, amt))
 }
