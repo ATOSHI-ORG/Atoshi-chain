@@ -188,7 +188,8 @@ func TestReleaseMinerLockedRewards(t *testing.T) {
 	require.NoError(t, k.SetMinerLockedBalance(ctx, tokenomicstypes.MinerLockedBalance{ValidatorAddress: "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", LockedAccrued: math.NewInt(100)}))
 	require.NoError(t, k.SetMinerLockedBalance(ctx, tokenomicstypes.MinerLockedBalance{ValidatorAddress: "atoshivaloper1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", LockedAccrued: math.NewInt(300)}))
 
-	released := k.ReleaseMinerLockedRewards(ctx, math.NewInt(200))
+	released, err := k.ReleaseMinerLockedRewards(ctx, math.NewInt(200))
+	require.NoError(t, err)
 	require.Equal(t, math.NewInt(200), released)
 
 	balA := k.GetMinerLockedBalance(ctx, "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

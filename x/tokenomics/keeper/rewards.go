@@ -76,19 +76,27 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 	releaseState.TotalImmediateDistributed = releaseState.TotalImmediateDistributed.Add(immediate)
 	releaseState.TotalMinerLocked = releaseState.TotalMinerLocked.Add(locked)
 
+	// Audit Recommendation-2 (round2): a block handler must NOT panic
+	// on a recoverable failure. cosmos-sdk runs BeginBlocker /
+	// EndBlocker as part of every block's FinalizeBlock; a panic here
+	// propagates up to baseapp and halts consensus across every node
+	// hitting the same condition. The prior code panicked on
+	// SetMinerLockedBalance errors — serialization issues, store
+	// problems, schema mismatches — any of which would freeze the
+	// chain until a coordinated binary fix and migration. We capture
+	// the error into a shadowed variable and break out of the
+	// validator iterator instead, returning it from BeginBlocker so
+	// the FinalizeBlock pipeline can record and surface it as a
+	// regular block error.
 	remainingLocked := locked
-	index := int64(0)
+	var setErr error
 	err = k.stakingKeeper.IterateBondedValidatorsByPower(ctx, func(_ int64, validator stakingtypes.ValidatorI) bool {
 		valPower := validator.GetTokens()
 		if !valPower.IsPositive() {
-			index++
 			return false
 		}
 
 		share := locked.Mul(valPower).Quo(totalBonded)
-		if index == 0 {
-			// first validator doesn't get special treatment; keep deterministic subtraction below
-		}
 		if share.GT(remainingLocked) {
 			share = remainingLocked
 		}
@@ -96,15 +104,18 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 			bal := k.GetMinerLockedBalance(ctx, validator.GetOperator())
 			bal.LockedAccrued = bal.LockedAccrued.Add(share)
 			if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-				panic(err)
+				setErr = fmt.Errorf("set miner locked balance %q: %w", validator.GetOperator(), err)
+				return true // stop the iterator
 			}
 			remainingLocked = remainingLocked.Sub(share)
 		}
-		index++
 		return false
 	})
 	if err != nil {
 		return err
+	}
+	if setErr != nil {
+		return setErr
 	}
 
 	blockRewardState.TotalDistributed = blockRewardState.TotalDistributed.Add(currentReward)
@@ -219,7 +230,10 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	minerTarget := releaseQuota.MulRaw(int64(params.MinerReleaseShareBps)).QuoRaw(10000)
 	projectTarget := releaseQuota.Sub(minerTarget)
 
-	actualMinerRelease := k.ReleaseMinerLockedRewards(ctx, minerTarget)
+	actualMinerRelease, err := k.ReleaseMinerLockedRewards(ctx, minerTarget)
+	if err != nil {
+		return err
+	}
 	actualProjectRelease := projectTarget
 	if actualMinerRelease.LT(minerTarget) {
 		actualProjectRelease = actualProjectRelease.Add(minerTarget.Sub(actualMinerRelease))
@@ -253,10 +267,17 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	return nil
 }
 
-// ReleaseMinerLockedRewards distributes newly unlocked miner rewards proportionally to existing locked balances.
-func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) math.Int {
+// ReleaseMinerLockedRewards distributes newly unlocked miner rewards
+// proportionally to existing locked balances.
+//
+// Audit Recommendation-2 (round2): return any SetMinerLockedBalance
+// error to the caller instead of panicking. The caller (TriggerRelease
+// → EndBlocker) already propagates errors up the FinalizeBlock chain,
+// so a failure here becomes a regular block error rather than a chain
+// halt.
+func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) (math.Int, error) {
 	if !target.IsPositive() {
-		return math.ZeroInt()
+		return math.ZeroInt(), nil
 	}
 
 	totalLockedRemaining := math.ZeroInt()
@@ -271,7 +292,7 @@ func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) math
 	})
 
 	if !totalLockedRemaining.IsPositive() {
-		return math.ZeroInt()
+		return math.ZeroInt(), nil
 	}
 
 	actual := target
@@ -292,13 +313,13 @@ func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) math
 		if share.IsPositive() {
 			bal.LockedClaimable = bal.LockedClaimable.Add(share)
 			if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-				panic(err)
+				return math.ZeroInt(), fmt.Errorf("set miner locked balance %q: %w", bal.ValidatorAddress, err)
 			}
 			remainingToAssign = remainingToAssign.Sub(share)
 		}
 	}
 
-	return actual.Sub(remainingToAssign)
+	return actual.Sub(remainingToAssign), nil
 }
 
 // GetCirculatingSupply = migration pool total + immediate miner rewards + unlocked miner rewards + unlocked project rewards.
