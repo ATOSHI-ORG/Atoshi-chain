@@ -30,6 +30,27 @@ func NewEnergyRefundDecorator(ek keeper.Keeper) EnergyRefundDecorator {
 func (d EnergyRefundDecorator) PostHandle(
 	ctx sdk.Context, tx sdk.Tx, simulate bool, success bool, next sdk.PostHandler,
 ) (sdk.Context, error) {
+	// Audit Issue-1 (round2): Reaching PostHandler at all means runMsgs
+	// did NOT error — the cosmos-sdk BaseApp only invokes the
+	// post-handler on the success branch. So regardless of which early
+	// return we take below (no reservation stashed, fully-subsidized,
+	// gas_used >= gas_limit, etc.), the AnteHandler's pending-
+	// reservation marker MUST be deleted here. If we leave the marker,
+	// the EndBlocker sweep will incorrectly treat this successful tx
+	// as a failed one and refund the full reservation — silently
+	// gifting the user back the energy they actually consumed.
+	//
+	// `defer` covers every return path; the deletion is committed iff
+	// PostHandle's state changes commit, which itself only happens on
+	// successful tx finalization. Marker write was committed by ante
+	// (so it survives if a later decorator errors out), but in that
+	// case the EndBlocker treatment is still correct.
+	defer func() {
+		if txHash := txHashFromCtx(ctx); len(txHash) > 0 {
+			d.energyKeeper.DeletePendingReservation(ctx, txHash)
+		}
+	}()
+
 	// Even on tx failure we still refund — the energy was reserved
 	// optimistically; failed txs that did less work shouldn't penalize
 	// the user.

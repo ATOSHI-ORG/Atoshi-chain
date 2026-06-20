@@ -12,6 +12,7 @@ package ante
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 
 	"cosmossdk.io/math"
@@ -23,6 +24,26 @@ import (
 
 	"github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
 )
+
+// txHashFromCtx returns the sha256 hash of the raw tx bytes carried in
+// the context, matching the canonical Cosmos tx-hash format used by
+// CometBFT (tmhash = sha256 truncated to the first 20 bytes — we keep
+// the full 32-byte digest here because the KV key only needs
+// collision-resistance, not interoperability with CometBFT's lookup).
+//
+// Returns nil when ctx.TxBytes() is empty (Simulate path, or in tests
+// that synthesize a ctx without going through BaseApp); callers MUST
+// treat that as "no marker, skip the audit Issue-1 pending-reservation
+// write" because two distinct simulated txs could otherwise collide on
+// an empty key.
+func txHashFromCtx(ctx sdk.Context) []byte {
+	bz := ctx.TxBytes()
+	if len(bz) == 0 {
+		return nil
+	}
+	sum := sha256.Sum256(bz)
+	return sum[:]
+}
 
 // FeegrantKeeper matches the SDK x/auth/ante.FeegrantKeeper interface
 // exactly so we can be passed the same instance.
@@ -142,6 +163,23 @@ func (d EnergyDeductDecorator) AnteHandle(
 	// Stash reserved-energy info for the PostHandler refund pass.
 	ctx = ctx.WithValue(CtxKeyEnergyReserved, consumed)
 	ctx = ctx.WithValue(CtxKeyEnergySigner, deductFrom)
+
+	// Audit Issue-1 (round2): persist a pending-reservation marker. The
+	// AnteHandler's writes (including the energy deduction inside
+	// Consume()) commit before runMsgs executes. If runMsgs returns an
+	// error, the cosmos-sdk BaseApp discards the msg-context state and
+	// does NOT invoke the PostHandler — so the refund call scheduled in
+	// post.go never runs, and the user's deducted energy is permanently
+	// lost. We side-step this by writing a marker here (in ante state,
+	// which IS committed) keyed by tx hash; the PostHandler deletes it
+	// on success, and EndBlocker refunds any leftover markers as
+	// failed-tx compensations. CheckTx and Simulate paths roll back
+	// before commit so marker writes there are harmless.
+	if !consumed.Free && !simulate {
+		if txHash := txHashFromCtx(ctx); len(txHash) > 0 {
+			d.energyKeeper.SetPendingReservation(ctx, txHash, deductFrom, gasLimit, consumed)
+		}
+	}
 
 	// Fully subsidized → no fee at all. Set the priority and return.
 	if consumed.Free {
