@@ -163,6 +163,38 @@ func (k Keeper) releaseDelegation(ctx sdk.Context, d types.EnergyDelegation, eve
 
 	// Update delegator account.
 	delAcct := k.Settle(ctx, delegator)
+	// Audit Issue-2 (round2): when a delegation is released, the energy
+	// that the delegatee already CONSUMED (d.Used) must be deducted from
+	// the delegator's TxEnergyAccrued.
+	//
+	// The pre-fix code only shrank DelegatedOut by d.Amount, leaving
+	// TxEnergyAccrued untouched. But Consume() in consume.go computes
+	// ownAvail = TxEnergyAccrued - DelegatedOut. Pre-undelegate that
+	// equation correctly reserves the d.Used portion: DelegatedOut
+	// covers it. Post-undelegate, DelegatedOut shrinks to zero but
+	// TxEnergyAccrued still counts d.Used as own-available — so the
+	// delegator can spend (or re-delegate) energy the delegatee has
+	// already burned. Two calls' worth of energy out of one accrued
+	// budget.
+	//
+	// A delegator that repeatedly Delegate/Undelegate against a
+	// delegatee that consumes the borrowed energy each round can
+	// multiply their effective energy budget without bound — this is
+	// the "reuse consumed energy" exploit the auditor flagged.
+	//
+	// Floor at zero defensively. Under normal operation d.Used <=
+	// d.Amount <= DelegatedOut <= TxEnergyAccrued (Consume() does not
+	// let the delegatee burn more than it was lent, and Delegate()
+	// rejects DelegatedOut > TxEnergyAccrued), so the clamp should
+	// never trigger — but a stale-state path leaking under the floor
+	// would silently re-open the same exploit, so we keep the guard.
+	if d.Used > 0 {
+		if delAcct.TxEnergyAccrued >= d.Used {
+			delAcct.TxEnergyAccrued -= d.Used
+		} else {
+			delAcct.TxEnergyAccrued = 0
+		}
+	}
 	if delAcct.DelegatedOut >= d.Amount {
 		delAcct.DelegatedOut -= d.Amount
 	} else {

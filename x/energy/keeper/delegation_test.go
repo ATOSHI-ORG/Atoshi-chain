@@ -6,6 +6,8 @@ import (
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
+
+	"github.com/atoshi-chain/atoshi/v20/x/energy/types"
 )
 
 // Audit Issue 5 regression: prior to the fix, Delegate computed
@@ -326,4 +328,107 @@ func TestRefundEnergy_LIFOSmallRefundStaysOnDelegatedPool(t *testing.T) {
 	require.True(t, ok)
 	require.EqualValues(t, 6_000-3_000, d.Used,
 		"delegation.Used must roll back by exactly the refund amount")
+}
+
+// Audit Issue-2 (round2) regression: when a delegation is undelegated,
+// the energy that the delegatee already consumed (d.Used) must be
+// deducted from the delegator's TxEnergyAccrued — otherwise the
+// delegator can Delegate / Undelegate in a loop to recycle the same
+// accrued energy budget indefinitely.
+//
+// Scenario:
+//   - Alice TxEnergyAccrued = 100k, DelegatedOut = 0.
+//   - Alice delegates 50k to Bob.
+//   - Bob burns 30k via Consume (delegation.Used = 30k).
+//   - Alice undelegates.
+//
+// Pre-fix:
+//   - Alice.DelegatedOut := 0 (correct)
+//   - Alice.TxEnergyAccrued := 100k (BUG — should be 70k)
+//   - Alice could now Delegate 100k again, even though Bob already
+//     spent 30k. Two calls' worth out of one budget.
+//
+// Post-fix:
+//   - Alice.TxEnergyAccrued := 100k - 30k = 70k
+//   - Subsequent Delegate respects the 70k cap.
+func TestUndelegate_DeductsDelegateeConsumedFromTxEnergyAccrued(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	alice := addr("alice___________________")
+	bob := addr("bob_____________________")
+
+	// Both have bank balance so Settle initializes a non-zero snapshot.
+	bank.balances[alice.String()] = math.NewIntWithDecimal(90_000, 18)
+	bank.balances[bob.String()] = math.NewIntWithDecimal(60_000, 18)
+
+	aliceAcct := k.Settle(ctx, alice)
+	aliceAcct.TxEnergyAccrued = 100_000
+	k.SetEnergyAccount(ctx, aliceAcct)
+
+	// Alice delegates 50k to Bob (locks 30k ATOS = 1 threshold block).
+	delID, _, err := k.Delegate(ctx, alice, bob, 50_000, 24*3600)
+	require.NoError(t, err)
+
+	// Bob burns 30k via Consume — drains his own (zero), then dips 30k
+	// out of the delegated-in pool. delegation.Used becomes 30k.
+	res, err := k.Consume(ctx, bob, 30_000, false,
+		[]string{"/cosmos.bank.v1beta1.MsgSend"})
+	require.NoError(t, err)
+	require.EqualValues(t, 30_000, res.DelegatedDeducted,
+		"all 30k should come from delegated-in pool")
+	d, ok := k.GetDelegation(ctx, delID)
+	require.True(t, ok)
+	require.EqualValues(t, 30_000, d.Used)
+
+	// Alice undelegates.
+	require.NoError(t, k.Undelegate(ctx, alice, delID))
+
+	postAlice := k.GetEnergyAccount(ctx, alice)
+	require.EqualValues(t, 0, postAlice.DelegatedOut,
+		"DelegatedOut must reset to zero after full undelegate")
+	require.EqualValues(t, 100_000-30_000, postAlice.TxEnergyAccrued,
+		"audit Issue-2: TxEnergyAccrued must be debited by delegation.Used (30k consumed by delegatee)")
+}
+
+// Audit Issue-2 (round2) end-to-end exploit guard: a delegator cannot
+// recycle the same accrued budget by repeatedly Delegate / Undelegate.
+// The total energy spendable across delegatees over the lifetime of
+// 100k accrued must remain bounded by 100k.
+func TestUndelegate_PreventsConsumedEnergyReuseAcrossLoops(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	alice := addr("alice___________________")
+	bob := addr("bob_____________________")
+	carol := addr("carol___________________")
+
+	bank.balances[alice.String()] = math.NewIntWithDecimal(90_000, 18)
+	bank.balances[bob.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.balances[carol.String()] = math.NewIntWithDecimal(60_000, 18)
+
+	aliceAcct := k.Settle(ctx, alice)
+	aliceAcct.TxEnergyAccrued = 100_000
+	k.SetEnergyAccount(ctx, aliceAcct)
+
+	// Round 1: delegate 50k to Bob, Bob burns 50k entirely.
+	id1, _, err := k.Delegate(ctx, alice, bob, 50_000, 24*3600)
+	require.NoError(t, err)
+	res, err := k.Consume(ctx, bob, 50_000, false,
+		[]string{"/cosmos.bank.v1beta1.MsgSend"})
+	require.NoError(t, err)
+	require.EqualValues(t, 50_000, res.DelegatedDeducted)
+	require.NoError(t, k.Undelegate(ctx, alice, id1))
+
+	// Round 2: with the bug, Alice could now delegate 100k. After the
+	// fix she should be capped at 50k because 50k of her accrued was
+	// already burned by Bob.
+	aliceMid := k.GetEnergyAccount(ctx, alice)
+	require.EqualValues(t, 50_000, aliceMid.TxEnergyAccrued,
+		"audit Issue-2: round-1 Used (50k) must reduce Alice's accrued")
+
+	// Try to delegate 80k to Carol — must fail: freeEnergy = 50k < 80k.
+	_, _, err = k.Delegate(ctx, alice, carol, 80_000, 24*3600)
+	require.ErrorIs(t, err, types.ErrInsufficientEnergy,
+		"audit Issue-2: post-fix, Alice cannot re-lend energy already burned by a prior delegatee")
+
+	// 50k should succeed (exactly the remaining budget).
+	_, _, err = k.Delegate(ctx, alice, carol, 50_000, 24*3600)
+	require.NoError(t, err)
 }
