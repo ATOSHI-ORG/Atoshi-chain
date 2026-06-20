@@ -327,11 +327,29 @@ func NewAtoshi(
 	// setup memiavl if it's enabled in config
 	baseAppOptions = memiavlstore.SetupMemIAVL(logger, homePath, appOpts, false, false, baseAppOptions)
 
-	// Setup Mempool and Proposal Handlers
+	// Setup Mempool and Proposal Handlers.
+	//
+	// Audit Issue-13 (round2): the previous configuration used
+	// mempool.NoOpMempool, whose Insert/Select methods discard tx
+	// priority entirely. Combined with the priority value
+	// EnergyDeductDecorator computes via ctx.WithPriority() in the
+	// ante chain, the priority was computed but then thrown away — so
+	// users offering higher gas prices got no preferential ordering.
+	//
+	// Switching to mempool.DefaultPriorityMempool wires the
+	// PriorityNonceMempool[int64], which:
+	//   - reads ctx.Priority() set by the ante chain,
+	//   - orders txs by (priority desc, sequence asc within a sender),
+	//   - falls back to FIFO when priorities are equal.
+	//
+	// The default proposal handler from baseapp consumes the same
+	// mempool so block proposals are constructed from the priority-
+	// ordered iterator. No further wiring is required for the priority
+	// computed in x/energy/ante/decorator.go to take effect.
 	baseAppOptions = append(baseAppOptions, func(app *baseapp.BaseApp) {
-		mempool := mempool.NoOpMempool{}
-		app.SetMempool(mempool)
-		handler := baseapp.NewDefaultProposalHandler(mempool, app)
+		mp := mempool.DefaultPriorityMempool()
+		app.SetMempool(mp)
+		handler := baseapp.NewDefaultProposalHandler(mp, app)
 		app.SetPrepareProposal(handler.PrepareProposalHandler())
 		app.SetProcessProposal(handler.ProcessProposalHandler())
 	})
