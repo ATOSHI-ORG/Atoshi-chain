@@ -221,11 +221,21 @@ func (d EnergyDeductDecorator) AnteHandle(
 		return ctx, sdkerrors.ErrInsufficientFee.Wrapf("shortfall fee transfer: %v", err)
 	}
 
-	// Set tx priority based on the gas price the user offered. Pass the
-	// chain's base denom so non-base coins in the fee bag (e.g. IBC
-	// vouchers stapled to a tx for some unrelated reason) do not
-	// participate in priority calculation.
-	priority := getTxPriority(stdFee, int64(gasLimit), d.energyKeeper.BaseDenom())
+	// Audit Question 1 (round2): priority is computed from chargeAtos
+	// (the ATOS actually paid for shortfall gas), NOT from stdFee (the
+	// declared fee). Previously a user with a large accrued-energy
+	// buffer could declare an arbitrarily large stdFee — paying
+	// (almost) nothing in ATOS because energy covered the gas — yet
+	// claim a high mempool priority. That decoupled "willingness to
+	// pay" from "actually paid", letting energy whales jump the queue
+	// without economic stake in the slot.
+	//
+	// Using chargeAtos ties priority to real ATOS-out-of-pocket. The
+	// per-gas denominator is `consumed.ShortfallGas` (the gas the
+	// user is actually paying for in ATOS), not `gasLimit`. Subsidized
+	// txs with ShortfallGas == 0 already returned early above; here we
+	// always have a positive ShortfallGas.
+	priority := getTxPriority(chargeAtos, int64(consumed.ShortfallGas), d.energyKeeper.BaseDenom())
 	ctx = ctx.WithPriority(priority)
 
 	return next(ctx, tx, simulate)

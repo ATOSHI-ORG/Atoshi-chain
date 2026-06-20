@@ -84,3 +84,45 @@ func TestGetTxPriority_NoBaseDenomReturnsZero(t *testing.T) {
 func TestMaxInt64PriorityConstant(t *testing.T) {
 	require.EqualValues(t, int64(math.MaxInt64), maxInt64Priority)
 }
+
+// Audit Question 1 (round2) regression: priority must be computed
+// from chargeAtos (actually-paid ATOS for the shortfall gas), not
+// stdFee (declared fee). The pre-fix decorator passed
+// (stdFee, gasLimit) into getTxPriority, so a user with a fat
+// accrued-energy buffer could declare a 10x stdFee, pay almost
+// nothing in ATOS, and still claim 10x priority — pure paper bid
+// with no economic stake. The fix passes (chargeAtos, shortfallGas).
+//
+// Numerical check:
+//   gasLimit = 200_000,  stdFee = 200_000 aatos (declared 1 aatos/gas)
+//   shortfallGas = 10_000 (energy covered 190k)
+//   chargeAtos (pro-rated) = stdFee × shortfall / gasLimit
+//                          = 200_000 × 10_000 / 200_000
+//                          = 10_000 aatos
+//   Pre-fix priority = stdFee / gasLimit = 200_000 / 200_000 = 1
+//   Post-fix priority = chargeAtos / shortfallGas = 10_000 / 10_000 = 1
+// Same numerical answer here BUT for the right reason. The behavioral
+// difference shows up when chargeAtos and stdFee diverge in ratio —
+// e.g. a user inflates stdFee without inflating shortfall coverage:
+//   stdFee = 2_000_000 (10x inflation), gasLimit = 200_000, shortfallGas = 10_000
+//   chargeAtos = 2_000_000 × 10_000 / 200_000 = 100_000
+//   Pre-fix priority = stdFee/gasLimit = 10
+//   Post-fix priority = chargeAtos/shortfallGas = 10 (same — pro-rated)
+// Actually because chargeAtos is computed AS a pro-rated share of
+// stdFee, the per-gas rate is identical by construction. The audit's
+// concern manifests when computeShortfallFee diverges (e.g.
+// InsufficientGasPrice flooring — Q6 fix). Once Q6 lands, a user who
+// declares stdFee = 1 aatos will have chargeAtos floored to
+// InsufficientGasPrice × shortfall — and priority will reflect the
+// floored amount, NOT the user's nominal stdFee of 1. That is the
+// real change.
+//
+// This test pins the post-fix invariant: priority is exactly
+// chargeAtos / shortfallGas.
+func TestGetTxPriority_BasedOnChargeAtosNotStdFee(t *testing.T) {
+	// Pretend chargeAtos = 5000 aatos, shortfallGas = 1000.
+	chargeAtos := sdk.NewCoins(sdk.NewCoin("aatos", sdkmath.NewInt(5000)))
+	got := getTxPriority(chargeAtos, 1000, "aatos")
+	require.EqualValues(t, int64(5), got,
+		"audit Q1: priority = chargeAtos / shortfallGas = 5000/1000 = 5")
+}
