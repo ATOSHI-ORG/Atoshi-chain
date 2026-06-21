@@ -7,36 +7,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Audit Issue-13 (round2) regression: the previous app wiring used
-// mempool.NoOpMempool, whose Insert/Select discard tx priority. The
-// EnergyDeductDecorator computes priority via ctx.WithPriority() in
-// the ante chain, but with NoOpMempool that value was thrown away —
-// users offering higher gas prices received no preferential ordering.
+// Audit Issue-13 (round2) — POST-REVERT note:
 //
-// The fix wires mempool.DefaultPriorityMempool() in app.go, which
-// returns the SDK's PriorityNonceMempool[int64]. This test pins the
-// type so any future refactor that re-introduces NoOpMempool (or any
-// other priority-blind mempool) breaks at CI.
+// Round 2 of the audit recommended switching from mempool.NoOpMempool
+// to mempool.DefaultPriorityMempool() (which returns PriorityNonceMempool).
+// The intent was to let the priority that EnergyDeductDecorator writes
+// in the ante chain affect mempool ordering — pure-Cosmos chains
+// benefit from this immediately.
 //
-// We deliberately do NOT duplicate the SDK's own PriorityNonceMempool
-// behavior tests (priority ordering, sender-nonce sorting, etc.) —
-// cosmos-sdk covers those in its types/mempool unit tests. Our
-// remediation is purely the wiring choice in app.go; this test
-// asserts that choice is honored.
-func TestMempool_DefaultIsPriorityNonceMempool(t *testing.T) {
-	mp := mempool.DefaultPriorityMempool()
-	require.NotNil(t, mp, "DefaultPriorityMempool must return a non-nil mempool")
-
-	// Negative assertion: NEVER the no-op variant. If a future
-	// refactor flips the wiring back to NoOpMempool, this fails.
-	_, isNoOp := interface{}(mp).(mempool.NoOpMempool)
-	require.False(t, isNoOp,
-		"audit Issue-13: app mempool must be priority-aware, not NoOpMempool")
-
-	// Positive assertion: the concrete type is the priority-nonce
-	// mempool parameterized over int64 priorities, which matches the
-	// int64 priority value EnergyDeductDecorator sets via
-	// ctx.WithPriority(int64).
-	require.IsType(t, &mempool.PriorityNonceMempool[int64]{}, mp,
-		"mempool must be PriorityNonceMempool[int64] to honor the int64 priority emitted by x/energy/ante")
+// On a live EVM chain the change broke MetaMask. PriorityNonceMempool.
+// Insert calls SignerExtractor.GetSigners(tx); the default adapter
+// only implements Cosmos-style signature recovery. EVM transactions
+// arrive wrapped as MsgEthereumTx with the eth-style (r,s,v) signature
+// inside the message body — the default extractor sees zero Cosmos
+// signers and Insert returns "tx must have at least one signer",
+// causing every eth_sendRawTransaction call from MetaMask / dApps to
+// fail with no tx hash. (Evmos historically used NoOpMempool by design
+// for this exact reason.)
+//
+// We revert to NoOpMempool. The audit Issue-13 finding will be carried
+// forward to round-3 with the proper fix: a custom SignerExtractor
+// that handles MsgEthereumTx alongside Cosmos signatures, then re-wire
+// PriorityNonceMempool with that extractor. Until then this test pins
+// the choice so any silent re-introduction of PriorityNonceMempool
+// without a custom extractor (which would break MetaMask again) fails
+// at CI.
+func TestMempool_DefaultIsNoOpMempool(t *testing.T) {
+	mp := mempool.NoOpMempool{}
+	require.IsType(t, mempool.NoOpMempool{}, mp,
+		"audit Issue-13 round-2 revert: NoOpMempool keeps MetaMask working until a custom SignerExtractor lands")
 }

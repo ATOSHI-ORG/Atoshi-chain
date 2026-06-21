@@ -329,25 +329,34 @@ func NewAtoshi(
 
 	// Setup Mempool and Proposal Handlers.
 	//
-	// Audit Issue-13 (round2): the previous configuration used
-	// mempool.NoOpMempool, whose Insert/Select methods discard tx
-	// priority entirely. Combined with the priority value
-	// EnergyDeductDecorator computes via ctx.WithPriority() in the
-	// ante chain, the priority was computed but then thrown away — so
-	// users offering higher gas prices got no preferential ordering.
+	// Audit Issue-13 (round2) — POST-DEPLOYMENT REVERT (see audit
+	// response round 3): the audit recommended switching from
+	// mempool.NoOpMempool to mempool.DefaultPriorityMempool so the
+	// priority value EnergyDeductDecorator computes in the ante chain
+	// actually affects mempool ordering. That worked for pure-Cosmos
+	// txs, but PriorityNonceMempool.Insert() calls
+	// SignerExtractor.GetSigners(tx) which the default adapter only
+	// implements for Cosmos-style txs. For EVM transactions wrapped
+	// as MsgEthereumTx, the default extractor returns 0 signers and
+	// PriorityNonceMempool rejects the tx with the cryptic error
+	// "tx must have at least one signer" — every MetaMask transaction
+	// fails with no tx hash, no logs at the dApp side.
 	//
-	// Switching to mempool.DefaultPriorityMempool wires the
-	// PriorityNonceMempool[int64], which:
-	//   - reads ctx.Priority() set by the ante chain,
-	//   - orders txs by (priority desc, sequence asc within a sender),
-	//   - falls back to FIFO when priorities are equal.
+	// Evmos / Ethermint forks have historically used NoOpMempool by
+	// design precisely because of this incompatibility. The proper
+	// long-term fix is a custom SignerExtractor that handles both
+	// Cosmos signatures AND MsgEthereumTx's eth signature recovery —
+	// tracked as a separate workstream after audit round 3.
 	//
-	// The default proposal handler from baseapp consumes the same
-	// mempool so block proposals are constructed from the priority-
-	// ordered iterator. No further wiring is required for the priority
-	// computed in x/energy/ante/decorator.go to take effect.
+	// In the meantime we revert to NoOpMempool to keep MetaMask
+	// working. The priority computed in x/energy/ante/decorator.go
+	// is still useful: CometBFT's own mempool gossips txs in roughly
+	// arrival order and the ante chain's priority is exposed via
+	// ResponseCheckTx.priority — block proposers running in priority-
+	// aware mode can still use it, though the default NoOpMempool
+	// does not.
 	baseAppOptions = append(baseAppOptions, func(app *baseapp.BaseApp) {
-		mp := mempool.DefaultPriorityMempool()
+		mp := mempool.NoOpMempool{}
 		app.SetMempool(mp)
 		handler := baseapp.NewDefaultProposalHandler(mp, app)
 		app.SetPrepareProposal(handler.PrepareProposalHandler())
