@@ -128,6 +128,14 @@ func (k Keeper) setDelegation(ctx sdk.Context, d types.EnergyDelegation) {
 	store.Set(types.DelegationByDelegateeKey(d.Delegatee, d.Id), []byte{1})
 }
 
+// SetDelegationForTest is a public wrapper around setDelegation that
+// exists ONLY so unit tests (which live in `*_test` packages and can't
+// reach unexported methods) can seed delegation records directly. It
+// must NOT be called from production code paths.
+func (k Keeper) SetDelegationForTest(ctx sdk.Context, d types.EnergyDelegation) {
+	k.setDelegation(ctx, d)
+}
+
 // removeDelegation deletes both primary record and all secondary index rows.
 func (k Keeper) removeDelegation(ctx sdk.Context, d types.EnergyDelegation) {
 	store := ctx.KVStore(k.storeKey)

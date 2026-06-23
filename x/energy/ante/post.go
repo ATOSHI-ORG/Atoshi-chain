@@ -79,15 +79,41 @@ func (d EnergyRefundDecorator) PostHandle(
 		return next(ctx, tx, simulate, success)
 	}
 
-	// Energy actually used == reserved.EnergyDeducted + reserved.DeployEnergyUsed
-	// minus the proportion of unused gas. We only refund the TxEnergy
-	// share for simplicity (see comment above).
 	totalEnergyReserved := reserved.EnergyDeducted // TxEnergy only
 	if totalEnergyReserved == 0 {
 		return next(ctx, tx, simulate, success)
 	}
-	unusedGas := gasLimit - gasUsed
-	refund := minU64(totalEnergyReserved, unusedGas)
+
+	// Round-3 hotfix: previously this computed
+	//   refund = min(totalEnergyReserved, gasLimit - gasUsed)
+	// which silently refunded the FULL reserved energy whenever
+	// `gasLimit - gasUsed >= totalEnergyReserved` — i.e. as long as
+	// the tx had any room between actual gas use and its declared
+	// limit (the common case for a typical 300k MsgSend that uses
+	// ~232k), the entire energy deduction was rolled back. A
+	// delegated_in recipient could therefore replay the same
+	// energy-subsidised transfer indefinitely against a single 30k
+	// grant; the ATOS shortfall fee was charged each time (so the
+	// chain didn't bleed value), but the energy account never moved
+	// and Bound.Used stayed at zero.
+	//
+	// Correct semantics: Consume() drains the energy bucket FIRST
+	// (gasUsed counts down through reserved energy before it spills
+	// over into ATOS-paid gas). So the energy that actually got
+	// burned is min(totalEnergyReserved, gasUsed); the remainder is
+	// what's eligible to be refunded.
+	//
+	// Examples (totalEnergyReserved = 30_000, gasLimit = 300_000):
+	//   gasUsed = 231_837 → energy 30_000 fully consumed, refund = 0
+	//   gasUsed =  20_000 → energy 10_000 unused,         refund = 10_000
+	//   gasUsed =       0 → tx didn't run any logic,      refund = 30_000
+	var energyUsed uint64
+	if gasUsed >= totalEnergyReserved {
+		energyUsed = totalEnergyReserved
+	} else {
+		energyUsed = gasUsed
+	}
+	refund := totalEnergyReserved - energyUsed
 	if refund == 0 {
 		return next(ctx, tx, simulate, success)
 	}
@@ -95,11 +121,4 @@ func (d EnergyRefundDecorator) PostHandle(
 	// LIFO order (refill delegated-in pool first, then own bucket).
 	d.energyKeeper.RefundEnergy(ctx, signer, refund, reserved)
 	return next(ctx, tx, simulate, success)
-}
-
-func minU64(a, b uint64) uint64 {
-	if a < b {
-		return a
-	}
-	return b
 }
