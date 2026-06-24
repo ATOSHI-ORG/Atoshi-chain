@@ -73,10 +73,34 @@ func (q queryServer) EstimateFee(goCtx context.Context, req *types.QueryEstimate
 		return nil, status.Errorf(codes.InvalidArgument, "bad signer: %v", err)
 	}
 	r := q.EstimateConsume(ctx, signer, req.GasLimit, req.IsDeploy, nil)
-	params := q.GetParams(ctx)
+
+	// Pick the gas price that real txs will actually pay for the
+	// shortfall portion. The AnteHandler's `computeShortfallFee`
+	// charges `max(offeredPerGas, InsufficientGasPrice) × shortfallGas`,
+	// where offeredPerGas comes from the tx's declared fee. Wallets
+	// broadcast txs offering `gasLimit × feemarket.min_gas_price`
+	// (currently 1 gwei = 10^9 aatos/gas), so the realistic estimate
+	// is `min_gas_price × shortfallGas` — NOT
+	// `InsufficientGasPrice × shortfallGas` (= 0.0021 × N ≈ 567 aatos
+	// for a typical transfer, which displays as ~5.67e-16 ATOS and
+	// looks broken in the wallet UI).
+	//
+	// Fall back to InsufficientGasPrice only if the feemarket keeper
+	// isn't wired or returns a non-positive rate (defensive — should
+	// never happen in production with a genesis-set min_gas_price).
 	fee := math.LegacyZeroDec()
-	if r.ShortfallGas > 0 && !params.InsufficientGasPrice.IsNil() {
-		fee = params.InsufficientGasPrice.MulInt64(int64(r.ShortfallGas))
+	if r.ShortfallGas > 0 {
+		gasPrice := math.LegacyZeroDec()
+		if q.feemarketKeeper != nil {
+			gasPrice = q.feemarketKeeper.GetMinGasPrice(ctx)
+		}
+		params := q.GetParams(ctx)
+		if !gasPrice.IsPositive() && !params.InsufficientGasPrice.IsNil() && params.InsufficientGasPrice.IsPositive() {
+			gasPrice = params.InsufficientGasPrice
+		}
+		if gasPrice.IsPositive() {
+			fee = gasPrice.MulInt64(int64(r.ShortfallGas)).Ceil()
+		}
 	}
 	return &types.QueryEstimateFeeResponse{
 		EnergyUsed:   r.EnergyDeducted + r.DeployEnergyUsed,

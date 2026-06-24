@@ -543,6 +543,12 @@ func NewAtoshi(
 		keys[energytypes.StoreKey],
 		app.AccountKeeper,
 		app.BankKeeper,
+		// Adapter shim: x/energy's FeemarketKeeper interface exposes
+		// just GetMinGasPrice(ctx) so it doesn't need to import
+		// x/feemarket/types. x/feemarket's keeper provides the full
+		// Params via GetParams(ctx); we adapt here to keep the energy
+		// module decoupled from feemarket internals.
+		feemarketKeeperShim{k: app.FeeMarketKeeper},
 		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
 		atoshitypes.BaseDenom,
 	)
@@ -1356,4 +1362,16 @@ func (app *Atoshi) setupUpgradeHandlers() {
 	// 	// configure store loader that checks if version == upgradeHeight and applies store upgrades
 	// 	app.SetStoreLoader(upgradetypes.UpgradeStoreLoader(upgradeInfo.Height, storeUpgrades))
 	// }
+}
+
+// feemarketKeeperShim adapts the concrete x/feemarket keeper into the
+// minimal interface that x/energy needs (GetMinGasPrice). Lives here
+// in app/ so x/energy/types doesn't need to import x/feemarket — keeps
+// the energy module independent of feemarket's internals.
+type feemarketKeeperShim struct {
+	k feemarketkeeper.Keeper
+}
+
+func (s feemarketKeeperShim) GetMinGasPrice(ctx sdk.Context) math.LegacyDec {
+	return s.k.GetParams(ctx).MinGasPrice
 }

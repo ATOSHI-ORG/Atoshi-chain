@@ -99,7 +99,7 @@ func newKeeperForTest(t *testing.T) (Keeper, sdk.Context, *fakeBank) {
 	cdc := codec.NewProtoCodec(registry)
 
 	bank := newFakeBank("aatos")
-	k := NewKeeper(cdc, storeKey, fakeAccountKeeper{}, bank,
+	k := NewKeeper(cdc, storeKey, fakeAccountKeeper{}, bank, nil,
 		sdk.AccAddress([]byte("authority")).String(), "aatos")
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}

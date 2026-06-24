@@ -16,12 +16,13 @@ import (
 // Keeper owns the energy module's KV store and exposes the in-process
 // API used by the AnteHandler, the bank send hook, msg_server and tests.
 type Keeper struct {
-	cdc           codec.BinaryCodec
-	storeKey      storetypes.StoreKey
-	accountKeeper types.AccountKeeper
-	bankKeeper    types.BankKeeper
-	authority     string
-	baseDenom     string
+	cdc             codec.BinaryCodec
+	storeKey        storetypes.StoreKey
+	accountKeeper   types.AccountKeeper
+	bankKeeper      types.BankKeeper
+	feemarketKeeper types.FeemarketKeeper // optional; nil-safe (EstimateFee falls back to InsufficientGasPrice)
+	authority       string
+	baseDenom       string
 }
 
 func NewKeeper(
@@ -29,16 +30,18 @@ func NewKeeper(
 	storeKey storetypes.StoreKey,
 	ak types.AccountKeeper,
 	bk types.BankKeeper,
+	fk types.FeemarketKeeper,
 	authority string,
 	baseDenom string,
 ) Keeper {
 	return Keeper{
-		cdc:           cdc,
-		storeKey:      storeKey,
-		accountKeeper: ak,
-		bankKeeper:    bk,
-		authority:     authority,
-		baseDenom:     baseDenom,
+		cdc:             cdc,
+		storeKey:        storeKey,
+		accountKeeper:   ak,
+		bankKeeper:      bk,
+		feemarketKeeper: fk,
+		authority:       authority,
+		baseDenom:       baseDenom,
 	}
 }
 
