@@ -177,7 +177,9 @@ func (d EnergyDeductDecorator) AnteHandle(
 	// before commit so marker writes there are harmless.
 	if !consumed.Free && !simulate {
 		if txHash := txHashFromCtx(ctx); len(txHash) > 0 {
-			d.energyKeeper.SetPendingReservation(ctx, txHash, deductFrom, gasLimit, consumed)
+			if err := d.energyKeeper.SetPendingReservation(ctx, txHash, deductFrom, gasLimit, consumed); err != nil {
+				return ctx, err
+			}
 		}
 	}
 

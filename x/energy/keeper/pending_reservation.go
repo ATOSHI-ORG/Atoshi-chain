@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"encoding/json"
+	"fmt"
 
 	storetypes "cosmossdk.io/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -55,11 +56,18 @@ type pendingReservation struct {
 }
 
 // SetPendingReservation writes a marker keyed by tx hash. Idempotent.
+//
+// Audit Recommendation 2 (round 3 follow-up): previously this
+// function panicked on json.Marshal failure. Even though the marshal
+// only fails on type/cycle bugs (not data content), panicking in an
+// AnteHandler path halts the entire chain. Convert to an error
+// return so the decorator can reject the tx cleanly and let CometBFT
+// keep producing blocks.
 func (k Keeper) SetPendingReservation(
 	ctx sdk.Context, txHash []byte, signer sdk.AccAddress, gasLimit uint64, res ConsumeResult,
-) {
+) error {
 	if len(txHash) == 0 {
-		return
+		return nil
 	}
 	bz, err := json.Marshal(pendingReservation{
 		Signer:        signer.String(),
@@ -67,13 +75,10 @@ func (k Keeper) SetPendingReservation(
 		ConsumeResult: consumeResultToJSON(res),
 	})
 	if err != nil {
-		// JSON marshal can only fail on type/cycle issues, not data
-		// content. Panic loudly so we catch bugs in dev rather than
-		// silently dropping the marker (which would re-introduce the
-		// permanent-loss bug the marker exists to prevent).
-		panic(err)
+		return fmt.Errorf("marshal pending reservation: %w", err)
 	}
 	ctx.KVStore(k.storeKey).Set(types.PendingReservationKey(txHash), bz)
+	return nil
 }
 
 // DeletePendingReservation removes the marker once it has been resolved.

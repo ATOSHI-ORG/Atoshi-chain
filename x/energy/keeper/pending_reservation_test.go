@@ -30,7 +30,7 @@ func TestPendingReservation_RoundTrip(t *testing.T) {
 			{DelegationID: 7, Amount: 2_000},
 		},
 	}
-	k.SetPendingReservation(ctx, txHash, signer, 50_000, res)
+	require.NoError(t, k.SetPendingReservation(ctx, txHash, signer, 50_000, res))
 
 	var seen int
 	k.IteratePendingReservations(ctx, func(gotHash []byte, gotSigner sdk.AccAddress, gotGasLimit uint64, gotRes ConsumeResult) bool {
@@ -76,7 +76,7 @@ func TestEndBlocker_RefundsLeftoverReservation(t *testing.T) {
 	require.EqualValues(t, 0, post.TxEnergyAccrued, "ante drained own bucket")
 
 	txHash := []byte("simulated-failed-tx-hash--------")
-	k.SetPendingReservation(ctx, txHash, signer, 10_000, res)
+	require.NoError(t, k.SetPendingReservation(ctx, txHash, signer, 10_000, res))
 
 	// Simulate "PostHandler did NOT run" (msgs failed): marker is still
 	// present at EndBlocker time. EndBlocker must refund the full 10k.
