@@ -180,22 +180,48 @@ func (k Keeper) RefundEnergy(ctx sdk.Context, signer sdk.AccAddress, amount uint
 	}
 
 	acct := k.GetEnergyAccount(ctx, signer)
-	remaining := amount
+
+	// Refund is split by ORIGIN, not by "what got refunded". Audit Q1
+	// requires LIFO restoration of the delegated portion first; audit
+	// Issue 11 requires that when a delegation was deleted between
+	// Consume() and RefundEnergy() (undelegate / SweepExpiredDelegations
+	// running before this path), the corresponding refund amount is
+	// LOST — it MUST NOT fall through to the signer's own bucket.
+	//
+	// Concretely:
+	//   delTarget = min(amount, res.DelegatedDeducted)
+	//     ← the whole slice of `amount` that came from the delegated pool.
+	//     Some of it may fail to roll back (delegation record missing);
+	//     that fraction is lost (delegator was already debited by d.Used
+	//     inside releaseDelegation — Issue-2 round-2 fix — so no
+	//     counterparty is owed).
+	//   ownRefund = min(amount - delTarget, res.OwnDeducted)
+	//     ← the remaining `amount` that came from the signer's own
+	//     accrued bucket; this refunds directly.
+	//
+	// Pre-fix code tracked a single `remaining` counter that decremented
+	// by `undone` (only successfully-restored delegated amount), leaving
+	// skipped-delegation amounts to spill into Phase 2 and inflate the
+	// signer's own TxEnergyAccrued. That gifted delegated energy to the
+	// delegatee — the exact audit Issue 11 violation.
+	delTarget := minU64(amount, res.DelegatedDeducted)
+	ownRefund := minU64(amount-delTarget, res.OwnDeducted)
 
 	// Phase 1: delegated pool, LIFO.
-	if remaining > 0 && res.DelegatedDeducted > 0 {
-		delRefund := minU64(remaining, res.DelegatedDeducted)
+	if delTarget > 0 {
 		undone := uint64(0)
-		for i := len(res.DelegationConsumptions) - 1; i >= 0 && undone < delRefund; i-- {
+		for i := len(res.DelegationConsumptions) - 1; i >= 0 && undone < delTarget; i-- {
 			c := res.DelegationConsumptions[i]
 			d, ok := k.GetDelegation(ctx, c.DelegationID)
 			if !ok {
-				// Delegation was undelegated mid-tx (cleanup path). The
-				// energy is gone; just skip — DelegatedInUsable was
-				// already adjusted by undelegation in the same flow.
+				// Delegation was undelegated / swept between Consume and
+				// this refund. Do NOT fall through to Phase 2 — that
+				// would credit the signer's OWN TxEnergyAccrued with
+				// energy that belonged to the (now released) delegator
+				// (audit Issue 11).
 				continue
 			}
-			step := minU64(delRefund-undone, c.Amount)
+			step := minU64(delTarget-undone, c.Amount)
 			if step > d.Used {
 				step = d.Used
 			}
@@ -206,18 +232,18 @@ func (k Keeper) RefundEnergy(ctx sdk.Context, signer sdk.AccAddress, amount uint
 			k.setDelegation(ctx, d)
 			undone += step
 		}
-		// Credit the delegatee-side cache for the portion we successfully
-		// rolled back. If some delegation was missing, `undone` may be
-		// less than delRefund — only credit what we actually undid.
+		// Credit only what we actually rolled back to a still-live
+		// delegation. Any (delTarget - undone) is lost — see above.
 		acct.DelegatedInUsable = saturatingAdd(acct.DelegatedInUsable, undone)
-		remaining -= undone
 	}
 
 	// Phase 2: own bucket, capped at current capacity.
-	if remaining > 0 {
+	// `ownRefund` is derived from res.OwnDeducted so it cannot receive
+	// delegated-portion refunds even when Phase 1 skipped entries.
+	if ownRefund > 0 {
 		params := k.GetParams(ctx)
 		cap := types.TxEnergyCapacity(acct.LastBalanceSnapshot, params)
-		acct.TxEnergyAccrued = minU64(saturatingAdd(acct.TxEnergyAccrued, remaining), cap)
+		acct.TxEnergyAccrued = minU64(saturatingAdd(acct.TxEnergyAccrued, ownRefund), cap)
 	}
 
 	k.SetEnergyAccount(ctx, acct)

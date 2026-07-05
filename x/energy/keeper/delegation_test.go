@@ -827,3 +827,100 @@ func TestDelegateUndelegate_RoundTripPreservesEligibleBalance(t *testing.T) {
 	require.True(t, bank.GetBalance(ctx, delegator, "aatos").Amount.Equal(math.NewIntWithDecimal(90_000, 18)),
 		"bank balance fully restored")
 }
+
+// Audit Issue 11 regression: when a delegation record has been deleted
+// between Consume() (in ante) and RefundEnergy() (in post-handler or
+// EndBlocker refund path) — e.g. because SweepExpiredDelegations fired
+// in the same block after the failing tx — the corresponding refund
+// MUST NOT fall through to the signer's own TxEnergyAccrued. The
+// delegator already paid for that energy at release time via the
+// Issue-2 debit (delAcct.TxEnergyAccrued -= d.Used); crediting the
+// delegatee's own accrued would gift them energy the delegator was
+// charged for, breaking system-wide zero-sum accounting.
+//
+// This test simulates the exact race: build a ConsumeResult that says
+// "20k was drawn from delegated pool" but the corresponding
+// EnergyDelegation record is NOT in store when RefundEnergy runs.
+// Post-fix behavior: delegatee's own TxEnergyAccrued must remain
+// unchanged; the 20k delegated-portion refund is lost (no counterparty
+// to return to). Pre-fix behavior: delegatee's own TxEnergyAccrued
+// gets +20k (bug).
+func TestRefundEnergy_DoesNotMisroutePhase2AfterSweep(t *testing.T) {
+	k, ctx, _ := newKeeperForTest(t)
+	delegatee := addr("delegatee_______________")
+
+	// Seed delegatee with a non-zero snapshot so cap > 0.
+	a := k.Settle(ctx, delegatee)
+	a.LastBalanceSnapshot = math.NewIntWithDecimal(60_000, 18)
+	a.TxEnergyAccrued = 40_000 // pre-refund
+	k.SetEnergyAccount(ctx, a)
+
+	// ConsumeResult claiming 20k was drawn from delegation id=999 (nonexistent).
+	res := ConsumeResult{
+		EnergyDeducted:    20_000,
+		DelegatedDeducted: 20_000,
+		OwnDeducted:       0,
+		DelegationConsumptions: []DelegationConsumption{
+			{DelegationID: 999, Amount: 20_000},
+		},
+	}
+
+	// Refund all 20k. Under the bug this would add 20k to delegatee.own.
+	k.RefundEnergy(ctx, delegatee, 20_000, res)
+
+	post := k.GetEnergyAccount(ctx, delegatee)
+	require.EqualValues(t, 40_000, post.TxEnergyAccrued,
+		"audit Issue 11: refund for a deleted delegation MUST NOT bump "+
+			"delegatee's own TxEnergyAccrued; pre-fix this became 60k, "+
+			"gifting the delegatee energy the delegator was already debited for")
+	require.EqualValues(t, 0, post.DelegatedInUsable,
+		"nothing to credit to delegated pool either — delegation is gone")
+}
+
+// Complementary case: when the delegation IS still live, refund
+// correctly rolls it back to Bound.Used and DelegatedInUsable (LIFO).
+// This exercises Phase 1 with a live delegation while Phase 2 stays
+// zero (OwnDeducted=0 in the ConsumeResult).
+func TestRefundEnergy_LiveDelegationRoundTrip(t *testing.T) {
+	k, ctx, _ := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	// Directly seed a delegation record with Used=20k.
+	d := types.EnergyDelegation{
+		Id:         42,
+		Delegator:  delegator.String(),
+		Delegatee:  delegatee.String(),
+		Amount:     50_000,
+		Used:       20_000,
+		LockedAtos: math.NewIntWithDecimal(30_000, 18),
+		StartTime:  ctx.BlockTime().Unix(),
+		ExpiresAt:  ctx.BlockTime().Unix() + 24*3600,
+	}
+	k.SetDelegationForTest(ctx, d)
+
+	a := k.Settle(ctx, delegatee)
+	a.DelegatedInUsable = 30_000 // = amount - used, matches what Consume left
+	k.SetEnergyAccount(ctx, a)
+
+	res := ConsumeResult{
+		EnergyDeducted:    20_000,
+		DelegatedDeducted: 20_000,
+		OwnDeducted:       0,
+		DelegationConsumptions: []DelegationConsumption{
+			{DelegationID: 42, Amount: 20_000},
+		},
+	}
+	k.RefundEnergy(ctx, delegatee, 15_000, res) // partial refund
+
+	postD, ok := k.GetDelegation(ctx, 42)
+	require.True(t, ok)
+	require.EqualValues(t, 5_000, postD.Used,
+		"delegation Used rolled back from 20k to 5k (15k refunded)")
+
+	postAcct := k.GetEnergyAccount(ctx, delegatee)
+	require.EqualValues(t, 30_000+15_000, postAcct.DelegatedInUsable,
+		"delegatee inbound cache credited by refunded amount")
+	require.EqualValues(t, 0, postAcct.TxEnergyAccrued,
+		"own TxEnergyAccrued unchanged — refund routed to delegated pool")
+}
