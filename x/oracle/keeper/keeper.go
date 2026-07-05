@@ -9,6 +9,7 @@ import (
 	storetypes "cosmossdk.io/store/types"
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	gogoproto "github.com/cosmos/gogoproto/proto"
 
 	"github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 )
@@ -38,6 +39,18 @@ func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 	return ctx.Logger().With("module", "x/"+types.ModuleName)
 }
 
+// unmarshalCompat reads a KV value written either with the module's
+// binary codec (current path) or with encoding/json (legacy path
+// before audit Recommendation 4). Tries proto first; falls back to
+// JSON so devnet/state written before the migration still loads
+// without a hard fork or genesis dump/restore.
+func unmarshalCompat(cdc codec.BinaryCodec, bz []byte, pb gogoproto.Message, jsonTarget any) error {
+	if err := cdc.Unmarshal(bz, pb); err == nil {
+		return nil
+	}
+	return json.Unmarshal(bz, jsonTarget)
+}
+
 // --- Params ---
 
 func (k Keeper) GetParams(ctx sdk.Context) types.Params {
@@ -47,7 +60,7 @@ func (k Keeper) GetParams(ctx sdk.Context) types.Params {
 		return types.DefaultParams()
 	}
 	var params types.Params
-	if err := json.Unmarshal(bz, &params); err != nil {
+	if err := unmarshalCompat(k.cdc, bz, &params, &params); err != nil {
 		panic(fmt.Errorf("failed to unmarshal oracle params: %w", err))
 	}
 	return params
@@ -58,7 +71,7 @@ func (k Keeper) SetParams(ctx sdk.Context, params types.Params) error {
 		return err
 	}
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(params)
+	bz, err := k.cdc.Marshal(&params)
 	if err != nil {
 		return err
 	}
@@ -70,7 +83,7 @@ func (k Keeper) SetParams(ctx sdk.Context, params types.Params) error {
 
 func (k Keeper) SetCurrentPrice(ctx sdk.Context, price types.PriceData) error {
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(price)
+	bz, err := k.cdc.Marshal(&price)
 	if err != nil {
 		return err
 	}
@@ -85,7 +98,7 @@ func (k Keeper) GetCurrentPrice(ctx sdk.Context) (types.PriceData, error) {
 		return types.PriceData{}, types.ErrPriceNotFound
 	}
 	var price types.PriceData
-	if err := json.Unmarshal(bz, &price); err != nil {
+	if err := unmarshalCompat(k.cdc, bz, &price, &price); err != nil {
 		return types.PriceData{}, err
 	}
 	return price, nil
@@ -99,7 +112,7 @@ func (k Keeper) AppendPriceHistory(ctx sdk.Context, price types.PriceData) error
 	// different feeders don't overwrite each other (surfaced during
 	// the audit Issue 4 fix; see PriceHistoryKey doc-comment).
 	key := types.PriceHistoryKey(price.Timestamp, price.Feeder)
-	bz, err := json.Marshal(price)
+	bz, err := k.cdc.Marshal(&price)
 	if err != nil {
 		return err
 	}
@@ -121,7 +134,7 @@ func (k Keeper) GetPriceHistory(ctx sdk.Context, limit uint32) []types.PriceData
 	count := uint32(0)
 	for ; iter.Valid() && count < limit; iter.Next() {
 		var pd types.PriceData
-		if err := json.Unmarshal(iter.Value(), &pd); err != nil {
+		if err := unmarshalCompat(k.cdc, iter.Value(), &pd, &pd); err != nil {
 			continue
 		}
 		result = append(result, pd)
@@ -145,7 +158,7 @@ func (k Keeper) GetPricesSince(ctx sdk.Context, sinceTimestamp int64) []types.Pr
 	var result []types.PriceData
 	for ; iter.Valid(); iter.Next() {
 		var pd types.PriceData
-		if err := json.Unmarshal(iter.Value(), &pd); err != nil {
+		if err := unmarshalCompat(k.cdc, iter.Value(), &pd, &pd); err != nil {
 			continue
 		}
 		result = append(result, pd)
