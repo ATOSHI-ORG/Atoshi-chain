@@ -366,3 +366,78 @@ func TestGetPricesSince_ReturnsAllFeedersAtSameTimestamp(t *testing.T) {
 	got := k.GetPricesSince(ctx, ctx.BlockTime().Unix()-60)
 	require.Len(t, got, 3, "all three same-block reports must be retrievable")
 }
+
+// Audit Issue 10-B: when ≥ MinValidReports distinct feeders have
+// reported within the freshness window, current price should be the
+// MEDIAN across feeders — not the last-writer's raw value. This makes
+// a single misbehaving feeder unable to swing current price by simply
+// timing their tx last in the block.
+func TestReportPrice_MedianAggregation(t *testing.T) {
+	k, ctx := newOracleKeeperForTest(t)
+	ctx = ctx.WithBlockTime(time.Unix(1_700_000_000, 0))
+
+	f1 := sdk.AccAddress([]byte("feeder-1-median-test")).String()
+	f2 := sdk.AccAddress([]byte("feeder-2-median-test")).String()
+	f3 := sdk.AccAddress([]byte("feeder-3-median-test")).String()
+
+	params := types.DefaultParams()
+	params.AllowedFeeders = []string{f1, f2, f3}
+	params.MaxPriceDeviationBps = 0 // disable so the extreme value can land in history
+	params.MinValidReports = 3
+	params.MaxPriceAgeSeconds = 3600
+	require.NoError(t, k.SetParams(ctx, params))
+
+	srv := NewMsgServerImpl(k)
+
+	// f1 reports 1.00, f2 reports 1.10, f3 reports 5.00 (outlier).
+	// Median across {1.00, 1.10, 5.00} = 1.10.
+	for _, r := range []struct {
+		feeder string
+		price  string
+	}{
+		{f1, "1.00"},
+		{f2, "1.10"},
+		{f3, "5.00"}, // outlier - should not dictate current price
+	} {
+		_, err := srv.ReportPrice(ctx, &types.MsgReportPrice{
+			Feeder:    r.feeder,
+			Price:     math.LegacyMustNewDecFromStr(r.price),
+			Volume24h: math.LegacyMustNewDecFromStr("1000"),
+			Source:    "test",
+		})
+		require.NoError(t, err)
+	}
+
+	cur, err := k.GetCurrentPrice(ctx)
+	require.NoError(t, err)
+	require.True(t, cur.Price.Equal(math.LegacyMustNewDecFromStr("1.10")),
+		"audit Issue 10-B: current price must be median across feeders, "+
+			"not the last-writer's value; pre-fix would be 5.00 (f3's outlier)")
+}
+
+// With MinValidReports=1 (default pre-multi-feeder deployment), median
+// aggregation must degrade cleanly to "the one feeder's price" — no
+// visible behavior change until multiple feeders are added.
+func TestReportPrice_MedianDegradesToSingleFeeder(t *testing.T) {
+	k, ctx := newOracleKeeperForTest(t)
+	ctx = ctx.WithBlockTime(time.Unix(1_700_000_000, 0))
+
+	f1 := sdk.AccAddress([]byte("solo-feeder-test-01")).String()
+	params := types.DefaultParams()
+	params.AllowedFeeders = []string{f1}
+	params.MaxPriceDeviationBps = 0
+	params.MinValidReports = 1
+	require.NoError(t, k.SetParams(ctx, params))
+
+	srv := NewMsgServerImpl(k)
+	_, err := srv.ReportPrice(ctx, &types.MsgReportPrice{
+		Feeder: f1, Price: math.LegacyMustNewDecFromStr("0.42"),
+		Volume24h: math.LegacyMustNewDecFromStr("777"), Source: "test",
+	})
+	require.NoError(t, err)
+
+	cur, err := k.GetCurrentPrice(ctx)
+	require.NoError(t, err)
+	require.True(t, cur.Price.Equal(math.LegacyMustNewDecFromStr("0.42")),
+		"single-feeder deployment: median of {0.42} = 0.42, exact passthrough")
+}

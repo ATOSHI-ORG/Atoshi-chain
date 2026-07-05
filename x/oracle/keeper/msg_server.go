@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -22,6 +23,81 @@ func withinDeviation(prev, next math.LegacyDec, maxBps uint32) bool {
 	bps := diff.MulInt64(10000).Quo(prev)
 	cap := math.LegacyNewDec(int64(maxBps))
 	return bps.LTE(cap)
+}
+
+// medianOfFreshReports returns a PriceData whose Price/Volume24h are
+// the median across DISTINCT-feeder fresh reports in the price history
+// (within MaxPriceAgeSeconds), with the just-arrived `incoming` report
+// merged in (its price overrides any older report from the same
+// feeder). Timestamp/Feeder/Source come from `incoming` so downstream
+// consumers still see the latest block-time and can attribute the
+// promotion event to the reporter who tipped the aggregation.
+//
+// Audit Issue 10-B: with only one active feeder this returns exactly
+// `incoming` (median of a 1-element set), so pre-deployment behavior
+// is unchanged. Once ≥3 distinct feeders are configured and reporting
+// within the freshness window, the median is robust to a single
+// malicious/malfunctioning feeder — the extreme value no longer
+// silently overwrites current price.
+func (k Keeper) medianOfFreshReports(ctx sdk.Context, params types.Params, incoming types.PriceData) types.PriceData {
+	// Gather one report per distinct feeder inside the freshness window,
+	// preferring the most recent per feeder. `incoming` wins for its own
+	// feeder regardless (its timestamp is now).
+	now := ctx.BlockTime().Unix()
+	cutoff := now - int64(params.MaxPriceAgeSeconds)
+	if params.MaxPriceAgeSeconds == 0 {
+		cutoff = 0
+	}
+	history := k.GetPricesSince(ctx, cutoff)
+
+	latest := map[string]types.PriceData{
+		incoming.Feeder: incoming,
+	}
+	for _, pd := range history {
+		if pd.Feeder == incoming.Feeder {
+			continue // already have the fresh incoming for this feeder
+		}
+		cur, ok := latest[pd.Feeder]
+		if !ok || pd.Timestamp > cur.Timestamp {
+			latest[pd.Feeder] = pd
+		}
+	}
+
+	if len(latest) <= 1 {
+		// No consensus to compute — single-feeder case (pre-Issue-10-B
+		// deployment) returns the incoming report as-is.
+		return incoming
+	}
+
+	prices := make([]math.LegacyDec, 0, len(latest))
+	volumes := make([]math.LegacyDec, 0, len(latest))
+	for _, pd := range latest {
+		prices = append(prices, pd.Price)
+		volumes = append(volumes, pd.Volume24h)
+	}
+	medianPrice := medianDec(prices)
+	medianVolume := medianDec(volumes)
+
+	return types.PriceData{
+		Price:     medianPrice,
+		Volume24h: medianVolume,
+		Timestamp: incoming.Timestamp,
+		Feeder:    incoming.Feeder,
+		Source:    incoming.Source,
+	}
+}
+
+// medianDec returns the median of a non-empty LegacyDec slice.
+// Even-count median = average of the two middle values (both branches
+// preserve 18-decimal precision of LegacyDec, no truncation).
+func medianDec(xs []math.LegacyDec) math.LegacyDec {
+	sort.Slice(xs, func(i, j int) bool { return xs[i].LT(xs[j]) })
+	n := len(xs)
+	if n%2 == 1 {
+		return xs[n/2]
+	}
+	sum := xs[n/2-1].Add(xs[n/2])
+	return sum.QuoInt64(2)
 }
 
 // hasEnoughFreshFeeders reports whether the recent price history
@@ -104,7 +180,17 @@ func (k msgServer) ReportPrice(goCtx context.Context, msg *types.MsgReportPrice)
 	// value (which downstream code already cross-checks against
 	// MaxPriceAgeSeconds via the Issue-3 fix).
 	if params.MinValidReports <= 1 || k.hasEnoughFreshFeeders(ctx, params) {
-		if err := k.SetCurrentPrice(ctx, priceData); err != nil {
+		// Audit Issue 10-B: previously SetCurrentPrice was called with
+		// the just-arrived `priceData`, meaning the last-to-arrive
+		// feeder in the block silently overwrote all others — a
+		// single misbehaving feeder could dictate current price by
+		// timing its tx last. Instead, aggregate all fresh reports
+		// from distinct feeders (median of prices) so no single
+		// feeder can override consensus. With MinValidReports=1 this
+		// degrades to "the one feeder's price", i.e. no behavior
+		// change until multi-feeder deployment.
+		aggregated := k.medianOfFreshReports(ctx, params, priceData)
+		if err := k.SetCurrentPrice(ctx, aggregated); err != nil {
 			return nil, err
 		}
 	}
