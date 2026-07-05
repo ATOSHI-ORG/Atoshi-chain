@@ -529,6 +529,218 @@ func TestDelegate_TwoBackToBackKeepsLockedAtosConsistent(t *testing.T) {
 	require.EqualValues(t, 100_000, post.DelegatedOut)
 }
 
+// Production bug report reproducer (2026-06-30): user with ~300k ATOS
+// bank balance delegated 30k energy twice back-to-back. After both
+// delegations:
+//   - bank correctly dropped to ~240k
+//   - LockedAtos correctly rose to 60k (sum of both locks)
+//   - BUT EligibleBalance (= LastBalanceSnapshot via Q2 path) ended
+//     up at 270k, not the expected 300k
+// The user observed this as "5万能量凭空消失" — capacity dropped one
+// threshold (50k) due to the snapshot being off by exactly
+// `lockedATOS` (= 30k = one delegation's lock).
+//
+// Hypothesis: SendRestriction's projected post-send eligible reads
+// the LockedAtos from store, which Delegate's pre-write should have
+// just updated. If the pre-write order is wrong, or if a stale
+// in-memory acct copy gets re-written after the hook, snapshot
+// converges to (bank_post + LockedAtos_old) rather than
+// (bank_post + LockedAtos_new).
+//
+// This test exists to PROVE whether the fix/audit-round-3 code path
+// is correct. If this test passes, the testnet showing wrong values
+// means the deployed binary is older. If it fails, we have a real
+// regression to fix.
+func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	// Initial: 300k ATOS bank, no locks. Enough for 2× 30k delegate.
+	initialBank := math.NewIntWithDecimal(300_000, 18)
+	bank.balances[delegator.String()] = initialBank
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
+		_, _ = k.SendRestriction(ctx, from, to, amt)
+	}
+
+	// Seed enough TxEnergyAccrued to lend twice (50k energy lend
+	// needs delegator to have at least 50k own accrued at the time
+	// of each Delegate call).
+	a := k.Settle(ctx, delegator)
+	a.TxEnergyAccrued = 200_000
+	k.SetEnergyAccount(ctx, a)
+
+	preEligible := k.EligibleBalance(ctx, delegator)
+	require.True(t, preEligible.Equal(initialBank),
+		"pre-delegate eligible should equal bank balance only")
+
+	// First delegate: 50k energy → locks 30k ATOS.
+	_, _, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+
+	// After 1st delegate: bank 270k, locked 30k, eligible should be
+	// unchanged at 300k.
+	bank1 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	require.True(t, bank1.Equal(math.NewIntWithDecimal(270_000, 18)),
+		"after 1st delegate bank should be 270k, got %s", bank1)
+	acct1 := k.GetEnergyAccount(ctx, delegator)
+	require.True(t, acct1.LockedAtos.Equal(math.NewIntWithDecimal(30_000, 18)),
+		"after 1st delegate LockedAtos should be 30k, got %s", acct1.LockedAtos)
+	require.True(t, acct1.LastBalanceSnapshot.Equal(initialBank),
+		"after 1st delegate snapshot should stay at 300k (Q2 cap-neutral); "+
+			"got %s, expected %s", acct1.LastBalanceSnapshot, initialBank)
+
+	// Refill accrued so 2nd delegate's own-energy check passes.
+	mid := k.GetEnergyAccount(ctx, delegator)
+	mid.TxEnergyAccrued = 200_000
+	k.SetEnergyAccount(ctx, mid)
+
+	// Second delegate: another 50k energy → locks another 30k ATOS.
+	_, _, err = k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+
+	// After 2nd delegate: bank 240k, locked 60k, eligible should STILL
+	// be 300k. This is where the production testnet account diverges —
+	// it shows snapshot = bank + 30k (only one lock counted).
+	bank2 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	require.True(t, bank2.Equal(math.NewIntWithDecimal(240_000, 18)),
+		"after 2nd delegate bank should be 240k, got %s", bank2)
+	acct2 := k.GetEnergyAccount(ctx, delegator)
+	require.True(t, acct2.LockedAtos.Equal(math.NewIntWithDecimal(60_000, 18)),
+		"after 2nd delegate LockedAtos should be 60k, got %s", acct2.LockedAtos)
+	require.True(t, acct2.LastBalanceSnapshot.Equal(initialBank),
+		"PRODUCTION-BUG-REPRO: after 2 sequential delegates snapshot must "+
+			"still equal pre-delegate eligible (%s); got %s. "+
+			"If snapshot = bank + only_one_lock = 270k, fix/audit-round-3 "+
+			"has a regression — pre-write LockedAtos not visible to hook.",
+		initialBank, acct2.LastBalanceSnapshot)
+
+	// EXTENDED REPRO: simulate the fee-paying tx that happened AFTER
+	// the 2nd delegate on the user's testnet account 0x30F288... — bank
+	// dropped by ~245194 aatos (one 245k-gas MsgSend at 1 gwei). This
+	// fee deduction goes through SendCoinsFromAccountToModule(payer,
+	// FeeCollectorName, fee) which DOES fire SendRestriction, so
+	// snapshot should be re-projected.
+	feeAmount := math.NewInt(245_194_000_000_000) // ≈ 0.000245194 ATOS
+	err = bank.SendCoinsFromAccountToModule(ctx, delegator, "fee_collector",
+		sdk.NewCoins(sdk.NewCoin("aatos", feeAmount)))
+	require.NoError(t, err)
+
+	bank3 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	expectedBank3 := math.NewIntWithDecimal(240_000, 18).Sub(feeAmount)
+	require.True(t, bank3.Equal(expectedBank3),
+		"after fee tx bank should be 240k - 245194_aatos, got %s", bank3)
+
+	acct3 := k.GetEnergyAccount(ctx, delegator)
+	require.True(t, acct3.LockedAtos.Equal(math.NewIntWithDecimal(60_000, 18)),
+		"LockedAtos unchanged by fee tx (still 60k), got %s", acct3.LockedAtos)
+
+	// AT THIS POINT — this is exactly the user's chain state shape.
+	// Expected snapshot: bank_post + LockedAtos = (240k - 245194_aatos) + 60k
+	//                  = 299_999.999754806 ATOS
+	// Actual on testnet:  248_999.999754806 ATOS  ← 30k short
+	expectedSnapshot := expectedBank3.Add(math.NewIntWithDecimal(60_000, 18))
+	require.True(t, acct3.LastBalanceSnapshot.Equal(expectedSnapshot),
+		"PRODUCTION-BUG-REPRO: after fee tx snapshot should be (bank+locked)=%s; "+
+			"got %s. If it equals %s (= bank + only 30k locked), the "+
+			"production bug is reproduced in unit test.",
+		expectedSnapshot, acct3.LastBalanceSnapshot,
+		expectedBank3.Add(math.NewIntWithDecimal(30_000, 18)))
+}
+
+// EXACT chain reproducer for production account 0x30F288C55674967193d23Be9614cBD2FBE16a838
+// observed on testnet 2026-06-30:
+//   - Initial bank: 308999.999754806 ATOS (after a prior EVM tx)
+//   - 1st delegate 30k energy (locks 30k ATOS) → expect snapshot 308999.999754806
+//   - 2nd delegate 30k energy (locks 30k more) → expect snapshot 308999.999754806
+//   - MsgSend 30k ATOS to another account     → expect snapshot 278999.999754806
+//                                                 (= bank_post_after_msgsend + 60k locked)
+//
+// Chain shows snapshot = 248999.999754806 (= bank_post + only_30k_locked).
+// 30,000 ATOS of EligibleBalance is missing from snapshot.
+// Customer observed energy cap of 450k (= 9 thresholds) instead of expected 500k (= 10 thresholds).
+//
+// This test runs against fix/audit-round-3 code. If it PASSES, the chain
+// binary is provably NOT running fix/audit-round-3 code despite the
+// version string saying otherwise. If it FAILS, we have a real bug
+// hiding in the unit-test environment vs production divergence.
+func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+	recipient := addr("recipient_______________")  // for the final MsgSend
+
+	// Match production initial state: bank ≈ 309000 ATOS (with .999754806
+	// fractional from a prior EVM tx).
+	priorEVMFee := math.NewInt(245_194_000_000_000)  // 0.000245194 ATOS net loss
+	initialBank := math.NewIntWithDecimal(309_000, 18).Sub(priorEVMFee)
+	bank.balances[delegator.String()] = initialBank
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.balances[recipient.String()] = math.ZeroInt()
+	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
+		_, _ = k.SendRestriction(ctx, from, to, amt)
+	}
+
+	// Initial snapshot via Settle (first touch)
+	a := k.Settle(ctx, delegator)
+	a.TxEnergyAccrued = 500_000   // full cap
+	k.SetEnergyAccount(ctx, a)
+	// snapshot at this point: 308999.999754806 ATOS, capacity = 500k
+
+	// === 1st delegate (matches h=218141) ===
+	_, _, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+	mid := k.GetEnergyAccount(ctx, delegator)
+	mid.TxEnergyAccrued = 500_000  // refill to full (simulating natural accrual)
+	k.SetEnergyAccount(ctx, mid)
+
+	// === 2nd delegate (matches h=218269) ===
+	_, _, err = k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
+	require.NoError(t, err)
+
+	// State immediately after 2 delegates: snapshot should still be the
+	// initial bank+0 (cap-neutral). Customer observed 39万 = 390k available
+	// which only works if capacity stayed at 500k:  500 - 60 (DelegatedOut) = 440?
+	// or 450 - 60 = 390 if capacity dropped to 450k (Q2 broken).
+	// Customer observed 390k → matches Q2-broken (capacity dropped to 450k).
+	post2 := k.GetEnergyAccount(ctx, delegator)
+	t.Logf("After 2 delegates: snapshot=%s, capacity_floor=%d",
+		post2.LastBalanceSnapshot,
+		post2.LastBalanceSnapshot.Quo(math.NewIntWithDecimal(30_000, 18)).Int64())
+
+	// === MsgSend 30k ATOS to recipient (matches h=219960) ===
+	// In production this goes through bank.SendCoins(from, to, amt) which
+	// fires SendRestriction. fakeBank doesn't have a direct
+	// account-to-account method, but a module-bound send fires the same
+	// restriction. Modeling as send-to-module captures the SendRestriction
+	// invocation faithfully.
+	err = bank.SendCoinsFromAccountToModule(ctx, delegator, "external_recipient_module",
+		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(30_000, 18))))
+	require.NoError(t, err)
+
+	final := k.GetEnergyAccount(ctx, delegator)
+	finalBank := bank.GetBalance(ctx, delegator, "aatos").Amount
+	t.Logf("After MsgSend: bank=%s, locked=%s, snapshot=%s",
+		finalBank, final.LockedAtos, final.LastBalanceSnapshot)
+
+	// PRODUCTION shows snapshot = 248999.999754806 (= bank + only 30k locked)
+	// EXPECTED if Q2 works: snapshot = bank + 60k locked = bank + 60000 ATOS
+	expectedSnap := finalBank.Add(math.NewIntWithDecimal(60_000, 18))
+	productionWrong := finalBank.Add(math.NewIntWithDecimal(30_000, 18))
+
+	if final.LastBalanceSnapshot.Equal(expectedSnap) {
+		t.Logf("✓ UNIT TEST: snapshot correct = %s (= bank + 60k locked). "+
+			"fix/audit-round-3 code IS correct.", expectedSnap)
+	} else if final.LastBalanceSnapshot.Equal(productionWrong) {
+		t.Errorf("✗ REPRODUCED PRODUCTION BUG: snapshot = %s (= bank + only 30k locked). "+
+			"fix/audit-round-3 code itself has a bug.", productionWrong)
+	} else {
+		t.Errorf("? unexpected snapshot %s; expected %s, production wrong = %s",
+			final.LastBalanceSnapshot, expectedSnap, productionWrong)
+	}
+}
+
 // Audit Question 2 (round2) regression: EligibleBalance must include
 // LockedAtos. After Delegate, the delegator's TxEnergyCapacity must
 // be the SAME as before the delegation — the delegator's total stake

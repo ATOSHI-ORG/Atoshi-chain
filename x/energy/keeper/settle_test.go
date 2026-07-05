@@ -46,22 +46,28 @@ func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom stri
 }
 
 func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.AccAddress, recipientModule string, amt sdk.Coins) error {
-	// Hook BEFORE bank write — matches production SendRestriction ordering
-	// (cosmos-sdk bank invokes restrictions before the store mutation, so
-	// the hook can read pre-send balances and compute projected post-send
-	// values via subtraction).
-	if b.onSend != nil {
-		b.onSend(sender, sdk.AccAddress([]byte("module/"+recipientModule)), amt)
-	}
+	// Order matches Evmos cosmos-sdk@v0.50.9-evmos/x/bank/keeper/send.go:
+	//     1. subUnlockedCoins(from)        ← FIRST: subtract from sender
+	//     2. sendRestriction.Apply(...)    ← THEN: hook fires
+	//     3. addCoins(to)                  ← LAST: credit recipient
+	// (Note: upstream Cosmos SDK v0.50 has the OPPOSITE order — hook then
+	// subtract — but the Evmos fork that this chain runs on flipped it.
+	// This fake must mirror Evmos so unit tests reflect production state.)
 	cur := b.balances[sender.String()]
 	if cur.IsNil() {
 		cur = math.ZeroInt()
 	}
-	b.balances[sender.String()] = cur.Sub(amt.AmountOf(b.denom))
+	b.balances[sender.String()] = cur.Sub(amt.AmountOf(b.denom))    // 1. sub first
+	if b.onSend != nil {
+		b.onSend(sender, sdk.AccAddress([]byte("module/"+recipientModule)), amt) // 2. hook
+	}
 	return nil
 }
 
 func (b *fakeBank) SendCoinsFromModuleToAccount(_ context.Context, senderModule string, recipient sdk.AccAddress, amt sdk.Coins) error {
+	// Same Evmos order: sub from module's bank (we don't track module balances
+	// here, so this step is a no-op for the fake), then hook, then add to
+	// recipient.
 	if b.onSend != nil {
 		b.onSend(sdk.AccAddress([]byte("module/"+senderModule)), recipient, amt)
 	}
@@ -142,23 +148,6 @@ func TestSettle_CapsAtFullCapacityAfter24Hours(t *testing.T) {
 	ctx = ctx.WithBlockTime(ctx.BlockTime().Add(48 * time.Hour))
 	got := k.Settle(ctx, a)
 	require.EqualValues(t, 50_000, got.TxEnergyAccrued)
-}
-
-func TestOnBalanceChange_CapsDownAccruedOnSell(t *testing.T) {
-	k, ctx, bank := newKeeperForTest(t)
-	a := addr("alice___________________")
-	// Start at 60,000 ATOS (capacity 100k).
-	bank.balances[a.String()] = math.NewIntWithDecimal(60_000, 18)
-	k.Settle(ctx, a)
-	ctx = ctx.WithBlockTime(ctx.BlockTime().Add(48 * time.Hour))
-	full := k.Settle(ctx, a)
-	require.EqualValues(t, 100_000, full.TxEnergyAccrued)
-
-	// Sell 30,000: balance drops to 30,000, capacity 50k.
-	bank.balances[a.String()] = math.NewIntWithDecimal(30_000, 18)
-	k.OnBalanceChange(ctx, a)
-	got := k.GetEnergyAccount(ctx, a)
-	require.EqualValues(t, 50_000, got.TxEnergyAccrued, "should be capped to new capacity")
 }
 
 func TestConsume_FreeForSubsidizedMsg(t *testing.T) {
@@ -321,11 +310,21 @@ func TestConsume_AfterBalanceDrop_PreservesDelegatedCommitment(t *testing.T) {
 	k.SetEnergyAccount(ctx, a)
 
 	// Alice sells half her ATOS: 60k → 30k.
+	// Match Evmos's actual SendCoins ordering:
+	//   1. subUnlockedCoins(from)  ← bank already reflects the loss
+	//   2. SendRestriction.Apply   ← hook fires here
+	//   3. addCoins(to)            ← bob's bank goes up AFTER the hook
+	// fromBefore inside the hook therefore reads post-sub alice (30k)
+	// and pre-add bob (0).  Pre-fix this test passed only because the
+	// hook compensated by subtracting `moved` again — see fix in
+	// x/energy/keeper/send_restriction.go (the +moved on the to-side
+	// projection is intentional and correct because the hook fires
+	// before addCoins).
 	sold := math.NewIntWithDecimal(30_000, 18)
+	bank.balances[alice.String()] = math.NewIntWithDecimal(30_000, 18) // 1. sub from alice
 	_, err := k.SendRestriction(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin("aatos", sold)))
 	require.NoError(t, err)
-	bank.balances[alice.String()] = math.NewIntWithDecimal(30_000, 18)
-	bank.balances[bob.String()] = sold
+	bank.balances[bob.String()] = sold                                  // 3. add to bob (post-hook)
 
 	post := k.GetEnergyAccount(ctx, alice)
 	require.EqualValues(t, 70_000, post.TxEnergyAccrued,

@@ -23,7 +23,10 @@ func TestSendRestriction_ReceiverSnapshotRefreshed(t *testing.T) {
 	bank.balances[alice.String()] = math.NewIntWithDecimal(100_000, 18)
 	bank.balances[bob.String()] = math.ZeroInt()
 
-	// Restriction runs BEFORE bank writes — simulate that ordering exactly.
+	// Evmos bank ordering: subUnlockedCoins(from) → SendRestriction → addCoins(to).
+	// Simulate the sub-first step before invoking the hook so fromBefore
+	// matches what the hook sees in production.
+	bank.balances[alice.String()] = math.NewIntWithDecimal(50_000, 18) // sub from alice
 	out, err := k.SendRestriction(ctx, alice, bob,
 		sdk.NewCoins(sdk.NewCoin("aatos", moved)))
 	require.NoError(t, err)
@@ -98,6 +101,9 @@ func TestSendRestriction_DrainsToZero(t *testing.T) {
 	bal := math.NewIntWithDecimal(30_000, 18)
 	bank.balances[alice.String()] = bal
 
+	// Evmos sub-first ordering: subUnlockedCoins drains alice's bank
+	// to zero before SendRestriction fires.
+	bank.balances[alice.String()] = math.ZeroInt()
 	_, err := k.SendRestriction(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin("aatos", bal)))
 	require.NoError(t, err)
 
