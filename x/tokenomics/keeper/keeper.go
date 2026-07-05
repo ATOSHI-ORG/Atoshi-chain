@@ -10,10 +10,23 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+	gogoproto "github.com/cosmos/gogoproto/proto"
 
 	"github.com/atoshi-chain/atoshi/v20/types"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
+
+// unmarshalCompat reads a KV value written either with the module's
+// binary codec (current path) or with encoding/json (legacy path
+// before audit Recommendation 4). Tries proto first; falls back to
+// JSON so devnet/state written before the migration still loads
+// without a hard fork or genesis dump/restore.
+func unmarshalCompat(cdc codec.BinaryCodec, bz []byte, pb gogoproto.Message, jsonTarget any) error {
+	if err := cdc.Unmarshal(bz, pb); err == nil {
+		return nil
+	}
+	return json.Unmarshal(bz, jsonTarget)
+}
 
 type Keeper struct {
 	storeKey         storetypes.StoreKey
@@ -69,7 +82,7 @@ func (k Keeper) GetParams(ctx sdk.Context) tokenomicstypes.Params {
 		return tokenomicstypes.DefaultParams()
 	}
 	var params tokenomicstypes.Params
-	if err := json.Unmarshal(bz, &params); err != nil {
+	if err := unmarshalCompat(k.cdc, bz, &params, &params); err != nil {
 		panic(fmt.Errorf("failed to unmarshal tokenomics params: %w", err))
 	}
 	return params
@@ -80,7 +93,7 @@ func (k Keeper) SetParams(ctx sdk.Context, params tokenomicstypes.Params) error 
 		return err
 	}
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(params)
+	bz, err := k.cdc.Marshal(&params)
 	if err != nil {
 		return err
 	}
@@ -95,7 +108,7 @@ func (k Keeper) GetReleaseState(ctx sdk.Context) tokenomicstypes.ReleaseState {
 		return tokenomicstypes.DefaultReleaseState()
 	}
 	var state tokenomicstypes.ReleaseState
-	if err := json.Unmarshal(bz, &state); err != nil {
+	if err := unmarshalCompat(k.cdc, bz, &state, &state); err != nil {
 		panic(fmt.Errorf("failed to unmarshal release state: %w", err))
 	}
 	return state
@@ -103,7 +116,7 @@ func (k Keeper) GetReleaseState(ctx sdk.Context) tokenomicstypes.ReleaseState {
 
 func (k Keeper) SetReleaseState(ctx sdk.Context, state tokenomicstypes.ReleaseState) error {
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(state)
+	bz, err := k.cdc.Marshal(&state)
 	if err != nil {
 		return err
 	}
@@ -118,7 +131,7 @@ func (k Keeper) GetBlockRewardState(ctx sdk.Context) tokenomicstypes.BlockReward
 		return tokenomicstypes.DefaultBlockRewardState()
 	}
 	var state tokenomicstypes.BlockRewardState
-	if err := json.Unmarshal(bz, &state); err != nil {
+	if err := unmarshalCompat(k.cdc, bz, &state, &state); err != nil {
 		panic(fmt.Errorf("failed to unmarshal block reward state: %w", err))
 	}
 	return state
@@ -126,7 +139,7 @@ func (k Keeper) GetBlockRewardState(ctx sdk.Context) tokenomicstypes.BlockReward
 
 func (k Keeper) SetBlockRewardState(ctx sdk.Context, state tokenomicstypes.BlockRewardState) error {
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(state)
+	bz, err := k.cdc.Marshal(&state)
 	if err != nil {
 		return err
 	}
@@ -141,7 +154,7 @@ func (k Keeper) GetMinerLockedBalance(ctx sdk.Context, valAddr string) tokenomic
 		return tokenomicstypes.NewMinerLockedBalance(valAddr)
 	}
 	var bal tokenomicstypes.MinerLockedBalance
-	if err := json.Unmarshal(bz, &bal); err != nil {
+	if err := unmarshalCompat(k.cdc, bz, &bal, &bal); err != nil {
 		panic(fmt.Errorf("failed to unmarshal miner locked balance: %w", err))
 	}
 	return bal
@@ -149,7 +162,7 @@ func (k Keeper) GetMinerLockedBalance(ctx sdk.Context, valAddr string) tokenomic
 
 func (k Keeper) SetMinerLockedBalance(ctx sdk.Context, bal tokenomicstypes.MinerLockedBalance) error {
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(bal)
+	bz, err := k.cdc.Marshal(&bal)
 	if err != nil {
 		return err
 	}
@@ -164,7 +177,7 @@ func (k Keeper) IterateMinerLockedBalances(ctx sdk.Context, fn func(balance toke
 
 	for ; iter.Valid(); iter.Next() {
 		var bal tokenomicstypes.MinerLockedBalance
-		if err := json.Unmarshal(iter.Value(), &bal); err != nil {
+		if err := unmarshalCompat(k.cdc, iter.Value(), &bal, &bal); err != nil {
 			continue
 		}
 		if fn(bal) {
