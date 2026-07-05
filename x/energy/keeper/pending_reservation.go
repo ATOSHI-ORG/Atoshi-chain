@@ -28,6 +28,26 @@ import (
 // end of the same block — so JSON encoding (instead of a dedicated
 // proto message) keeps the change surgical without committing us to a
 // long-lived schema.
+//
+// Audit Recommendation 4 (documented exception): x/oracle and
+// x/tokenomics KV values were migrated from JSON to k.cdc.Marshal
+// against their existing proto messages so state layout is
+// schema-controlled and consistent with the rest of the SDK. This
+// marker is exempted intentionally:
+//
+//   1. Lifetime is bounded to one block. No marker survives across an
+//      upgrade boundary, so schema drift cannot break state.
+//   2. Never read externally (no query endpoint, no genesis
+//      import/export, no cross-module reader). It is a keeper-private
+//      coordination primitive between AnteHandler / PostHandler /
+//      EndBlocker inside the same block.
+//   3. Adding a proto message would also require one for
+//      ConsumeResult, whose fields track keeper internals — churn
+//      with no correctness upside for a marker that self-drains
+//      every block.
+//
+// The consistency goal of Recommendation 4 is met on the two
+// long-lived stores. This one stays JSON by design.
 type pendingReservation struct {
 	Signer        string                  `json:"signer"`
 	GasLimit      uint64                  `json:"gas_limit"`
