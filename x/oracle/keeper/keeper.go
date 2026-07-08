@@ -166,6 +166,11 @@ func (k Keeper) CalculateTWAP(ctx sdk.Context, lookbackSeconds uint64) (math.Leg
 		return math.LegacyZeroDec(), math.LegacyZeroDec(), types.ErrPriceNotFound
 	}
 
+	// Collapse same-timestamp entries to a single median-representative
+	// before duration-weighting, so multi-feeder same-block reports
+	// don't let the last arrival dominate the block's weight.
+	prices = collapseSameTimestampPrices(prices)
+
 	totalWeight := math.LegacyZeroDec()
 	weightedPriceSum := math.LegacyZeroDec()
 	totalVolume := math.LegacyZeroDec()
@@ -195,6 +200,44 @@ func (k Keeper) CalculateTWAP(ctx sdk.Context, lookbackSeconds uint64) (math.Leg
 	avgVolume := totalVolume.Quo(math.LegacyNewDec(int64(len(prices))))
 
 	return twapPrice, avgVolume, nil
+}
+
+// collapseSameTimestampPrices groups entries by Timestamp and replaces
+// each N>1 group with a median-of-prices/median-of-volumes representative.
+// Input must be ascending by timestamp (GetPricesSince guarantees this).
+func collapseSameTimestampPrices(prices []types.PriceData) []types.PriceData {
+	if len(prices) <= 1 {
+		return prices
+	}
+	out := make([]types.PriceData, 0, len(prices))
+	i := 0
+	for i < len(prices) {
+		j := i + 1
+		for j < len(prices) && prices[j].Timestamp == prices[i].Timestamp {
+			j++
+		}
+		if j-i == 1 {
+			out = append(out, prices[i])
+			i = j
+			continue
+		}
+		bucket := prices[i:j]
+		priceVals := make([]math.LegacyDec, 0, len(bucket))
+		volVals := make([]math.LegacyDec, 0, len(bucket))
+		for _, p := range bucket {
+			priceVals = append(priceVals, p.Price)
+			volVals = append(volVals, p.Volume24h)
+		}
+		out = append(out, types.PriceData{
+			Price:     medianDec(priceVals),
+			Volume24h: medianDec(volVals),
+			Timestamp: bucket[0].Timestamp,
+			Feeder:    bucket[len(bucket)-1].Feeder,
+			Source:    bucket[len(bucket)-1].Source,
+		})
+		i = j
+	}
+	return out
 }
 
 // --- Authority ---
