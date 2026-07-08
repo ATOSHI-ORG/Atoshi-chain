@@ -33,6 +33,14 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 		return to, nil
 	}
 
+	// Self-transfer is net-zero on balance. Running ApplyBalanceChange
+	// at the transient post-subtract midpoint would clamp TxEnergyAccrued
+	// down against a temporarily-reduced capacity that the to-side call
+	// cannot restore. Skip.
+	if from.Equals(to) {
+		return to, nil
+	}
+
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 
 	fromBefore := k.bankKeeper.GetBalance(sdkCtx, from, k.baseDenom).Amount
