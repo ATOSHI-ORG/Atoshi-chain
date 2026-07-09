@@ -16,8 +16,9 @@ import (
 //  1. elapsed = now - last_updated_time
 //  2. Refill TxEnergyAccrued at the rate implied by `last_balance_snapshot`
 //     up to TxEnergyCapacity(last_balance_snapshot).
-//  3. Refill DeployEnergyAccrued at DeployRecoverPerSecond(last_balance_snapshot)
-//     up to DeployEnergyCapacity (constant).
+//  3. Refill DeployEnergyAccrued via deployAddOverElapsed
+//     (multiplies before dividing for sub-second precision) up to
+//     DeployEnergyCapacity (constant).
 //  4. last_updated_time := now.
 //
 // We deliberately do NOT touch last_balance_snapshot here. Balance changes
@@ -55,9 +56,11 @@ func (k Keeper) Settle(ctx sdk.Context, addr sdk.AccAddress) types.EnergyAccount
 	}
 
 	// --- DeployEnergy refill ---
-	// Same rationale: DeployRecoverPerSecond rounds to 0 below ~5x
-	// threshold. Recompute as (units * cap * elapsed / (days * 86400))
-	// to keep precision.
+	// Same rationale as TxEnergy: a per-second rate rounds to 0
+	// below ~5x threshold. Compute as (units * cap * elapsed) / (days
+	// * 86400) to keep precision; the saturatingMul calls inside
+	// deployAddOverElapsed guard against uint64 overflow on
+	// pathologically retuned params.
 	if acct.DeployEnergyAccrued < params.DeployEnergyCapacity {
 		add := deployAddOverElapsed(acct.LastBalanceSnapshot, elapsed, params)
 		if add > 0 {
@@ -74,26 +77,8 @@ func (k Keeper) Settle(ctx sdk.Context, addr sdk.AccAddress) types.EnergyAccount
 	return acct
 }
 
-// OnBalanceChange is called by any code path that mutates an account's
-// balance AFTER the bank write has landed (delegation flows, migrations).
-// Hot-path bank sends route through ApplyBalanceChange in SendRestriction
-// instead, where the post-send balance is known by arithmetic and the
-// bank store has not yet been updated.
-//
-// It first settles using the OLD snapshot, then snaps the new eligible
-// balance, then caps any over-capacity accrued energy down to the new
-// ceiling.
-//
-// The cap-down step is deliberate: a holder that sells most of their
-// stake should not retain a giant prefilled energy buffer. Otherwise
-// rotating accounts could harvest energy with one wallet then move
-// the ATOS to another wallet for free transactions everywhere.
-func (k Keeper) OnBalanceChange(ctx sdk.Context, addr sdk.AccAddress) {
-	k.ApplyBalanceChange(ctx, addr, k.EligibleBalance(ctx, addr))
-}
-
-// ApplyBalanceChange is the snapshot-update primitive shared by
-// OnBalanceChange and SendRestriction. It accepts the post-change
+// ApplyBalanceChange is the snapshot-update primitive used by
+// SendRestriction. It accepts the post-change
 // eligible balance explicitly rather than reading it from bank, so the
 // bank send restriction (which runs before the bank write) can pass the
 // projected post-send amount and still produce a correct snapshot.
@@ -113,8 +98,26 @@ func (k Keeper) ApplyBalanceChange(ctx sdk.Context, addr sdk.AccAddress, newElig
 
 	params := k.GetParams(ctx)
 	newTxCap := types.TxEnergyCapacity(newEligible, params)
-	if acct.TxEnergyAccrued > newTxCap {
-		acct.TxEnergyAccrued = newTxCap
+	// Audit Issue 6: cap-down must NOT cut into DelegatedOut.
+	//
+	// ownAvail in consume.go is TxEnergyAccrued − DelegatedOut. DelegatedOut
+	// is energy already promised to other accounts: the delegatee's
+	// DelegatedInUsable was minted at delegation time and may have been
+	// spent. If a holder partially sells stake and the new cap drops
+	// below DelegatedOut, setting TxEnergyAccrued = newTxCap collapses the
+	// gap and would let the holder later under-credit undelegation
+	// (delegation.go subtracts DelegatedOut symmetrically with
+	// TxEnergyAccrued). Floor the cap-down at DelegatedOut. The economic
+	// intent of cap-down (deny a giant buffer to a now-poorer account) is
+	// preserved — only the holder's OWN unused portion is cut. The
+	// delegated portion can still be reclaimed via undelegation, which
+	// shrinks BOTH counters in lockstep.
+	effectiveCap := newTxCap
+	if effectiveCap < acct.DelegatedOut {
+		effectiveCap = acct.DelegatedOut
+	}
+	if acct.TxEnergyAccrued > effectiveCap {
+		acct.TxEnergyAccrued = effectiveCap
 	}
 	if acct.DeployEnergyAccrued > params.DeployEnergyCapacity {
 		acct.DeployEnergyAccrued = params.DeployEnergyCapacity

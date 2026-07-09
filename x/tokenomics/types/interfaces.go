@@ -44,4 +44,7 @@ type DistrKeeper interface {
 // OracleKeeper defines the interface to query the oracle module.
 type OracleKeeper interface {
 	GetCurrentPrice(ctx sdk.Context) (oracletypes.PriceData, error)
+	// Audit Issue 3: tokenomics needs MaxPriceAgeSeconds to reject
+	// stale price data before incrementing the tier-release streak.
+	GetParams(ctx sdk.Context) oracletypes.Params
 }

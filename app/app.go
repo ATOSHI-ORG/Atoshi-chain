@@ -143,6 +143,7 @@ import (
 	"github.com/atoshi-chain/atoshi/v20/app/post"
 	v20 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20"
 	v20_1 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_1"
+	v20_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_2"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -326,11 +327,38 @@ func NewAtoshi(
 	// setup memiavl if it's enabled in config
 	baseAppOptions = memiavlstore.SetupMemIAVL(logger, homePath, appOpts, false, false, baseAppOptions)
 
-	// Setup Mempool and Proposal Handlers
+	// Setup Mempool and Proposal Handlers.
+	//
+	// Audit Issue-13 (round2) — POST-DEPLOYMENT REVERT (see audit
+	// response round 3): the audit recommended switching from
+	// mempool.NoOpMempool to mempool.DefaultPriorityMempool so the
+	// priority value EnergyDeductDecorator computes in the ante chain
+	// actually affects mempool ordering. That worked for pure-Cosmos
+	// txs, but PriorityNonceMempool.Insert() calls
+	// SignerExtractor.GetSigners(tx) which the default adapter only
+	// implements for Cosmos-style txs. For EVM transactions wrapped
+	// as MsgEthereumTx, the default extractor returns 0 signers and
+	// PriorityNonceMempool rejects the tx with the cryptic error
+	// "tx must have at least one signer" — every MetaMask transaction
+	// fails with no tx hash, no logs at the dApp side.
+	//
+	// Evmos / Ethermint forks have historically used NoOpMempool by
+	// design precisely because of this incompatibility. The proper
+	// long-term fix is a custom SignerExtractor that handles both
+	// Cosmos signatures AND MsgEthereumTx's eth signature recovery —
+	// tracked as a separate workstream after audit round 3.
+	//
+	// In the meantime we revert to NoOpMempool to keep MetaMask
+	// working. The priority computed in x/energy/ante/decorator.go
+	// is still useful: CometBFT's own mempool gossips txs in roughly
+	// arrival order and the ante chain's priority is exposed via
+	// ResponseCheckTx.priority — block proposers running in priority-
+	// aware mode can still use it, though the default NoOpMempool
+	// does not.
 	baseAppOptions = append(baseAppOptions, func(app *baseapp.BaseApp) {
-		mempool := mempool.NoOpMempool{}
-		app.SetMempool(mempool)
-		handler := baseapp.NewDefaultProposalHandler(mempool, app)
+		mp := mempool.NoOpMempool{}
+		app.SetMempool(mp)
+		handler := baseapp.NewDefaultProposalHandler(mp, app)
 		app.SetPrepareProposal(handler.PrepareProposalHandler())
 		app.SetProcessProposal(handler.ProcessProposalHandler())
 	})
@@ -515,6 +543,12 @@ func NewAtoshi(
 		keys[energytypes.StoreKey],
 		app.AccountKeeper,
 		app.BankKeeper,
+		// Adapter shim: x/energy's FeemarketKeeper interface exposes
+		// just GetMinGasPrice(ctx) so it doesn't need to import
+		// x/feemarket/types. x/feemarket's keeper provides the full
+		// Params via GetParams(ctx); we adapt here to keep the energy
+		// module decoupled from feemarket internals.
+		feemarketKeeperShim{k: app.FeeMarketKeeper},
 		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
 		atoshitypes.BaseDenom,
 	)
@@ -977,6 +1011,12 @@ func (app *Atoshi) EndBlocker(ctx sdk.Context) (sdk.EndBlock, error) {
 // The DeliverTx method is intentionally decomposed to calculate the transactions per second.
 func (app *Atoshi) FinalizeBlock(req *abci.RequestFinalizeBlock) (res *abci.ResponseFinalizeBlock, err error) {
 	defer func() {
+		// res can be nil if BaseApp.FinalizeBlock panicked — guard against the
+		// nil deref so the original panic stack isn't masked by a secondary
+		// "invalid memory address" panic when we iterate TxResults.
+		if res == nil {
+			return
+		}
 		// TODO: Record the count along with the code and or reason so as to display
 		// in the transactions per second live dashboards.
 		for _, txRes := range res.TxResults {
@@ -1284,6 +1324,17 @@ func (app *Atoshi) setupUpgradeHandlers() {
 		),
 	)
 
+	// v20.2: bundles post-audit fixes. The handler force-disables
+	// x/inflation (audit Question 4) on live chains; all other audit
+	// fixes are code-only and take effect on binary swap.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v20_2.UpgradeName,
+		v20_2.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.InflationKeeper,
+		),
+	)
+
 	// When a planned update height is reached, the old binary will panic
 	// writing on disk the height and name of the update that triggered it
 	// This will read that value, and execute the preparations for the upgrade.
@@ -1311,4 +1362,16 @@ func (app *Atoshi) setupUpgradeHandlers() {
 	// 	// configure store loader that checks if version == upgradeHeight and applies store upgrades
 	// 	app.SetStoreLoader(upgradetypes.UpgradeStoreLoader(upgradeInfo.Height, storeUpgrades))
 	// }
+}
+
+// feemarketKeeperShim adapts the concrete x/feemarket keeper into the
+// minimal interface that x/energy needs (GetMinGasPrice). Lives here
+// in app/ so x/energy/types doesn't need to import x/feemarket — keeps
+// the energy module independent of feemarket's internals.
+type feemarketKeeperShim struct {
+	k feemarketkeeper.Keeper
+}
+
+func (s feemarketKeeperShim) GetMinGasPrice(ctx sdk.Context) math.LegacyDec {
+	return s.k.GetParams(ctx).MinGasPrice
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"cosmossdk.io/log"
 	"cosmossdk.io/math"
@@ -119,12 +120,20 @@ func (testDistrKeeper) FundCommunityPool(ctx context.Context, amount sdk.Coins, 
 }
 
 type testOracleKeeper struct {
-	price oracletypes.PriceData
-	err   error
+	price  oracletypes.PriceData
+	err    error
+	params *oracletypes.Params // optional override; nil → DefaultParams
 }
 
 func (ok testOracleKeeper) GetCurrentPrice(ctx sdk.Context) (oracletypes.PriceData, error) {
 	return ok.price, ok.err
+}
+
+func (ok testOracleKeeper) GetParams(ctx sdk.Context) oracletypes.Params {
+	if ok.params != nil {
+		return *ok.params
+	}
+	return oracletypes.DefaultParams()
 }
 
 func newKeeperForTest(t *testing.T, bk *testBankKeeper, sk testStakingKeeper, ok testOracleKeeper) (Keeper, sdk.Context) {
@@ -179,7 +188,8 @@ func TestReleaseMinerLockedRewards(t *testing.T) {
 	require.NoError(t, k.SetMinerLockedBalance(ctx, tokenomicstypes.MinerLockedBalance{ValidatorAddress: "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", LockedAccrued: math.NewInt(100)}))
 	require.NoError(t, k.SetMinerLockedBalance(ctx, tokenomicstypes.MinerLockedBalance{ValidatorAddress: "atoshivaloper1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", LockedAccrued: math.NewInt(300)}))
 
-	released := k.ReleaseMinerLockedRewards(ctx, math.NewInt(200))
+	released, err := k.ReleaseMinerLockedRewards(ctx, math.NewInt(200))
+	require.NoError(t, err)
 	require.Equal(t, math.NewInt(200), released)
 
 	balA := k.GetMinerLockedBalance(ctx, "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -258,4 +268,174 @@ func TestClaimMigrationTokensWithValidMerkleProof(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, k.HasMigrationClaimed(ctx, claimer))
+}
+
+// Audit Issue 3 regression: EndBlocker's tier check previously consumed
+// whatever GetCurrentPrice returned without checking the price's
+// freshness. A stale high-tier price could persistently drive the
+// ConsecutiveDays counter upward and eventually trigger an undeserved
+// miner/project release. The fixed code rejects price data older than
+// oracle.params.MaxPriceAgeSeconds and treats staleness as "no signal"
+// (pauses the streak; does not reset it).
+
+// helper to make a fresh keeper with a controllable oracle.
+func newKeeperWithOracle(t *testing.T, ok testOracleKeeper) (Keeper, sdk.Context) {
+	bk := newTestBankKeeper()
+	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] =
+		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(1, 24)))
+	bk.balances[authtypes.NewModuleAddress("tokenomics_project_pool").String()] =
+		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(1, 24)))
+	sk := testStakingKeeper{totalBonded: math.NewInt(100)}
+	return newKeeperForTest(t, bk, sk, ok)
+}
+
+// Set release state so the next EndBlocker tick is forced to evaluate.
+func forceTierEvaluation(t *testing.T, k Keeper, ctx sdk.Context) {
+	st := k.GetReleaseState(ctx)
+	st.LastCheckBlock = 0 // force evaluation regardless of epoch
+	require.NoError(t, k.SetReleaseState(ctx, st))
+}
+
+func TestEndBlocker_RejectsStaleOraclePrice(t *testing.T) {
+	// Price timestamp is older than MaxPriceAgeSeconds (default 3600).
+	now := int64(1_700_000_000)
+	stalePrice := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"), // way above any tier
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 7200, // 2 hours stale
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: stalePrice})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, ctx)
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	// ConsecutiveDays must NOT have been incremented despite the
+	// high-tier price, because the price is stale.
+	got := k.GetReleaseState(ctx)
+	require.EqualValues(t, 0, got.ConsecutiveDays,
+		"stale oracle data must not advance the tier streak; got %d", got.ConsecutiveDays)
+}
+
+func TestEndBlocker_FreshPriceAdvancesStreak(t *testing.T) {
+	// Price timestamp is fresh (within MaxPriceAgeSeconds), price+volume
+	// above tier 0 thresholds → ConsecutiveDays should increment.
+	now := int64(1_700_000_000)
+	freshPrice := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 60, // 1 minute old
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: freshPrice})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, ctx)
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got := k.GetReleaseState(ctx)
+	require.EqualValues(t, 1, got.ConsecutiveDays,
+		"fresh high-tier price should advance the streak; got %d", got.ConsecutiveDays)
+}
+
+func TestEndBlocker_StalenessPausesNotResetsStreak(t *testing.T) {
+	// Build state with an existing streak; then go stale. Expectation:
+	// streak holds (doesn't reset to 0), but doesn't grow either.
+	now := int64(1_700_000_000)
+	stalePrice := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 7200, // stale
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: stalePrice})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+
+	// Pre-load a 5-day streak.
+	st := k.GetReleaseState(ctx)
+	st.ConsecutiveDays = 5
+	st.LastCheckBlock = 0
+	require.NoError(t, k.SetReleaseState(ctx, st))
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got := k.GetReleaseState(ctx)
+	require.EqualValues(t, 5, got.ConsecutiveDays,
+		"staleness must pause (not reset) an existing streak; got %d", got.ConsecutiveDays)
+}
+
+func TestEndBlocker_ZeroTimestampIsTreatedAsStale(t *testing.T) {
+	// Timestamp=0 is the zero-value default for an unset oracle entry.
+	// Should be treated as stale, not as "1970-01-01 timestamp".
+	now := int64(1_700_000_000)
+	zeroTs := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: 0,
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: zeroTs})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, ctx)
+
+	require.NoError(t, k.EndBlocker(ctx))
+
+	got := k.GetReleaseState(ctx)
+	require.EqualValues(t, 0, got.ConsecutiveDays)
+}
+
+// Audit Issue-18 (round2) regression: when totalBonded is zero,
+// BeginBlocker must NOT mutate any state. Pre-fix the function
+// transferred the immediate share from MinerPool to FeeCollector and
+// updated releaseState IN MEMORY before checking totalBonded, then
+// returned early without persisting the in-memory updates. Result:
+//   - bank state: FeeCollector got the aatos (committed),
+//   - releaseState.TotalImmediateDistributed: not persisted,
+//   - blockRewardState.TotalDistributed: not persisted.
+// On the next block, the same currentReward would be computed again
+// (TotalDistributed unchanged) and another chunk would land in the
+// FeeCollector — silently over-distributing while tokenomics
+// accounting diverged from bank reality.
+//
+// Post-fix: the totalBonded zero-check runs BEFORE any bank send or
+// in-memory state mutation. With zero validators, BeginBlocker is a
+// clean no-op: bank balances and persisted state both unchanged.
+func TestBeginBlocker_NoStateChangeWhenNoBondedValidators(t *testing.T) {
+	bk := newTestBankKeeper()
+	minerPoolAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName)
+	feeCollectorAddr := authtypes.NewModuleAddress(authtypes.FeeCollectorName)
+	bk.balances[minerPoolAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewIntWithDecimal(1, 20)))
+
+	// Zero bonded validators — the audit's failing scenario.
+	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{totalBonded: math.ZeroInt()}, testOracleKeeper{})
+
+	params := k.GetParams(ctx)
+	params.InitialBlockReward = math.NewInt(100)
+	params.HalvingIntervalBlocks = 100
+	require.NoError(t, k.SetParams(ctx, params))
+
+	preBlockRewardState := k.GetBlockRewardState(ctx)
+	preReleaseState := k.GetReleaseState(ctx)
+	preMinerPool := bk.balances[minerPoolAddr.String()].AmountOf(atoshitypes.BaseDenom)
+	preFeeCollector := bk.balances[feeCollectorAddr.String()].AmountOf(atoshitypes.BaseDenom)
+
+	require.NoError(t, k.BeginBlocker(ctx.WithBlockHeight(1)))
+
+	postBlockRewardState := k.GetBlockRewardState(ctx)
+	postReleaseState := k.GetReleaseState(ctx)
+	postMinerPool := bk.balances[minerPoolAddr.String()].AmountOf(atoshitypes.BaseDenom)
+	postFeeCollector := bk.balances[feeCollectorAddr.String()].AmountOf(atoshitypes.BaseDenom)
+
+	// Bank state: NO immediate transfer should have happened.
+	require.True(t, preMinerPool.Equal(postMinerPool),
+		"audit Issue-18: MinerPool must NOT lose coins when no validators are bonded; pre=%s post=%s",
+		preMinerPool, postMinerPool)
+	require.True(t, preFeeCollector.Equal(postFeeCollector),
+		"audit Issue-18: FeeCollector must NOT receive immediate share when no validators are bonded; pre=%s post=%s",
+		preFeeCollector, postFeeCollector)
+
+	// Tokenomics accounting: counters must NOT advance.
+	require.True(t, preBlockRewardState.TotalDistributed.Equal(postBlockRewardState.TotalDistributed),
+		"audit Issue-18: TotalDistributed must not move")
+	require.True(t, preReleaseState.TotalImmediateDistributed.Equal(postReleaseState.TotalImmediateDistributed),
+		"audit Issue-18: TotalImmediateDistributed must not move")
+	require.True(t, preReleaseState.TotalMinerLocked.Equal(postReleaseState.TotalMinerLocked),
+		"audit Issue-18: TotalMinerLocked must not move")
 }

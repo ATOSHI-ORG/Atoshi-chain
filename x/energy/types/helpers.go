@@ -118,34 +118,41 @@ func TxEnergyCapacity(eligibleBalance math.Int, p Params) uint64 {
 		// guard against absurd holdings overflowing uint64; clamp to max
 		return ^uint64(0)
 	}
-	cap := units.Uint64() * p.TxEnergyPerThreshold
-	return cap
+	// Audit Issue 11: the prior `units.Uint64() * p.TxEnergyPerThreshold`
+	// only protected against `units` exceeding uint64. The multiplication
+	// itself could still wrap around if units × TxEnergyPerThreshold
+	// crossed 2^64. After the wrap, capacity collapses to a small number
+	// (or even 0), silently destroying the user's accrual ceiling.
+	// Saturate instead so the cap is clamped at MaxUint64 in the
+	// pathological case (which has no realistic legitimate trigger
+	// under default params but becomes reachable if governance retunes
+	// either parameter).
+	return saturatingMulU64(units.Uint64(), p.TxEnergyPerThreshold)
 }
 
-// DeployRecoverPerSecond returns how many DeployEnergy units a holder
-// regenerates each second. Returns 0 below the holding threshold.
-//
-// rate_per_day  = (balance / threshold) * capacity / recover_days
-// rate_per_sec  = rate_per_day / 86400
-func DeployRecoverPerSecond(eligibleBalance math.Int, p Params) uint64 {
-	if eligibleBalance.IsNil() || !eligibleBalance.IsPositive() ||
-		p.DeployHoldingThreshold.IsNil() || !p.DeployHoldingThreshold.IsPositive() {
+// saturatingMulU64 returns a*b clamped to ^uint64(0) on overflow.
+// Local copy intentional: types package cannot import the keeper
+// package, and the helper is identical in behavior to the keeper-side
+// saturatingMul used elsewhere in this module.
+func saturatingMulU64(a, b uint64) uint64 {
+	if a == 0 || b == 0 {
 		return 0
 	}
-	units := eligibleBalance.Quo(p.DeployHoldingThreshold)
-	if units.IsZero() {
-		return 0
-	}
-	// units * capacity / (recover_days * 86400)
-	denom := uint64(p.DeployRecoverDays) * 86_400
-	if denom == 0 {
-		return 0
-	}
-	if !units.IsUint64() {
+	if a > ^uint64(0)/b {
 		return ^uint64(0)
 	}
-	return (units.Uint64() * p.DeployEnergyCapacity) / denom
+	return a * b
 }
+
+// Audit Recommendation-3 (round2): DeployRecoverPerSecond was removed.
+// The function had no production callers — only docstring mentions —
+// and its overflow hardening (Issue-17 part 2 at commit 86f431c
+// follow-up) was identical to what x/energy/keeper/settle.go's
+// deployAddOverElapsed already does on the live refill path. Having
+// both invited drift between the documented per-second rate and the
+// actually-used elapsed-window helper. The live path stays via
+// deployAddOverElapsed; tests covering DeployRecoverPerSecond are
+// removed in the same commit.
 
 // DefaultGenesisState is the energy module's default genesis.
 func DefaultGenesisState() *GenesisState {
@@ -196,7 +203,12 @@ func (msg MsgDelegateEnergy) ValidateBasic() error {
 	if msg.Amount == 0 {
 		return ErrInvalidAmount
 	}
-	if msg.DurationSeconds <= 0 {
+	// DurationSeconds == 0 means "use protocol default"
+	// (DefaultDelegationDurationSeconds, applied by the msg server).
+	// Only NEGATIVE values are rejected here — they have no sensible
+	// interpretation. The server normalizes 0 → default before
+	// reaching the keeper's Delegate, which still requires > 0.
+	if msg.DurationSeconds < 0 {
 		return ErrInvalidDuration
 	}
 	return nil

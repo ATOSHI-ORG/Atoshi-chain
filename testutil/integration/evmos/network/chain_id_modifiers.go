@@ -37,13 +37,13 @@ func generateBankGenesisMetadata(chainID string) banktypes.Metadata {
 					Exponent: 0,
 				},
 				{
-					Denom:    "atos",
+					Denom:    "ATOStest",
 					Exponent: 18,
 				},
 			},
-			Name:    "Atos",
-			Symbol:  "ATOS",
-			Display: "atos",
+			Name:    "Atoshi (Testnet)",
+			Symbol:  "ATOStest",
+			Display: "ATOStest",
 		}
 	}
 
@@ -56,13 +56,13 @@ func generateBankGenesisMetadata(chainID string) banktypes.Metadata {
 				Exponent: 0,
 			},
 			{
-				Denom:    "atos",
+				Denom:    "ATOS",
 				Exponent: 18,
 			},
 		},
-		Name:    "Atos",
+		Name:    "Atoshi",
 		Symbol:  "ATOS",
-		Display: "atos",
+		Display: "ATOS",
 	}
 }
 

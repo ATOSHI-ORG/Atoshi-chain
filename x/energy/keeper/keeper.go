@@ -16,12 +16,13 @@ import (
 // Keeper owns the energy module's KV store and exposes the in-process
 // API used by the AnteHandler, the bank send hook, msg_server and tests.
 type Keeper struct {
-	cdc           codec.BinaryCodec
-	storeKey      storetypes.StoreKey
-	accountKeeper types.AccountKeeper
-	bankKeeper    types.BankKeeper
-	authority     string
-	baseDenom     string
+	cdc             codec.BinaryCodec
+	storeKey        storetypes.StoreKey
+	accountKeeper   types.AccountKeeper
+	bankKeeper      types.BankKeeper
+	feemarketKeeper types.FeemarketKeeper // optional; nil-safe (EstimateFee falls back to InsufficientGasPrice)
+	authority       string
+	baseDenom       string
 }
 
 func NewKeeper(
@@ -29,16 +30,18 @@ func NewKeeper(
 	storeKey storetypes.StoreKey,
 	ak types.AccountKeeper,
 	bk types.BankKeeper,
+	fk types.FeemarketKeeper,
 	authority string,
 	baseDenom string,
 ) Keeper {
 	return Keeper{
-		cdc:           cdc,
-		storeKey:      storeKey,
-		accountKeeper: ak,
-		bankKeeper:    bk,
-		authority:     authority,
-		baseDenom:     baseDenom,
+		cdc:             cdc,
+		storeKey:        storeKey,
+		accountKeeper:   ak,
+		bankKeeper:      bk,
+		feemarketKeeper: fk,
+		authority:       authority,
+		baseDenom:       baseDenom,
 	}
 }
 
@@ -128,6 +131,14 @@ func (k Keeper) setDelegation(ctx sdk.Context, d types.EnergyDelegation) {
 	store.Set(types.DelegationByDelegateeKey(d.Delegatee, d.Id), []byte{1})
 }
 
+// SetDelegationForTest is a public wrapper around setDelegation that
+// exists ONLY so unit tests (which live in `*_test` packages and can't
+// reach unexported methods) can seed delegation records directly. It
+// must NOT be called from production code paths.
+func (k Keeper) SetDelegationForTest(ctx sdk.Context, d types.EnergyDelegation) {
+	k.setDelegation(ctx, d)
+}
+
 // removeDelegation deletes both primary record and all secondary index rows.
 func (k Keeper) removeDelegation(ctx sdk.Context, d types.EnergyDelegation) {
 	store := ctx.KVStore(k.storeKey)
@@ -196,15 +207,35 @@ func (k Keeper) iterateDelegationsByIndex(ctx sdk.Context, prefix []byte, fn fun
 // Locked ATOS is held in the LockedEnergyPoolName module account, but
 // for accounting we keep a per-account `LockedAtos` record so we can
 // short-circuit reads without touching the bank twice.
+// Audit Question 2 (round2): EligibleBalance returns the holder's
+// ENERGY-eligible stake — the sum that backs their TxEnergyCapacity.
+// This includes both the liquid bank balance AND any ATOS the holder
+// has locked into LockedEnergyPool via outbound delegations.
+//
+// Pre-fix the function returned bank balance only. Combined with the
+// fact that Delegate transfers lockedATOS out of the user's bank
+// account into the module pool, that meant a delegator's cap shrank
+// immediately upon delegating — a double penalty on top of the
+// DelegatedOut bookkeeping which already prevents double-spending
+// the lent energy. The audit's hint: locked ATOS is still part of
+// the delegator's economic stake (recoverable via Undelegate), so it
+// should count toward their capacity ceiling. The DelegatedOut
+// counter handles the "you can't spend energy you already lent out"
+// part; cap-down should not also penalize the delegator for the
+// existence of the locked ATOS.
+//
+// Net effect: Delegate is now cap-neutral. Bank balance drops by
+// lockedATOS, LockedAtos counter rises by lockedATOS, sum unchanged.
+// Holder transfers to/from other users still move the eligible
+// balance normally (LockedAtos doesn't change on bank sends to other
+// holders).
 func (k Keeper) EligibleBalance(ctx sdk.Context, addr sdk.AccAddress) math.Int {
 	bal := k.bankKeeper.GetBalance(ctx, addr, k.baseDenom).Amount
 	acct := k.GetEnergyAccount(ctx, addr)
-	if acct.LockedAtos.IsNil() {
+	if acct.LockedAtos.IsNil() || !acct.LockedAtos.IsPositive() {
 		return bal
 	}
-	eligible := bal // bank already excludes locked (locked sits in module account)
-	_ = eligible
-	return bal
+	return bal.Add(acct.LockedAtos)
 }
 
 // EnsureLockedPoolExists is called once at genesis init; the SDK auth

@@ -9,23 +9,33 @@ import (
 )
 
 const (
-	// BaseDenom defines the default coin denomination used in Atoshi in:
+	// BaseDenom defines the on-chain (technical) denomination used in
+	// Atoshi for:
 	//
 	// - Staking parameters: denomination used as stake in the dPoS chain
 	// - Mint parameters: denomination minted due to fee distribution rewards
 	// - Governance parameters: denomination used for spam prevention in proposal deposits
 	// - Crisis parameters: constant fee denomination used for spam prevention to check broken invariant
 	// - EVM parameters: denomination used for running EVM state transitions in Atoshi.
+	//
+	// Mainnet and testnet share the same BaseDenom (`aatos`) per the
+	// Cosmos-ecosystem convention; the chain ID differentiates the
+	// two networks. The atto-prefix `a` follows the `uatom` / `uosmo`
+	// pattern (10^-18 multiplier, given BaseDenomUnit = 18).
 	BaseDenom        string = "aatos"
 	BaseDenomTestnet string = "aatos"
 
 	// BaseDenomUnit defines the base denomination unit for Atoshi.
-	// 1 atos = 1x10^{BaseDenomUnit} aatos
+	// 1 ATOS = 1x10^{BaseDenomUnit} aatos
 	BaseDenomUnit = 18
 
-	// DisplayDenom defines the denomination displayed to users in client applications.
-	DisplayDenom        string = "atos"
-	DisplayDenomTestnet string = "atos"
+	// DisplayDenom is the user-facing token symbol shown in wallets,
+	// explorers, and exchange listings. Mainnet uses ATOS, testnet
+	// uses ATOStest so users can visually distinguish the two
+	// networks even when both bech32 prefixes and chain IDs are
+	// similar.
+	DisplayDenom        string = "ATOS"
+	DisplayDenomTestnet string = "ATOStest"
 
 	// DefaultGasPrice is default gas price for evm transactions
 	DefaultGasPrice = 20

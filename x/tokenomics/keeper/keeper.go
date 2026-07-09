@@ -1,7 +1,6 @@
 package keeper
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"cosmossdk.io/log"
@@ -69,7 +68,7 @@ func (k Keeper) GetParams(ctx sdk.Context) tokenomicstypes.Params {
 		return tokenomicstypes.DefaultParams()
 	}
 	var params tokenomicstypes.Params
-	if err := json.Unmarshal(bz, &params); err != nil {
+	if err := k.cdc.Unmarshal(bz, &params); err != nil {
 		panic(fmt.Errorf("failed to unmarshal tokenomics params: %w", err))
 	}
 	return params
@@ -80,7 +79,7 @@ func (k Keeper) SetParams(ctx sdk.Context, params tokenomicstypes.Params) error 
 		return err
 	}
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(params)
+	bz, err := k.cdc.Marshal(&params)
 	if err != nil {
 		return err
 	}
@@ -95,7 +94,7 @@ func (k Keeper) GetReleaseState(ctx sdk.Context) tokenomicstypes.ReleaseState {
 		return tokenomicstypes.DefaultReleaseState()
 	}
 	var state tokenomicstypes.ReleaseState
-	if err := json.Unmarshal(bz, &state); err != nil {
+	if err := k.cdc.Unmarshal(bz, &state); err != nil {
 		panic(fmt.Errorf("failed to unmarshal release state: %w", err))
 	}
 	return state
@@ -103,7 +102,7 @@ func (k Keeper) GetReleaseState(ctx sdk.Context) tokenomicstypes.ReleaseState {
 
 func (k Keeper) SetReleaseState(ctx sdk.Context, state tokenomicstypes.ReleaseState) error {
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(state)
+	bz, err := k.cdc.Marshal(&state)
 	if err != nil {
 		return err
 	}
@@ -118,7 +117,7 @@ func (k Keeper) GetBlockRewardState(ctx sdk.Context) tokenomicstypes.BlockReward
 		return tokenomicstypes.DefaultBlockRewardState()
 	}
 	var state tokenomicstypes.BlockRewardState
-	if err := json.Unmarshal(bz, &state); err != nil {
+	if err := k.cdc.Unmarshal(bz, &state); err != nil {
 		panic(fmt.Errorf("failed to unmarshal block reward state: %w", err))
 	}
 	return state
@@ -126,7 +125,7 @@ func (k Keeper) GetBlockRewardState(ctx sdk.Context) tokenomicstypes.BlockReward
 
 func (k Keeper) SetBlockRewardState(ctx sdk.Context, state tokenomicstypes.BlockRewardState) error {
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(state)
+	bz, err := k.cdc.Marshal(&state)
 	if err != nil {
 		return err
 	}
@@ -141,7 +140,7 @@ func (k Keeper) GetMinerLockedBalance(ctx sdk.Context, valAddr string) tokenomic
 		return tokenomicstypes.NewMinerLockedBalance(valAddr)
 	}
 	var bal tokenomicstypes.MinerLockedBalance
-	if err := json.Unmarshal(bz, &bal); err != nil {
+	if err := k.cdc.Unmarshal(bz, &bal); err != nil {
 		panic(fmt.Errorf("failed to unmarshal miner locked balance: %w", err))
 	}
 	return bal
@@ -149,7 +148,7 @@ func (k Keeper) GetMinerLockedBalance(ctx sdk.Context, valAddr string) tokenomic
 
 func (k Keeper) SetMinerLockedBalance(ctx sdk.Context, bal tokenomicstypes.MinerLockedBalance) error {
 	store := ctx.KVStore(k.storeKey)
-	bz, err := json.Marshal(bal)
+	bz, err := k.cdc.Marshal(&bal)
 	if err != nil {
 		return err
 	}
@@ -164,7 +163,7 @@ func (k Keeper) IterateMinerLockedBalances(ctx sdk.Context, fn func(balance toke
 
 	for ; iter.Valid(); iter.Next() {
 		var bal tokenomicstypes.MinerLockedBalance
-		if err := json.Unmarshal(iter.Value(), &bal); err != nil {
+		if err := k.cdc.Unmarshal(iter.Value(), &bal); err != nil {
 			continue
 		}
 		if fn(bal) {

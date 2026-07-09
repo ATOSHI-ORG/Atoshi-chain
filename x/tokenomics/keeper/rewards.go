@@ -31,6 +31,37 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 		currentReward = remaining
 	}
 
+	// Audit Issue-18 (round2): check totalBonded BEFORE any state
+	// mutation. The pre-fix code transferred the immediate share to
+	// the fee collector and updated releaseState IN MEMORY, then
+	// looked up totalBonded; if it was zero (genesis bootstrap before
+	// any validator bonds, or a degenerate scenario where all
+	// validators got unbonded), the function returned at line 54
+	// without calling SetBlockRewardState/SetReleaseState. Effect:
+	//   - bank moved aatos from MinerPool to FeeCollector (committed),
+	//   - releaseState.TotalImmediateDistributed never persisted,
+	//   - blockRewardState.TotalDistributed never persisted.
+	// Next block, currentReward repeats the SAME amount (TotalDistributed
+	// hasn't advanced), bank gets another chunk of coins, and the
+	// tokenomics accounting silently drifts further from bank reality.
+	// Over enough blocks the immediate share would over-distribute
+	// without the supply cap (MinerPoolTotal) catching up.
+	//
+	// Moving the check up front means: if no validator can receive
+	// locked rewards, we skip the whole block — no bank send, no
+	// releaseState bump, no drift. This is a safe no-op for chains
+	// with no bonded validators (which shouldn't be producing blocks
+	// at all under normal CometBFT consensus, but the audit's concern
+	// is the genesis bootstrap window where the first block may be
+	// processed before any validator bond is recorded).
+	totalBonded, err := k.stakingKeeper.TotalBondedTokens(ctx)
+	if err != nil {
+		return err
+	}
+	if totalBonded.IsZero() {
+		return nil
+	}
+
 	immediate := currentReward.MulRaw(int64(params.ImmediateRewardBps)).QuoRaw(10000)
 	locked := currentReward.Sub(immediate)
 
@@ -45,28 +76,27 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 	releaseState.TotalImmediateDistributed = releaseState.TotalImmediateDistributed.Add(immediate)
 	releaseState.TotalMinerLocked = releaseState.TotalMinerLocked.Add(locked)
 
-	// Allocate locked rewards to validators by voting power. These rewards do NOT flow to delegators.
-	totalBonded, err := k.stakingKeeper.TotalBondedTokens(ctx)
-	if err != nil {
-		return err
-	}
-	if totalBonded.IsZero() {
-		return nil
-	}
-
+	// Audit Recommendation-2 (round2): a block handler must NOT panic
+	// on a recoverable failure. cosmos-sdk runs BeginBlocker /
+	// EndBlocker as part of every block's FinalizeBlock; a panic here
+	// propagates up to baseapp and halts consensus across every node
+	// hitting the same condition. The prior code panicked on
+	// SetMinerLockedBalance errors — serialization issues, store
+	// problems, schema mismatches — any of which would freeze the
+	// chain until a coordinated binary fix and migration. We capture
+	// the error into a shadowed variable and break out of the
+	// validator iterator instead, returning it from BeginBlocker so
+	// the FinalizeBlock pipeline can record and surface it as a
+	// regular block error.
 	remainingLocked := locked
-	index := int64(0)
+	var setErr error
 	err = k.stakingKeeper.IterateBondedValidatorsByPower(ctx, func(_ int64, validator stakingtypes.ValidatorI) bool {
 		valPower := validator.GetTokens()
 		if !valPower.IsPositive() {
-			index++
 			return false
 		}
 
 		share := locked.Mul(valPower).Quo(totalBonded)
-		if index == 0 {
-			// first validator doesn't get special treatment; keep deterministic subtraction below
-		}
 		if share.GT(remainingLocked) {
 			share = remainingLocked
 		}
@@ -74,15 +104,18 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 			bal := k.GetMinerLockedBalance(ctx, validator.GetOperator())
 			bal.LockedAccrued = bal.LockedAccrued.Add(share)
 			if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-				panic(err)
+				setErr = fmt.Errorf("set miner locked balance %q: %w", validator.GetOperator(), err)
+				return true // stop the iterator
 			}
 			remainingLocked = remainingLocked.Sub(share)
 		}
-		index++
 		return false
 	})
 	if err != nil {
 		return err
+	}
+	if setErr != nil {
+		return setErr
 	}
 
 	blockRewardState.TotalDistributed = blockRewardState.TotalDistributed.Add(currentReward)
@@ -119,6 +152,30 @@ func (k Keeper) EndBlocker(ctx sdk.Context) error {
 	if err != nil {
 		k.Logger(ctx).Error("failed to get oracle price", "err", err)
 		state.LastCheckBlock = ctx.BlockHeight()
+		return k.SetReleaseState(ctx, state)
+	}
+
+	// Audit Issue 3: reject stale oracle data. Previously the tier
+	// engine consumed whatever GetCurrentPrice returned, even if no
+	// feeder had reported in days. A malicious or absent feeder could
+	// have left a high-tier price persistently in the store, causing
+	// ConsecutiveDays to keep climbing and eventually trigger an
+	// undeserved miner/project release. Cross-check the price age
+	// against oracle.params.MaxPriceAgeSeconds; if stale, pause the
+	// streak (do NOT increment, do NOT reset — we treat staleness as
+	// "no signal" rather than "negative signal", so a brief feeder
+	// outage doesn't kill a legitimate ongoing streak).
+	oracleParams := k.oracleKeeper.GetParams(ctx)
+	now := ctx.BlockTime().Unix()
+	if priceData.Timestamp == 0 ||
+		(oracleParams.MaxPriceAgeSeconds > 0 &&
+			uint64(now-priceData.Timestamp) > oracleParams.MaxPriceAgeSeconds) {
+		k.Logger(ctx).Info("oracle price stale; skipping tier check",
+			"price_timestamp", priceData.Timestamp,
+			"now", now,
+			"max_age", oracleParams.MaxPriceAgeSeconds)
+		state.LastCheckBlock = ctx.BlockHeight()
+		state.LastCheckTimeUnix = now
 		return k.SetReleaseState(ctx, state)
 	}
 
@@ -173,7 +230,10 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	minerTarget := releaseQuota.MulRaw(int64(params.MinerReleaseShareBps)).QuoRaw(10000)
 	projectTarget := releaseQuota.Sub(minerTarget)
 
-	actualMinerRelease := k.ReleaseMinerLockedRewards(ctx, minerTarget)
+	actualMinerRelease, err := k.ReleaseMinerLockedRewards(ctx, minerTarget)
+	if err != nil {
+		return err
+	}
 	actualProjectRelease := projectTarget
 	if actualMinerRelease.LT(minerTarget) {
 		actualProjectRelease = actualProjectRelease.Add(minerTarget.Sub(actualMinerRelease))
@@ -207,10 +267,17 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	return nil
 }
 
-// ReleaseMinerLockedRewards distributes newly unlocked miner rewards proportionally to existing locked balances.
-func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) math.Int {
+// ReleaseMinerLockedRewards distributes newly unlocked miner rewards
+// proportionally to existing locked balances.
+//
+// Audit Recommendation-2 (round2): return any SetMinerLockedBalance
+// error to the caller instead of panicking. The caller (TriggerRelease
+// → EndBlocker) already propagates errors up the FinalizeBlock chain,
+// so a failure here becomes a regular block error rather than a chain
+// halt.
+func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) (math.Int, error) {
 	if !target.IsPositive() {
-		return math.ZeroInt()
+		return math.ZeroInt(), nil
 	}
 
 	totalLockedRemaining := math.ZeroInt()
@@ -225,7 +292,7 @@ func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) math
 	})
 
 	if !totalLockedRemaining.IsPositive() {
-		return math.ZeroInt()
+		return math.ZeroInt(), nil
 	}
 
 	actual := target
@@ -246,13 +313,13 @@ func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) math
 		if share.IsPositive() {
 			bal.LockedClaimable = bal.LockedClaimable.Add(share)
 			if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-				panic(err)
+				return math.ZeroInt(), fmt.Errorf("set miner locked balance %q: %w", bal.ValidatorAddress, err)
 			}
 			remainingToAssign = remainingToAssign.Sub(share)
 		}
 	}
 
-	return actual.Sub(remainingToAssign)
+	return actual.Sub(remainingToAssign), nil
 }
 
 // GetCirculatingSupply = migration pool total + immediate miner rewards + unlocked miner rewards + unlocked project rewards.

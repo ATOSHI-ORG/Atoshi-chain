@@ -12,6 +12,7 @@ package ante
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 
 	"cosmossdk.io/math"
@@ -23,6 +24,26 @@ import (
 
 	"github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
 )
+
+// txHashFromCtx returns the sha256 hash of the raw tx bytes carried in
+// the context, matching the canonical Cosmos tx-hash format used by
+// CometBFT (tmhash = sha256 truncated to the first 20 bytes — we keep
+// the full 32-byte digest here because the KV key only needs
+// collision-resistance, not interoperability with CometBFT's lookup).
+//
+// Returns nil when ctx.TxBytes() is empty (Simulate path, or in tests
+// that synthesize a ctx without going through BaseApp); callers MUST
+// treat that as "no marker, skip the audit Issue-1 pending-reservation
+// write" because two distinct simulated txs could otherwise collide on
+// an empty key.
+func txHashFromCtx(ctx sdk.Context) []byte {
+	bz := ctx.TxBytes()
+	if len(bz) == 0 {
+		return nil
+	}
+	sum := sha256.Sum256(bz)
+	return sum[:]
+}
 
 // FeegrantKeeper matches the SDK x/auth/ante.FeegrantKeeper interface
 // exactly so we can be passed the same instance.
@@ -143,6 +164,25 @@ func (d EnergyDeductDecorator) AnteHandle(
 	ctx = ctx.WithValue(CtxKeyEnergyReserved, consumed)
 	ctx = ctx.WithValue(CtxKeyEnergySigner, deductFrom)
 
+	// Audit Issue-1 (round2): persist a pending-reservation marker. The
+	// AnteHandler's writes (including the energy deduction inside
+	// Consume()) commit before runMsgs executes. If runMsgs returns an
+	// error, the cosmos-sdk BaseApp discards the msg-context state and
+	// does NOT invoke the PostHandler — so the refund call scheduled in
+	// post.go never runs, and the user's deducted energy is permanently
+	// lost. We side-step this by writing a marker here (in ante state,
+	// which IS committed) keyed by tx hash; the PostHandler deletes it
+	// on success, and EndBlocker refunds any leftover markers as
+	// failed-tx compensations. CheckTx and Simulate paths roll back
+	// before commit so marker writes there are harmless.
+	if !consumed.Free && !simulate {
+		if txHash := txHashFromCtx(ctx); len(txHash) > 0 {
+			if err := d.energyKeeper.SetPendingReservation(ctx, txHash, deductFrom, gasLimit, consumed); err != nil {
+				return ctx, err
+			}
+		}
+	}
+
 	// Fully subsidized → no fee at all. Set the priority and return.
 	if consumed.Free {
 		return next(ctx, tx, simulate)
@@ -183,21 +223,60 @@ func (d EnergyDeductDecorator) AnteHandle(
 		return ctx, sdkerrors.ErrInsufficientFee.Wrapf("shortfall fee transfer: %v", err)
 	}
 
-	// Set tx priority based on the gas price the user offered.
-	priority := getTxPriority(stdFee, int64(gasLimit))
+	// Audit Question 1 (round2): priority is computed from chargeAtos
+	// (the ATOS actually paid for shortfall gas), NOT from stdFee (the
+	// declared fee). Previously a user with a large accrued-energy
+	// buffer could declare an arbitrarily large stdFee — paying
+	// (almost) nothing in ATOS because energy covered the gas — yet
+	// claim a high mempool priority. That decoupled "willingness to
+	// pay" from "actually paid", letting energy whales jump the queue
+	// without economic stake in the slot.
+	//
+	// Using chargeAtos ties priority to real ATOS-out-of-pocket. The
+	// per-gas denominator is `consumed.ShortfallGas` (the gas the
+	// user is actually paying for in ATOS), not `gasLimit`. Subsidized
+	// txs with ShortfallGas == 0 already returned early above; here we
+	// always have a positive ShortfallGas.
+	priority := getTxPriority(chargeAtos, int64(consumed.ShortfallGas), d.energyKeeper.BaseDenom())
 	ctx = ctx.WithPriority(priority)
 
 	return next(ctx, tx, simulate)
 }
 
 // computeShortfallFee returns the ATOS coins that should be charged for
-// `shortfallGas` gas units. We use the gas price the user offered in
-// the tx fee (pro-rated), bounded by params.InsufficientGasPrice.
+// `shortfallGas` gas units. We pro-rate the user's offered fee over
+// the shortfall portion of gas, with a hard floor at
+// params.InsufficientGasPrice.
 //
-// The user's offered price = tx_fee_amount / gas_limit. We charge:
-//   max(min(offeredPrice, params.gas_price), 0) * shortfallGas
-// per coin in the fee, denom by denom. In practice the fee is in
-// `aatos` only, so this is straightforward.
+// Audit Question 6 (round2): the prior implementation used integer
+// arithmetic without the floor on the non-zero-offered branch. A user
+// could submit fee = 1 aatos against gasLimit = 200_000:
+//   num = 1 × shortfallGas
+//   amt = num / 200_000 = 0   (integer division truncation)
+// chargeAtos.IsZero() then short-circuited the ante to next(), letting
+// the user pay literally one aatos in fee while consuming the chain's
+// gas for an arbitrary tx — a complete shortfall fee evasion.
+//
+// The zero-offered branch already floored at InsufficientGasPrice, but
+// a 1-aatos offer dodged that branch. The fix unifies both paths
+// through a single gas-price floor:
+//
+//   offeredPerGas := offered / gasLimit  (Dec to avoid truncation)
+//   if offeredPerGas < InsufficientGasPrice:
+//       offeredPerGas = InsufficientGasPrice
+//   amt := ceil(offeredPerGas × shortfallGas)
+//
+// Properties:
+//   - A user offering >= InsufficientGasPrice * gasLimit pays the
+//     pro-rated portion — same as the old code's intended path.
+//   - A user offering < InsufficientGasPrice * gasLimit (including 0,
+//     including the 1-aatos evasion shape) pays at least
+//     InsufficientGasPrice × shortfallGas — minimum economic cost.
+//   - shortfallGas == 0 or gasLimit == 0 still short-circuits to
+//     empty coins (no charge — Consume covered all gas).
+//   - If InsufficientGasPrice is unset (nil or non-positive) the
+//     floor disappears; the chain hasn't configured a minimum, so
+//     we charge whatever pro-rate yields (or nothing if also zero).
 func computeShortfallFee(
 	k keeper.Keeper, ctx sdk.Context, shortfallGas uint64, fee sdk.Coins, gasLimit uint64,
 ) sdk.Coins {
@@ -206,22 +285,37 @@ func computeShortfallFee(
 	}
 	denom := k.BaseDenom()
 	offered := fee.AmountOf(denom)
-	if offered.IsZero() {
-		// User offered no fee at all → fall back to the param gas price
-		// so we still collect SOMETHING (the alternative is letting
-		// users dodge the shortfall by setting tx.fee = 0).
-		params := k.GetParams(ctx)
-		if params.InsufficientGasPrice.IsNil() || !params.InsufficientGasPrice.IsPositive() {
-			return sdk.NewCoins()
-		}
-		amt := params.InsufficientGasPrice.MulInt64(int64(shortfallGas)).Ceil().TruncateInt()
-		return sdk.NewCoins(sdk.NewCoin(denom, amt))
+	params := k.GetParams(ctx)
+
+	// Step 1: compute the user's offered per-gas rate. Use LegacyDec
+	// so truncation doesn't happen here (integer Quo would lose
+	// fractional precision below 1 aatos/gas, and that fraction
+	// matters when shortfallGas < gasLimit).
+	gasLimitDec := math.LegacyNewDec(int64(gasLimit))
+	offeredPerGas := math.LegacyZeroDec()
+	if offered.IsPositive() {
+		offeredPerGas = math.LegacyNewDecFromInt(offered).Quo(gasLimitDec)
 	}
-	// Pro-rate: charge offered_fee * shortfallGas / gasLimit.
-	num := offered.Mul(math.NewIntFromUint64(shortfallGas))
-	amt := num.Quo(math.NewIntFromUint64(gasLimit))
-	if amt.IsNegative() {
-		amt = math.ZeroInt()
+
+	// Step 2: floor at InsufficientGasPrice. This is the single
+	// chokepoint that prevents the 1-aatos evasion the audit flagged.
+	if !params.InsufficientGasPrice.IsNil() && params.InsufficientGasPrice.IsPositive() &&
+		offeredPerGas.LT(params.InsufficientGasPrice) {
+		offeredPerGas = params.InsufficientGasPrice
+	}
+
+	// Step 3: if there is no rate at all (offered=0 AND
+	// InsufficientGasPrice unset), there is nothing to charge.
+	if !offeredPerGas.IsPositive() {
+		return sdk.NewCoins()
+	}
+
+	// Step 4: chargeAtos = ceil(rate × shortfallGas). Ceil rounds the
+	// fractional remainder UP so a sub-unit per-gas rate still
+	// collects something rather than silently truncating.
+	amt := offeredPerGas.MulInt64(int64(shortfallGas)).Ceil().TruncateInt()
+	if !amt.IsPositive() {
+		return sdk.NewCoins()
 	}
 	return sdk.NewCoins(sdk.NewCoin(denom, amt))
 }
@@ -229,10 +323,50 @@ func computeShortfallFee(
 // getTxPriority returns the SDK priority for a tx fee. Mirrors the
 // standard auth/ante implementation so behavior is unchanged when
 // energy is disabled.
-func getTxPriority(fee sdk.Coins, gas int64) int64 {
+//
+// Audit Issue 12: the prior version initialized `p := int64(0)` before
+// the IsInt64 check. When a per-denom gasPrice overflowed int64 the
+// fallback was 0 — exactly opposite of the upstream Evmos SDK behavior,
+// which defaults to math.MaxInt64 in that case. The discrepancy meant
+// txs offering an extremely high fee got demoted to the back of the
+// mempool by this decorator, but would have been promoted to the front
+// by the standard SDK path. Mainnet operators relying on uniform
+// mempool ordering would observe inconsistent prioritization.
+//
+// Default to MaxInt64 on overflow to match SDK upstream:
+// https://github.com/evmos/cosmos-sdk/blob/v0.50.9-evmos/x/auth/ante/validator_tx_fee.go#L54-L68
+//
+// The literal here is math.MaxInt64 from the stdlib; we use the
+// constant directly because the file's `math` import is
+// cosmossdk.io/math, not the stdlib package.
+const maxInt64Priority = int64(^uint64(0) >> 1)
+
+// Audit Issue-15 (round1-issue8): getTxPriority must only consider the
+// chain's base denom (aatos). The previous signature took no denom
+// and iterated every coin in the fee bag, treating each as if it
+// could move the priority needle. The chain is single-fee-denom
+// today, so the bug is latent — but as soon as governance enables
+// IBC vouchers, gov-staked alt-coins, or any non-base fee path, an
+// attacker could attach a high-amount alt-coin to a low-aatos tx and
+// either crowd into the mempool's front (if their alt-coin yielded
+// MaxInt64 priority and the min-selection happened to pick it) or
+// drag priority down (if the alt-coin yielded a tiny per-gas number
+// after QuoRaw — e.g. a 1-unit USDC fee divided by 200k gas = 0).
+//
+// Fix: filter on baseDenom. Non-base coins in the fee bag are
+// inert from a priority standpoint — they don't pay for gas
+// consumption (computeShortfallFee also reads only baseDenom), so
+// they should not influence the mempool ordering either.
+//
+// If no base-denom coin is present, priority stays 0 (lowest), which
+// matches "no valid fee offered → no preferential ordering".
+func getTxPriority(fee sdk.Coins, gas int64, baseDenom string) int64 {
 	var priority int64
 	for _, c := range fee {
-		p := int64(0)
+		if c.Denom != baseDenom {
+			continue
+		}
+		p := maxInt64Priority
 		gasPrice := c.Amount.QuoRaw(gas)
 		if gasPrice.IsInt64() {
 			p = gasPrice.Int64()
@@ -245,20 +379,45 @@ func getTxPriority(fee sdk.Coins, gas int64) int64 {
 }
 
 // isContractDeployMsg returns true if any msg in the tx is a contract
-// deployment. For Cosmos messages this maps to Wasm Instantiate or EVM
-// MsgEthereumTx with To == nil; for now we keep the heuristic minimal
-// and rely on type-url matching against a known set.
+// deployment that should be charged against the DeployEnergy bucket.
+//
+// Audit Issue-3 (round1-issue1): NO currently-reachable msg type
+// triggers DeployEnergy consumption under the present chain
+// configuration:
+//
+//   - The CosmWasm module (wasmd) is not integrated; none of the
+//     `/cosmwasm.wasm.v1.MsgInstantiateContract*` or
+//     `/cosmwasm.wasm.v1.MsgStoreCode` URLs can appear in a tx that
+//     this chain accepts.
+//
+//   - EVM deployment txs (`/ethermint.evm.v1.MsgEthereumTx`) DO NOT
+//     flow through this decorator. The Cosmos ante chain installs
+//     RejectMessagesDecorator BEFORE the energy fee step
+//     (see app/ante/cosmos.go), which explicitly rejects
+//     MsgEthereumTx; the EVM ante chain (MonoDecorator) handles
+//     those txs end-to-end and does its own gas accounting. The
+//     previous code's MsgEthereumTx branch was therefore unreachable
+//     in production AND misleading to reviewers — it implied a code
+//     path that does not exist.
+//
+// We keep the CosmWasm URL cases ready so that when wasmd is added
+// in a future release, DeployEnergy starts charging automatically
+// with no further wiring. We removed the MsgEthereumTx branch
+// because keeping it would re-introduce the same misleading dead
+// code the audit flagged; if EVM-side energy accounting becomes a
+// requirement it must be done in the EVM ante chain, not here.
+//
+// In the present configuration this function effectively always
+// returns false. That is intentional — there is no DeployEnergy
+// consumer right now. Consume() in consume.go handles isDeploy=false
+// cleanly (the deploy bucket is skipped and only the TxEnergy /
+// delegated-in pools are drawn from).
 func isContractDeployMsg(msgs []sdk.Msg) bool {
 	for _, m := range msgs {
 		switch sdk.MsgTypeURL(m) {
 		case "/cosmwasm.wasm.v1.MsgInstantiateContract",
 			"/cosmwasm.wasm.v1.MsgInstantiateContract2",
 			"/cosmwasm.wasm.v1.MsgStoreCode":
-			return true
-		case "/ethermint.evm.v1.MsgEthereumTx":
-			// EVM deployments are recognized by To == nil. The MonoDecorator
-			// handles them outside this Cosmos chain, so reaching here
-			// means the tx was wrapped as a Cosmos msg — treat as deploy.
 			return true
 		}
 	}

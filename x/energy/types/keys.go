@@ -13,6 +13,16 @@ const (
 	// because of outbound delegations. Coins are moved here on Delegate
 	// and back to the delegator's bank account on Undelegate / expire.
 	LockedEnergyPoolName = "energy_locked_pool"
+
+	// DefaultDelegationDurationSeconds is the duration applied by the
+	// MsgDelegateEnergy server when a client submits the message with
+	// duration_seconds == 0 (the protobuf zero value, i.e. "field not
+	// set"). Seven days is short enough for delegators to recover
+	// stake quickly if they change their mind, but long enough for
+	// dApps subsidizing user gas to keep delegating in batches
+	// rather than per-tx. Wallets can choose to expose a duration
+	// picker — sending 0 means "use this default".
+	DefaultDelegationDurationSeconds int64 = 7 * 24 * 60 * 60 // 7 days = 604800 s
 )
 
 const (
@@ -23,6 +33,14 @@ const (
 	prefixDelegationsByDelegator
 	prefixDelegationsByDelegatee
 	prefixNextDelegationID
+	// Audit Issue-1 (round2): per-tx energy reservation marker. Written
+	// by the AnteHandler after Consume() and deleted by the PostHandler
+	// on successful tx commit. Any marker left at end-of-block belongs
+	// to a tx whose runMsgs failed (post-handler did not run, msg state
+	// was discarded), so EndBlocker iterates and refunds the reserved
+	// amount in full — otherwise the user permanently loses energy that
+	// the chain never charged them for.
+	prefixPendingReservation
 )
 
 var (
@@ -33,7 +51,18 @@ var (
 	KeyPrefixDelegationsByDeleg    = []byte{prefixDelegationsByDelegator}
 	KeyPrefixDelegationsByDelegee  = []byte{prefixDelegationsByDelegatee}
 	KeyNextDelegationID            = []byte{prefixNextDelegationID}
+	KeyPrefixPendingReservation    = []byte{prefixPendingReservation}
 )
+
+// PendingReservationKey indexes a pending reservation by the tx hash.
+// tx hash is 32 bytes (sha256 of raw tx bytes) so the resulting key is
+// fixed-width and safe for prefix iteration.
+func PendingReservationKey(txHash []byte) []byte {
+	out := make([]byte, 0, 1+len(txHash))
+	out = append(out, KeyPrefixPendingReservation...)
+	out = append(out, txHash...)
+	return out
+}
 
 // AccountKey returns the KV key for an account's energy state.
 func AccountKey(addr string) []byte {

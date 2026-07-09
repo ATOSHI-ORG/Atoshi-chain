@@ -23,7 +23,19 @@ func (s msgServer) DelegateEnergy(goCtx context.Context, msg *types.MsgDelegateE
 	if err != nil {
 		return nil, err
 	}
-	id, locked, err := s.Delegate(ctx, delegator, delegatee, msg.Amount, msg.DurationSeconds)
+
+	// Apply the protocol default when the client did not specify a
+	// duration. Protobuf int64 zero-value is the natural "field not
+	// set" signal — wallets that don't expose a duration picker can
+	// simply omit the field. ValidateBasic above accepts 0 and
+	// rejects negatives; the keeper's Delegate still requires > 0,
+	// so any 0 reaching it would error — we normalize here once.
+	duration := msg.DurationSeconds
+	if duration == 0 {
+		duration = types.DefaultDelegationDurationSeconds
+	}
+
+	id, locked, err := s.Delegate(ctx, delegator, delegatee, msg.Amount, duration)
 	if err != nil {
 		return nil, err
 	}

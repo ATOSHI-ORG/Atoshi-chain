@@ -15,6 +15,16 @@ type BankKeeper interface {
 }
 
 // DefaultParams returns sensible defaults for the oracle module.
+//
+// Audit Issue 10-A: MaxPriceDeviationBps was previously 1000 (10%),
+// which the auditor observed would REJECT legitimate large price
+// movements (real market crashes / spikes) alongside malicious ones.
+// Raised to 5000 (50%) as a wider guardrail — still catches obvious
+// oracle manipulation (a feeder reporting 5x the current price) but
+// won't lock the chain into a stale price when a real 20-40% market
+// move happens. Governance can tighten this later once multi-feeder
+// deployment is in place (see Issue 10-B) and manipulation risk is
+// diluted by consensus.
 func DefaultParams() Params {
 	return Params{
 		AllowedFeeders:       []string{},
@@ -22,7 +32,7 @@ func DefaultParams() Params {
 		MinValidReports:      1,
 		Denom:                "aatos",
 		TWAPLookbackSeconds:  86400, // 24 hours
-		MaxPriceDeviationBps: 1000,  // 10%
+		MaxPriceDeviationBps: 5000,  // 50% (audit Issue 10-A: widen from 10%)
 	}
 }
 
