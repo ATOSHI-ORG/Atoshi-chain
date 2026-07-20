@@ -144,6 +144,7 @@ import (
 	v20 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20"
 	v20_1 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_1"
 	v20_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_2"
+	v20_3 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_3"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -1332,6 +1333,18 @@ func (app *Atoshi) setupUpgradeHandlers() {
 		v20_2.CreateUpgradeHandler(
 			app.mm, app.configurator,
 			app.InflationKeeper,
+		),
+	)
+
+	// v20.3: adds two governance-tunable delegation-duration params
+	// (default + max hard cap). Handler sets both to 86400 (24h) on
+	// live chains so state has explicit values rather than relying on
+	// the msg_server compiled-constant fallback.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v20_3.UpgradeName,
+		v20_3.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.EnergyKeeper,
 		),
 	)
 
