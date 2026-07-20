@@ -66,6 +66,17 @@ message Params {
   // delegations to non-whitelisted addresses are still allowed but do not
   // automatically map to L2 quota.
   repeated string privacy_relayer_whitelist = 10;
+
+  // default_delegation_duration_seconds is applied when MsgDelegateEnergy
+  // omits duration (protobuf zero). Zero here falls back to the compiled
+  // constant so pre-upgrade Params state (which lacks this field) still
+  // works without genesis migration.
+  int64 default_delegation_duration_seconds = 11;
+
+  // max_delegation_duration_seconds is a hard cap. Msgs with
+  // duration_seconds > this value are rejected. Zero here means "no cap
+  // enforced" (pre-upgrade state compat).
+  int64 max_delegation_duration_seconds = 12;
 }
 
 // EnergyAccount tracks a single account's accrued energy and delegation

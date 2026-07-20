@@ -64,6 +64,12 @@ type Params struct {
 	// delegations to non-whitelisted addresses are still allowed but do not
 	// automatically map to L2 quota.
 	PrivacyRelayerWhitelist []string `protobuf:"bytes,10,rep,name=privacy_relayer_whitelist,json=privacyRelayerWhitelist,proto3" json:"privacy_relayer_whitelist,omitempty"`
+	// default_delegation_duration_seconds is applied when MsgDelegateEnergy
+	// omits duration. Zero here falls back to compiled constant.
+	DefaultDelegationDurationSeconds int64 `protobuf:"varint,11,opt,name=default_delegation_duration_seconds,json=defaultDelegationDurationSeconds,proto3" json:"default_delegation_duration_seconds,omitempty"`
+	// max_delegation_duration_seconds is a hard cap on delegation duration.
+	// Msgs with duration_seconds > this are rejected. Zero means no cap.
+	MaxDelegationDurationSeconds int64 `protobuf:"varint,12,opt,name=max_delegation_duration_seconds,json=maxDelegationDurationSeconds,proto3" json:"max_delegation_duration_seconds,omitempty"`
 }
 
 func (m *Params) Reset()         { *m = Params{} }
@@ -146,6 +152,20 @@ func (m *Params) GetPrivacyRelayerWhitelist() []string {
 		return m.PrivacyRelayerWhitelist
 	}
 	return nil
+}
+
+func (m *Params) GetDefaultDelegationDurationSeconds() int64 {
+	if m != nil {
+		return m.DefaultDelegationDurationSeconds
+	}
+	return 0
+}
+
+func (m *Params) GetMaxDelegationDurationSeconds() int64 {
+	if m != nil {
+		return m.MaxDelegationDurationSeconds
+	}
+	return 0
 }
 
 // EnergyAccount tracks a single account's accrued energy and delegation
@@ -430,6 +450,16 @@ func (m *Params) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.MaxDelegationDurationSeconds != 0 {
+		i = encodeVarintEnergy(dAtA, i, uint64(m.MaxDelegationDurationSeconds))
+		i--
+		dAtA[i] = 0x60
+	}
+	if m.DefaultDelegationDurationSeconds != 0 {
+		i = encodeVarintEnergy(dAtA, i, uint64(m.DefaultDelegationDurationSeconds))
+		i--
+		dAtA[i] = 0x58
+	}
 	if len(m.PrivacyRelayerWhitelist) > 0 {
 		for iNdEx := len(m.PrivacyRelayerWhitelist) - 1; iNdEx >= 0; iNdEx-- {
 			i -= len(m.PrivacyRelayerWhitelist[iNdEx])
@@ -707,6 +737,12 @@ func (m *Params) Size() (n int) {
 			l = len(s)
 			n += 1 + l + sovEnergy(uint64(l))
 		}
+	}
+	if m.DefaultDelegationDurationSeconds != 0 {
+		n += 1 + sovEnergy(uint64(m.DefaultDelegationDurationSeconds))
+	}
+	if m.MaxDelegationDurationSeconds != 0 {
+		n += 1 + sovEnergy(uint64(m.MaxDelegationDurationSeconds))
 	}
 	return n
 }
@@ -1074,6 +1110,44 @@ func (m *Params) Unmarshal(dAtA []byte) error {
 			}
 			m.PrivacyRelayerWhitelist = append(m.PrivacyRelayerWhitelist, string(dAtA[iNdEx:postIndex]))
 			iNdEx = postIndex
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DefaultDelegationDurationSeconds", wireType)
+			}
+			m.DefaultDelegationDurationSeconds = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEnergy
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DefaultDelegationDurationSeconds |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 12:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MaxDelegationDurationSeconds", wireType)
+			}
+			m.MaxDelegationDurationSeconds = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowEnergy
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MaxDelegationDurationSeconds |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipEnergy(dAtA[iNdEx:])

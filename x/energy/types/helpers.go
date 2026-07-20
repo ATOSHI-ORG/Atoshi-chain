@@ -39,7 +39,9 @@ func DefaultParams() Params {
 			"/atoshi.energy.v1.MsgDelegateEnergy",
 			"/atoshi.energy.v1.MsgUndelegateEnergy",
 		},
-		PrivacyRelayerWhitelist: []string{},
+		PrivacyRelayerWhitelist:          []string{},
+		DefaultDelegationDurationSeconds: 86_400, // 24h
+		MaxDelegationDurationSeconds:     86_400, // 24h, hard cap
 	}
 }
 
@@ -70,6 +72,22 @@ func (p Params) Validate() error {
 		if _, err := sdk.AccAddressFromBech32(addr); err != nil {
 			return fmt.Errorf("invalid privacy relayer address %q: %w", addr, err)
 		}
+	}
+	// Delegation-duration params: 0 means "not set in state" and code
+	// falls back to compiled defaults. When both are set, default must
+	// not exceed max, otherwise a client omitting duration would be
+	// auto-rejected against the cap.
+	if p.DefaultDelegationDurationSeconds < 0 {
+		return fmt.Errorf("default_delegation_duration_seconds cannot be negative")
+	}
+	if p.MaxDelegationDurationSeconds < 0 {
+		return fmt.Errorf("max_delegation_duration_seconds cannot be negative")
+	}
+	if p.MaxDelegationDurationSeconds > 0 &&
+		p.DefaultDelegationDurationSeconds > p.MaxDelegationDurationSeconds {
+		return fmt.Errorf(
+			"default_delegation_duration_seconds (%d) exceeds max_delegation_duration_seconds (%d)",
+			p.DefaultDelegationDurationSeconds, p.MaxDelegationDurationSeconds)
 	}
 	return nil
 }

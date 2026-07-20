@@ -14,15 +14,12 @@ const (
 	// and back to the delegator's bank account on Undelegate / expire.
 	LockedEnergyPoolName = "energy_locked_pool"
 
-	// DefaultDelegationDurationSeconds is the duration applied by the
-	// MsgDelegateEnergy server when a client submits the message with
-	// duration_seconds == 0 (the protobuf zero value, i.e. "field not
-	// set"). Seven days is short enough for delegators to recover
-	// stake quickly if they change their mind, but long enough for
-	// dApps subsidizing user gas to keep delegating in batches
-	// rather than per-tx. Wallets can choose to expose a duration
-	// picker — sending 0 means "use this default".
-	DefaultDelegationDurationSeconds int64 = 7 * 24 * 60 * 60 // 7 days = 604800 s
+	// DefaultDelegationDurationSeconds is the compiled fallback used by
+	// the MsgDelegateEnergy server ONLY when Params.DefaultDelegationDurationSeconds
+	// is zero (i.e. pre-upgrade state that predates that field). Under
+	// normal operation the governance-set params value is preferred.
+	// Kept aligned with the DefaultParams() value for consistency.
+	DefaultDelegationDurationSeconds int64 = 24 * 60 * 60 // 24h = 86400 s
 )
 
 const (
