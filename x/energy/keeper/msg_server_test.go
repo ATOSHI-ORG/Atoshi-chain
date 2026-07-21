@@ -47,9 +47,9 @@ func TestMsgDelegateEnergy_ZeroDurationUsesProtocolDefault(t *testing.T) {
 	startTime := ctx.BlockTime().Unix()
 	want := startTime + types.DefaultDelegationDurationSeconds
 	require.Equal(t, want, d.ExpiresAt,
-		"DurationSeconds=0 must be normalized to DefaultDelegationDurationSeconds (7 days)")
-	require.EqualValues(t, 604_800, types.DefaultDelegationDurationSeconds,
-		"7 days in seconds")
+		"DurationSeconds=0 must be normalized to the params default (24h)")
+	require.EqualValues(t, 86_400, types.DefaultDelegationDurationSeconds,
+		"24h in seconds")
 }
 
 // Sanity: an explicitly-set duration is honored verbatim. The default
@@ -71,7 +71,7 @@ func TestMsgDelegateEnergy_ExplicitDurationHonored(t *testing.T) {
 	a.TxEnergyAccrued = 150_000
 	k.SetEnergyAccount(ctx, a)
 
-	const explicit int64 = 3 * 24 * 60 * 60 // 3 days
+	const explicit int64 = 12 * 60 * 60 // 12 hours, within the 24h cap
 	resp, err := srv.DelegateEnergy(ctx, &types.MsgDelegateEnergy{
 		Delegator:       delegator.String(),
 		Delegatee:       delegatee.String(),
@@ -83,6 +83,61 @@ func TestMsgDelegateEnergy_ExplicitDurationHonored(t *testing.T) {
 	d, ok := k.GetDelegation(ctx, resp.DelegationId)
 	require.True(t, ok)
 	require.Equal(t, ctx.BlockTime().Unix()+explicit, d.ExpiresAt)
+}
+
+// Duration > MaxDelegationDurationSeconds must be rejected.
+func TestMsgDelegateEnergy_DurationExceedsMaxRejected(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	srv := NewMsgServerImpl(k)
+
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	bank.balances[delegator.String()] = math.NewIntWithDecimal(90_000, 18)
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
+		_, _ = k.SendRestriction(ctx, from, to, amt)
+	}
+	a := k.Settle(ctx, delegator)
+	a.TxEnergyAccrued = 150_000
+	k.SetEnergyAccount(ctx, a)
+
+	// Default params: Max = 86400 (24h). 24h + 1s must be rejected.
+	_, err := srv.DelegateEnergy(ctx, &types.MsgDelegateEnergy{
+		Delegator:       delegator.String(),
+		Delegatee:       delegatee.String(),
+		Amount:          50_000,
+		DurationSeconds: 86_400 + 1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exceeds max_delegation_duration_seconds")
+}
+
+// Duration exactly equal to Max is accepted (boundary).
+func TestMsgDelegateEnergy_DurationEqualsMaxAccepted(t *testing.T) {
+	k, ctx, bank := newKeeperForTest(t)
+	srv := NewMsgServerImpl(k)
+
+	delegator := addr("delegator_______________")
+	delegatee := addr("delegatee_______________")
+
+	bank.balances[delegator.String()] = math.NewIntWithDecimal(90_000, 18)
+	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
+	bank.onSend = func(from, to sdk.AccAddress, amt sdk.Coins) {
+		_, _ = k.SendRestriction(ctx, from, to, amt)
+	}
+	a := k.Settle(ctx, delegator)
+	a.TxEnergyAccrued = 150_000
+	k.SetEnergyAccount(ctx, a)
+
+	resp, err := srv.DelegateEnergy(ctx, &types.MsgDelegateEnergy{
+		Delegator:       delegator.String(),
+		Delegatee:       delegatee.String(),
+		Amount:          50_000,
+		DurationSeconds: 86_400, // exactly at the cap
+	})
+	require.NoError(t, err)
+	require.NotZero(t, resp.DelegationId)
 }
 
 // ValidateBasic: 0 must be ACCEPTED (means "use default"); negative

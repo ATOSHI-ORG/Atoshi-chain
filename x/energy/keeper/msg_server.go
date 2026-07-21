@@ -24,15 +24,26 @@ func (s msgServer) DelegateEnergy(goCtx context.Context, msg *types.MsgDelegateE
 		return nil, err
 	}
 
-	// Apply the protocol default when the client did not specify a
-	// duration. Protobuf int64 zero-value is the natural "field not
-	// set" signal — wallets that don't expose a duration picker can
-	// simply omit the field. ValidateBasic above accepts 0 and
-	// rejects negatives; the keeper's Delegate still requires > 0,
-	// so any 0 reaching it would error — we normalize here once.
+	// Duration policy:
+	//   1. Client-supplied 0 → substitute the protocol default (prefer
+	//      the governance-set params value; fall back to the compiled
+	//      constant so pre-upgrade state without this field still works).
+	//   2. Enforce the governance-set max cap (skip when unset / 0,
+	//      meaning "no cap" for backward compat with pre-upgrade state).
+	params := s.GetParams(ctx)
 	duration := msg.DurationSeconds
 	if duration == 0 {
-		duration = types.DefaultDelegationDurationSeconds
+		if params.DefaultDelegationDurationSeconds > 0 {
+			duration = params.DefaultDelegationDurationSeconds
+		} else {
+			duration = types.DefaultDelegationDurationSeconds
+		}
+	}
+	if params.MaxDelegationDurationSeconds > 0 &&
+		duration > params.MaxDelegationDurationSeconds {
+		return nil, fmt.Errorf(
+			"duration_seconds %d exceeds max_delegation_duration_seconds %d",
+			duration, params.MaxDelegationDurationSeconds)
 	}
 
 	id, locked, err := s.Delegate(ctx, delegator, delegatee, msg.Amount, duration)
