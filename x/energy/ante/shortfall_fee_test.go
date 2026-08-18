@@ -56,7 +56,7 @@ func newKeeperForShortfallTest(t *testing.T) (keeper.Keeper, sdk.Context) {
 	registry := codectypes.NewInterfaceRegistry()
 	cdc := codec.NewProtoCodec(registry)
 
-	k := keeper.NewKeeper(cdc, storeKey, shortfallAcctStub{}, shortfallBankStub{}, nil,
+	k := keeper.NewKeeper(cdc, storeKey, shortfallAcctStub{}, shortfallBankStub{}, nil, nil,
 		sdk.AccAddress([]byte("authority")).String(), "liao")
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}

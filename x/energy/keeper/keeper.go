@@ -20,6 +20,7 @@ type Keeper struct {
 	storeKey        storetypes.StoreKey
 	accountKeeper   types.AccountKeeper
 	bankKeeper      types.BankKeeper
+	stakingKeeper   types.StakingKeeper   // optional; nil-safe (EligibleBalance then omits staked ATOS)
 	feemarketKeeper types.FeemarketKeeper // optional; nil-safe (EstimateFee falls back to InsufficientGasPrice)
 	authority       string
 	baseDenom       string
@@ -30,6 +31,7 @@ func NewKeeper(
 	storeKey storetypes.StoreKey,
 	ak types.AccountKeeper,
 	bk types.BankKeeper,
+	sk types.StakingKeeper,
 	fk types.FeemarketKeeper,
 	authority string,
 	baseDenom string,
@@ -39,6 +41,7 @@ func NewKeeper(
 		storeKey:        storeKey,
 		accountKeeper:   ak,
 		bankKeeper:      bk,
+		stakingKeeper:   sk,
 		feemarketKeeper: fk,
 		authority:       authority,
 		baseDenom:       baseDenom,
@@ -201,41 +204,76 @@ func (k Keeper) iterateDelegationsByIndex(ctx sdk.Context, prefix []byte, fn fun
 
 // ===== Eligible balance =====
 
-// EligibleBalance returns bank balance minus locked ATOS. This is the
-// number used for capacity / accrual computations.
+// EligibleBalance returns the ATOS backing a holder's TxEnergyCapacity:
 //
-// Locked ATOS is held in the LockedEnergyPoolName module account, but
-// for accounting we keep a per-account `LockedAtos` record so we can
-// short-circuit reads without touching the bank twice.
-// Audit Question 2 (round2): EligibleBalance returns the holder's
-// ENERGY-eligible stake — the sum that backs their TxEnergyCapacity.
-// This includes both the liquid bank balance AND any ATOS the holder
-// has locked into LockedEnergyPool via outbound delegations.
+//	bank balance + LockedAtos + bonded + unbonding
 //
-// Pre-fix the function returned bank balance only. Combined with the
-// fact that Delegate transfers lockedATOS out of the user's bank
-// account into the module pool, that meant a delegator's cap shrank
-// immediately upon delegating — a double penalty on top of the
-// DelegatedOut bookkeeping which already prevents double-spending
-// the lent energy. The audit's hint: locked ATOS is still part of
-// the delegator's economic stake (recoverable via Undelegate), so it
-// should count toward their capacity ceiling. The DelegatedOut
-// counter handles the "you can't spend energy you already lent out"
-// part; cap-down should not also penalize the delegator for the
-// existence of the locked ATOS.
+// The principle behind all four terms is that energy is earned by OWNING ATOS,
+// not by leaving it liquid. Every mechanism that "removes" ATOS from the bank
+// balance below merely parks it in a module account the holder can recover from,
+// so none of them should reduce capacity.
 //
-// Net effect: Delegate is now cap-neutral. Bank balance drops by
-// lockedATOS, LockedAtos counter rises by lockedATOS, sum unchanged.
-// Holder transfers to/from other users still move the eligible
-// balance normally (LockedAtos doesn't change on bank sends to other
-// holders).
+// LockedAtos (audit Question 2, round2) is ATOS moved into LockedEnergyPool by
+// an outbound energy delegation. Counting only the bank balance made Delegate
+// shrink the delegator's cap — a second penalty on top of DelegatedOut, which
+// already stops them spending energy they lent out. Including it makes Delegate
+// cap-neutral: the bank balance falls and the counter rises by the same amount.
+//
+// bonded / unbonding are the staking equivalents. Delegate moves coins to
+// bonded_tokens_pool and Undelegate parks them in not_bonded_tokens_pool for the
+// unbonding period; both remain the delegator's. Omitting bonded would zero the
+// energy of anyone staking to mine ATOX, forcing a choice between mining and
+// free transfers. Omitting unbonding would do the same for the 21 days after
+// they start undelegating.
+//
+// The four terms are disjoint — a given coin sits in exactly one of the bank
+// balance, LockedEnergyPool, bonded_tokens_pool or not_bonded_tokens_pool — so
+// nothing is double-counted.
+//
+// A staking read failure means a corrupt delegation record. We log and omit that
+// term rather than panic: panicking here would halt the chain from inside a bank
+// SendRestriction, whereas omitting only understates capacity, which can never
+// hand out gas that was not earned. Reads are deterministic, so every node
+// computes the same value either way and there is no fork risk.
 func (k Keeper) EligibleBalance(ctx sdk.Context, addr sdk.AccAddress) math.Int {
-	bal := k.bankKeeper.GetBalance(ctx, addr, k.baseDenom).Amount
+	total := k.bankKeeper.GetBalance(ctx, addr, k.baseDenom).Amount
+
 	acct := k.GetEnergyAccount(ctx, addr)
-	if acct.LockedAtos.IsNil() || !acct.LockedAtos.IsPositive() {
-		return bal
+	if !acct.LockedAtos.IsNil() && acct.LockedAtos.IsPositive() {
+		total = total.Add(acct.LockedAtos)
 	}
-	return bal.Add(acct.LockedAtos)
+
+	return total.Add(k.stakedAtos(ctx, addr))
+}
+
+// stakedAtos returns bonded + unbonding ATOS for addr, or zero when no staking
+// keeper is wired (unit tests that exercise energy in isolation).
+func (k Keeper) stakedAtos(ctx sdk.Context, addr sdk.AccAddress) math.Int {
+	if k.stakingKeeper == nil {
+		return math.ZeroInt()
+	}
+
+	staked := math.ZeroInt()
+
+	bonded, err := k.stakingKeeper.GetDelegatorBonded(ctx, addr)
+	switch {
+	case err != nil:
+		k.Logger(ctx).Error("failed to read bonded delegations for energy eligibility",
+			"address", addr.String(), "err", err)
+	case !bonded.IsNil() && bonded.IsPositive():
+		staked = staked.Add(bonded)
+	}
+
+	unbonding, err := k.stakingKeeper.GetDelegatorUnbonding(ctx, addr)
+	switch {
+	case err != nil:
+		k.Logger(ctx).Error("failed to read unbonding delegations for energy eligibility",
+			"address", addr.String(), "err", err)
+	case !unbonding.IsNil() && unbonding.IsPositive():
+		staked = staked.Add(unbonding)
+	}
+
+	return staked
 }
 
 // EnsureLockedPoolExists is called once at genesis init; the SDK auth

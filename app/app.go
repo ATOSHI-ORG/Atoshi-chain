@@ -544,6 +544,11 @@ func NewAtoshi(
 		keys[energytypes.StoreKey],
 		app.AccountKeeper,
 		app.BankKeeper,
+		// Staked and unbonding ATOS count toward energy eligibility, so the
+		// energy module needs aggregate delegation reads. app.StakingKeeper is
+		// only assigned below (it needs hooks from modules built after this
+		// one), so pass the local pointer created above.
+		stakingKeeper,
 		// Adapter shim: x/energy's FeemarketKeeper interface exposes
 		// just GetMinGasPrice(ctx) so it doesn't need to import
 		// x/feemarket/types. x/feemarket's keeper provides the full

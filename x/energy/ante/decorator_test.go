@@ -114,7 +114,7 @@ func newTestEnv(t *testing.T) (keeper.Keeper, *fakeBank, fakeAccountKeeper, sdk.
 
 	bank := newFakeBank("liao")
 	ak := fakeAccountKeeper{exists: map[string]bool{}}
-	k := keeper.NewKeeper(cdc, storeKey, fakeAccKeeperShim{fakeAccountKeeper: ak}, bank, nil,
+	k := keeper.NewKeeper(cdc, storeKey, fakeAccKeeperShim{fakeAccountKeeper: ak}, bank, nil, nil,
 		sdk.AccAddress([]byte("authority")).String(), "liao")
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
