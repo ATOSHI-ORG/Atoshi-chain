@@ -1,0 +1,25 @@
+syntax = "proto3";
+package atoshi.atox.v1;
+
+import "gogoproto/gogo.proto";
+import "atoshi/atox/v1/atox.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/atox/types";
+
+// GenesisState is the atox module genesis / export state.
+//
+// ATOX is not pre-minted: supply starts at zero and is minted as block rewards,
+// so a fresh genesis carries no accounts and a zero index. The account list
+// exists for export/import of a running chain.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+
+  GlobalState global_state = 2 [(gogoproto.nullable) = false];
+
+  repeated AtoxAccount accounts = 3 [(gogoproto.nullable) = false];
+
+  // scan_cursor is the EndBlocker sweep position, so an exported chain resumes
+  // the sweep where it stopped instead of restarting from the first account and
+  // starving the tail of the keyspace.
+  bytes scan_cursor = 4;
+}

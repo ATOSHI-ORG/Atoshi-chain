@@ -1,0 +1,100 @@
+syntax = "proto3";
+package atoshi.atox.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "atoshi/atox/v1/atox.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/atox/types";
+
+// Query defines the atox module Query service.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/atoshi/atox/v1/params";
+  }
+
+  rpc GlobalState(QueryGlobalStateRequest) returns (QueryGlobalStateResponse) {
+    option (google.api.http).get = "/atoshi/atox/v1/global_state";
+  }
+
+  // Account returns the raw settlement record plus the amount that would be
+  // credited by settling right now. Wallets should show
+  // `pending + unsettled` as the user's convertible balance.
+  rpc Account(QueryAccountRequest) returns (QueryAccountResponse) {
+    option (google.api.http).get = "/atoshi/atox/v1/account/{address}";
+  }
+
+  // ExchangePool reports the module account holding the ATOS that backs ATOX,
+  // so anyone can verify solvency without trusting the running totals.
+  rpc ExchangePool(QueryExchangePoolRequest) returns (QueryExchangePoolResponse) {
+    option (google.api.http).get = "/atoshi/atox/v1/exchange_pool";
+  }
+}
+
+message QueryParamsRequest {}
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryGlobalStateRequest {}
+message QueryGlobalStateResponse {
+  GlobalState state = 1 [(gogoproto.nullable) = false];
+
+  // atox_supply is the live minted ATOX in aatox, always <= params.supply_cap.
+  string atox_supply = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryAccountRequest {
+  string address = 1;
+}
+message QueryAccountResponse {
+  AtoxAccount account = 1 [(gogoproto.nullable) = false];
+
+  // atox_balance is the account's live aatox balance.
+  string atox_balance = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // unsettled is what settling now would add to pending:
+  // atox_balance * (global_index - account.index).
+  string unsettled = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // claimable is pending + unsettled — what MsgClaimAtos would pay right now.
+  string claimable = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryExchangePoolRequest {}
+message QueryExchangePoolResponse {
+  // address of the atox_exchange_pool module account.
+  string address = 1;
+
+  // balance currently held by the pool, in aatos.
+  string balance = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // outstanding is total_pending: already settled and owed but not yet paid.
+  // balance must always cover it.
+  string outstanding = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

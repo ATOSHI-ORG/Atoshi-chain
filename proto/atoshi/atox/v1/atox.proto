@@ -1,0 +1,137 @@
+syntax = "proto3";
+package atoshi.atox.v1;
+
+import "amino/amino.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/atox/types";
+
+// Params holds the governance-tunable parameters of the atox module.
+message Params {
+  // enabled is the global kill-switch. When false, MintAtox and AddToExchangePool
+  // reject, settlement stops advancing, and the EndBlocker sweep is skipped.
+  // Already-settled `pending` stays claimable so a pause cannot strand funds.
+  bool enabled = 1;
+
+  // supply_cap is the total ATOX that will ever exist (1 trillion ATOX in
+  // aatox) and doubles as the fixed denominator of global_index.
+  //
+  // Using a fixed cap rather than the live supply is what makes one ATOX worth
+  // the same amount of ATOS regardless of when it was mined: index advances by
+  // released/supply_cap, so the share belonging to not-yet-mined ATOX simply
+  // stays in the exchange pool for future miners. It is also what makes
+  // solvency a tautology, since live supply never exceeds the cap:
+  //
+  //   sum(balance_i) * delta <= supply_cap * delta = released
+  //
+  // Dividing by the live supply would instead let whoever holds ATOX during an
+  // early release claim the entire pool.
+  string supply_cap = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // auto_settle_per_block is how many accounts the EndBlocker sweep settles and
+  // pays out each block. At 50/block and 5s blocks that is 864k accounts/day,
+  // so holders who never transact still receive their ATOS without acting.
+  uint32 auto_settle_per_block = 3;
+
+  // min_auto_payout is the pending threshold below which the sweep settles but
+  // does not transfer, to keep dust out of the block. Explicit MsgClaimAtos
+  // ignores this. Zero disables the filter.
+  string min_auto_payout = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// GlobalState is the module-wide accumulator singleton.
+message GlobalState {
+  // global_index is cumulative aatos owed per aatox held, and only ever grows.
+  // An account holding `bal` aatox since index `i` is owed
+  // `bal * (global_index - i)` aatos. Range is 0 -> 1.0, since the ATOX cap and
+  // the exchange pool are both 1 trillion tokens, so one ATOX ultimately
+  // converts to one ATOS.
+  string global_index = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // index_remainder carries the sub-precision leftover of
+  // released * 10^18 / supply_cap across releases, in units of
+  // aatos * 10^18 mod supply_cap.
+  //
+  // Without it every release silently truncates up to one index tick, and the
+  // corresponding ATOS would be stranded in the pool forever. Carrying the
+  // remainder makes accumulation exact: the sum of applied index deltas always
+  // accounts for every aatos ever released.
+  string index_remainder = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // total_released_to_pool is the cumulative ATOS moved into the exchange pool
+  // by tier releases. Audit counter; not used in the index math.
+  string total_released_to_pool = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // total_pending is the sum of every account's unpaid `pending`. Maintained
+  // incrementally so the invariant check does not have to walk all accounts:
+  //
+  //   total_pending + total_paid_out <= total_released_to_pool
+  string total_pending = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // total_paid_out is the cumulative ATOS actually transferred out of the
+  // exchange pool to holders.
+  string total_paid_out = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// AtoxAccount is the per-holder settlement record. Absent record means an
+// account that has never held ATOX; it settles from index 0, which is correct
+// because it also held no ATOX while the index advanced.
+message AtoxAccount {
+  string address = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // index is the global_index value at this account's last settlement.
+  // Everything below it has already been credited to `pending`.
+  string index = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // pending is settled-but-unpaid ATOS in aatos.
+  //
+  // Settlement cannot pay out inline: it is driven from a bank SendRestriction,
+  // so transferring here would re-enter bank mid-write. Settlement therefore
+  // only books the debt, and payout happens later from MsgClaimAtos or the
+  // EndBlocker sweep.
+  string pending = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // total_claimed is the cumulative ATOS this account has received.
+  string total_claimed = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

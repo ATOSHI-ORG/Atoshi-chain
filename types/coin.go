@@ -29,6 +29,27 @@ const (
 	// 1 ATOS = 1x10^{BaseDenomUnit} aatos
 	BaseDenomUnit = 18
 
+	// AtoxBaseDenom is the on-chain denomination of ATOX, the mining-reward
+	// token. ATOX is deliberately NOT usable for anything ATOS is used for:
+	//
+	//   - not the staking bond denom
+	//   - not the EVM denom
+	//   - not accepted as a transaction fee (app/ante/cosmos/min_price.go
+	//     restricts fees to BaseDenom)
+	//
+	// Its only function is to accrue a pro-rata claim on the ATOX exchange
+	// pool, which x/atox converts to ATOS as tier releases land.
+	AtoxBaseDenom string = "aatox"
+
+	// AtoxBaseDenomUnit mirrors BaseDenomUnit: 1 ATOX = 1x10^18 aatox.
+	// Keeping the two tokens at the same precision is what lets the x/atox
+	// index be a plain aatos-per-aatox ratio with no scaling factor.
+	AtoxBaseDenomUnit = 18
+
+	// AtoxDisplayDenom is the user-facing ATOX symbol.
+	AtoxDisplayDenom        string = "ATOX"
+	AtoxDisplayDenomTestnet string = "ATOXtest"
+
 	// DisplayDenom is the user-facing token symbol shown in wallets,
 	// explorers, and exchange listings. Mainnet uses ATOS, testnet
 	// uses ATOStest so users can visually distinguish the two

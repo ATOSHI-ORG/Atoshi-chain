@@ -1,0 +1,52 @@
+syntax = "proto3";
+package atoshi.atox.v1;
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "atoshi/atox/v1/atox.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/atox/types";
+
+// Msg defines the atox Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // ClaimAtos settles the sender against the current index and pays out the
+  // full pending balance, ignoring min_auto_payout. Holders do not need this
+  // under normal operation — the EndBlocker sweep reaches every account — but
+  // it lets a holder convert immediately instead of waiting for the sweep.
+  rpc ClaimAtos(MsgClaimAtos) returns (MsgClaimAtosResponse);
+
+  // UpdateParams updates module parameters via governance.
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+}
+
+message MsgClaimAtos {
+  option (cosmos.msg.v1.signer) = "claimer";
+
+  string claimer = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+}
+
+message MsgClaimAtosResponse {
+  // amount is the ATOS paid out by this call, in aatos.
+  string amount = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) = "authority";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  Params params = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message MsgUpdateParamsResponse {}
