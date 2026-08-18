@@ -42,7 +42,7 @@ func TestInflationParams_RoundTripsEnableInflation(t *testing.T) {
 	// state on live chains) and flip the bit; behavior matches the
 	// handler's mutation step.
 	p := inflationtypes.Params{
-		MintDenom:              "aatos",
+		MintDenom:              "liao",
 		ExponentialCalculation: inflationtypes.DefaultExponentialCalculation,
 		InflationDistribution:  inflationtypes.DefaultInflationDistribution,
 		EnableInflation:        true,

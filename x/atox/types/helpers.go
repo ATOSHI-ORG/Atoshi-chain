@@ -32,7 +32,7 @@ var IndexPrecision = math.NewIntWithDecimal(1, 18)
 // to one index tick per release, and because the index only ever moves forward,
 // the ATOS behind those truncated ticks would sit in the pool with no holder
 // able to ever claim it. Carrying the leftover into the next release means the
-// applied deltas eventually account for every aatos released.
+// applied deltas eventually account for every liao released.
 //
 // Callers must persist remainderOut; dropping it silently reintroduces the leak.
 func ComputeIndexDelta(amount, remainderIn, supplyCap math.Int) (math.LegacyDec, math.Int, error) {

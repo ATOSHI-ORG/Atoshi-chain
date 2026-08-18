@@ -44,7 +44,7 @@ message Params {
   // min_valid_reports is the minimum number of valid reports needed for consensus
   uint32 min_valid_reports = 3;
 
-  // denom is the token denom being tracked (e.g., "aatos")
+  // denom is the token denom being tracked (e.g., "liao")
   string denom = 4;
 
   // twap_lookback_seconds defines the lookback window for TWAP calculation

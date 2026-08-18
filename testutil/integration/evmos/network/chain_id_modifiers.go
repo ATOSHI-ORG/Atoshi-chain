@@ -30,10 +30,10 @@ func generateBankGenesisMetadata(chainID string) banktypes.Metadata {
 	if utils.IsTestnet(chainID) {
 		return banktypes.Metadata{
 			Description: "The native EVM, governance and staking token of the Atoshi testnet",
-			Base:        "aatos",
+			Base:        "liao",
 			DenomUnits: []*banktypes.DenomUnit{
 				{
-					Denom:    "aatos",
+					Denom:    "liao",
 					Exponent: 0,
 				},
 				{
@@ -49,10 +49,10 @@ func generateBankGenesisMetadata(chainID string) banktypes.Metadata {
 
 	return banktypes.Metadata{
 		Description: "The native EVM, governance and staking token of the Atoshi mainnet",
-		Base:        "aatos",
+		Base:        "liao",
 		DenomUnits: []*banktypes.DenomUnit{
 			{
-				Denom:    "aatos",
+				Denom:    "liao",
 				Exponent: 0,
 			},
 			{

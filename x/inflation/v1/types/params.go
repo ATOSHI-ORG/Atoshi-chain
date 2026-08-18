@@ -29,9 +29,9 @@ var (
 	DefaultInflationDenom = evmostypes.BaseDenom
 	// Audit Question 4: this module is inherited from evmos as part of
 	// the cosmos-sdk fork but is logically REDUNDANT in Atoshi: every
-	// aatos issued at this chain comes from x/tokenomics (block reward
+	// liao issued at this chain comes from x/tokenomics (block reward
 	// + tier release), not from per-epoch inflation. Leaving inflation
-	// on would mint extra aatos that bypasses the 10-trillion supply
+	// on would mint extra liao that bypasses the 10-trillion supply
 	// guard in x/tokenomics, breaking the documented hard cap. Default
 	// to disabled; governance can re-enable via MsgUpdateParams if a
 	// future tokenomics revision wants this lever back.

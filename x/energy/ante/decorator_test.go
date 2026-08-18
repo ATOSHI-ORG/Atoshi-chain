@@ -112,10 +112,10 @@ func newTestEnv(t *testing.T) (keeper.Keeper, *fakeBank, fakeAccountKeeper, sdk.
 	registry := codectypes.NewInterfaceRegistry()
 	cdc := codec.NewProtoCodec(registry)
 
-	bank := newFakeBank("aatos")
+	bank := newFakeBank("liao")
 	ak := fakeAccountKeeper{exists: map[string]bool{}}
 	k := keeper.NewKeeper(cdc, storeKey, fakeAccKeeperShim{fakeAccountKeeper: ak}, bank, nil,
-		sdk.AccAddress([]byte("authority")).String(), "aatos")
+		sdk.AccAddress([]byte("authority")).String(), "liao")
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
 	ctx := sdk.NewContext(cms, header, false, log.NewNopLogger()).
@@ -146,7 +146,7 @@ func TestDecorator_SubsidizedMsg_NoFeeCharged(t *testing.T) {
 	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
 	tx := fakeFeeTx{
 		gas:      21_000,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(1_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1_000))),
 		feePayer: signer,
 		msgs:     nil,
 	}
@@ -171,7 +171,7 @@ func TestDecorator_EnergyCoversAllGas_ZeroFee(t *testing.T) {
 	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
 	tx := fakeFeeTx{
 		gas:      21_000,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(1_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1_000))),
 		feePayer: signer,
 		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
 	}
@@ -194,17 +194,17 @@ func TestDecorator_PartialEnergy_DeductsShortfallProrated(t *testing.T) {
 
 	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
 	// gas_limit 100k, energy covers 50k → shortfall = 50k. Fee offered:
-	// 100,000 aatos for 100k gas = 1 aatos/gas. Charge = 1 * 50000 = 50000.
+	// 100,000 liao for 100k gas = 1 liao/gas. Charge = 1 * 50000 = 50000.
 	tx := fakeFeeTx{
 		gas:      100_000,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(100_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(100_000))),
 		feePayer: signer,
 		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
 	}
 	_, err := d.AnteHandle(ctx, tx, false, terminalAnte)
 	require.NoError(t, err)
 	require.NotNil(t, bank.lastAmt)
-	require.Equal(t, "aatos", bank.lastAmt[0].Denom)
+	require.Equal(t, "liao", bank.lastAmt[0].Denom)
 	require.True(t, bank.lastAmt[0].Amount.Equal(math.NewInt(50_000)),
 		"expected 50000 shortfall, got %s", bank.lastAmt[0].Amount)
 	require.Equal(t, authtypes.FeeCollectorName, bank.lastModule)
@@ -223,7 +223,7 @@ func TestDecorator_EnergyDisabled_StillChargesFullFee(t *testing.T) {
 	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
 	tx := fakeFeeTx{
 		gas:      21_000,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(21_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(21_000))),
 		feePayer: signer,
 		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
 	}

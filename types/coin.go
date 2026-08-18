@@ -18,15 +18,20 @@ const (
 	// - Crisis parameters: constant fee denomination used for spam prevention to check broken invariant
 	// - EVM parameters: denomination used for running EVM state transitions in Atoshi.
 	//
-	// Mainnet and testnet share the same BaseDenom (`aatos`) per the
-	// Cosmos-ecosystem convention; the chain ID differentiates the
-	// two networks. The atto-prefix `a` follows the `uatom` / `uosmo`
-	// pattern (10^-18 multiplier, given BaseDenomUnit = 18).
-	BaseDenom        string = "aatos"
-	BaseDenomTestnet string = "aatos"
+	// Mainnet and testnet share the same BaseDenom (`liao`) per the
+	// Cosmos-ecosystem convention; the chain ID differentiates the two
+	// networks.
+	//
+	// Unlike `uatom` / `aevmos`, the name carries no SI-prefix hint of its
+	// scale, so the 10^-18 relationship to ATOS is only discoverable through
+	// BaseDenomUnit below and the bank denom metadata registered at genesis.
+	// Anything deriving a display amount must consult one of those rather than
+	// inferring from the string.
+	BaseDenom        string = "liao"
+	BaseDenomTestnet string = "liao"
 
 	// BaseDenomUnit defines the base denomination unit for Atoshi.
-	// 1 ATOS = 1x10^{BaseDenomUnit} aatos
+	// 1 ATOS = 1x10^{BaseDenomUnit} liao
 	BaseDenomUnit = 18
 
 	// AtoxBaseDenom is the on-chain denomination of ATOX, the mining-reward
@@ -43,7 +48,7 @@ const (
 
 	// AtoxBaseDenomUnit mirrors BaseDenomUnit: 1 ATOX = 1x10^18 aatox.
 	// Keeping the two tokens at the same precision is what lets the x/atox
-	// index be a plain aatos-per-aatox ratio with no scaling factor.
+	// index be a plain liao-per-aatox ratio with no scaling factor.
 	AtoxBaseDenomUnit = 18
 
 	// AtoxDisplayDenom is the user-facing ATOX symbol.

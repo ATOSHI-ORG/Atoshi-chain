@@ -16,7 +16,7 @@ message Params {
   bool energy_enabled = 1;
 
   // tx_energy_holding_threshold is the amount of ATOS a holder needs to
-  // accrue one "tx-energy unit" worth (default 30,000 ATOS in aatos).
+  // accrue one "tx-energy unit" worth (default 30,000 ATOS in liao).
   string tx_energy_holding_threshold = 2 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false,

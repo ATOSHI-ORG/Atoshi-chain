@@ -282,9 +282,9 @@ func TestClaimMigrationTokensWithValidMerkleProof(t *testing.T) {
 func newKeeperWithOracle(t *testing.T, ok testOracleKeeper) (Keeper, sdk.Context) {
 	bk := newTestBankKeeper()
 	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] =
-		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(1, 24)))
+		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
 	bk.balances[authtypes.NewModuleAddress("tokenomics_project_pool").String()] =
-		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(1, 24)))
+		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
 	sk := testStakingKeeper{totalBonded: math.NewInt(100)}
 	return newKeeperForTest(t, bk, sk, ok)
 }
@@ -386,7 +386,7 @@ func TestEndBlocker_ZeroTimestampIsTreatedAsStale(t *testing.T) {
 // transferred the immediate share from MinerPool to FeeCollector and
 // updated releaseState IN MEMORY before checking totalBonded, then
 // returned early without persisting the in-memory updates. Result:
-//   - bank state: FeeCollector got the aatos (committed),
+//   - bank state: FeeCollector got the liao (committed),
 //   - releaseState.TotalImmediateDistributed: not persisted,
 //   - blockRewardState.TotalDistributed: not persisted.
 // On the next block, the same currentReward would be computed again

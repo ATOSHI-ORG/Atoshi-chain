@@ -79,9 +79,9 @@ func (q queryServer) EstimateFee(goCtx context.Context, req *types.QueryEstimate
 	// charges `max(offeredPerGas, InsufficientGasPrice) × shortfallGas`,
 	// where offeredPerGas comes from the tx's declared fee. Wallets
 	// broadcast txs offering `gasLimit × feemarket.min_gas_price`
-	// (currently 1 gwei = 10^9 aatos/gas), so the realistic estimate
+	// (currently 1 gwei = 10^9 liao/gas), so the realistic estimate
 	// is `min_gas_price × shortfallGas` — NOT
-	// `InsufficientGasPrice × shortfallGas` (= 0.0021 × N ≈ 567 aatos
+	// `InsufficientGasPrice × shortfallGas` (= 0.0021 × N ≈ 567 liao
 	// for a typical transfer, which displays as ~5.67e-16 ATOS and
 	// looks broken in the wallet UI).
 	//

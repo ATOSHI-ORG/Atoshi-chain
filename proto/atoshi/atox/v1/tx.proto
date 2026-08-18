@@ -30,7 +30,7 @@ message MsgClaimAtos {
 }
 
 message MsgClaimAtosResponse {
-  // amount is the ATOS paid out by this call, in aatos.
+  // amount is the ATOS paid out by this call, in liao.
   string amount = 1 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false,

@@ -26,7 +26,7 @@ type BankKeeper interface {
 // min_gas_price, so estimate_fee should compute against the same rate
 // rather than against InsufficientGasPrice (which is the audit floor,
 // not the typical charge price). Without this, /estimate_fee under-
-// reports ATOS gas by ~10^12 — 270k shortfall returns 567 aatos
+// reports ATOS gas by ~10^12 — 270k shortfall returns 567 liao
 // (≈5.67e-16 ATOS) instead of 0.00027 ATOS.
 //
 // Wired as a single accessor rather than the full FeeMarketKeeper to

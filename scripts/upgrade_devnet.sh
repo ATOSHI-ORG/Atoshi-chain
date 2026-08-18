@@ -27,7 +27,7 @@ cd "$ROOT"
 CHAIN_ID="atoshi_88388-1"
 HOME_DIR="$HOME/.atoshid-upgrade-test"
 KEYRING="test"
-DENOM="aatos"
+DENOM="liao"
 
 # 端口（与 local_node.sh / qa_devnet.sh 错开）
 RPC_PORT=26697
@@ -89,8 +89,8 @@ jq '
   | .app_state.gov.params.max_deposit_period = "60s"
   | .app_state.gov.params.expedited_voting_period = "30s"
   | .app_state.gov.params.quorum = "0.100000000000000000"
-  | .app_state.gov.params.min_deposit = [{"denom":"aatos","amount":"1000000"}]
-  | .app_state.gov.params.expedited_min_deposit = [{"denom":"aatos","amount":"5000000"}]
+  | .app_state.gov.params.min_deposit = [{"denom":"liao","amount":"1000000"}]
+  | .app_state.gov.params.expedited_min_deposit = [{"denom":"liao","amount":"5000000"}]
 ' "$GENESIS" > "$GENESIS.tmp" && mv "$GENESIS.tmp" "$GENESIS"
 
 "$ATOSHID" "${H[@]}" gentx validator "$(atos 1000)$DENOM" --chain-id "$CHAIN_ID" --keyring-backend "$KEYRING" >/dev/null
@@ -187,7 +187,7 @@ cat > /tmp/upgrade-v20.1.json <<EOF
     }
   ],
   "metadata": "local upgrade simulation",
-  "deposit": "1000000aatos",
+  "deposit": "1000000liao",
   "title": "v20.1 local test",
   "summary": "Local devnet simulation of v20.1 upgrade (RefreshAllSnapshots + SendRestriction)."
 }

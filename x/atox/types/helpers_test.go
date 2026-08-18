@@ -17,14 +17,14 @@ var cap1T = math.NewIntWithDecimal(1, 30)
 func TestComputeIndexDelta_TierRelease(t *testing.T) {
 	// A tier release of 1 billion ATOS against a 1-trillion-ATOX cap must give
 	// every ATOX a claim on 1e9/1e12 = 0.001 ATOS.
-	released := math.NewIntWithDecimal(1, 27) // 1e9 ATOS in aatos
+	released := math.NewIntWithDecimal(1, 27) // 1e9 ATOS in liao
 
 	delta, rem, err := types.ComputeIndexDelta(released, math.ZeroInt(), cap1T)
 	require.NoError(t, err)
 	require.Equal(t, "0.001000000000000000", delta.String())
 	require.True(t, rem.IsZero(), "exact division should leave no remainder")
 
-	// One ATOX (1e18 aatox) is therefore owed 0.001 ATOS (1e15 aatos).
+	// One ATOX (1e18 aatox) is therefore owed 0.001 ATOS (1e15 liao).
 	owed := types.ComputeOwed(math.NewIntWithDecimal(1, 18), delta)
 	require.Equal(t, math.NewIntWithDecimal(1, 15).String(), owed.String())
 }

@@ -65,7 +65,7 @@ func (s *VestingTestSuite) SetupWithGenesisValSet(valSet *cmttypes.ValidatorSet,
 
 	// set validators and delegations
 	stakingParams := stakingtypes.DefaultParams()
-	// set bond denom to be aatos
+	// set bond denom to be liao
 	stakingParams.BondDenom = evmostypes.BaseDenom
 	stakingGenesis := stakingtypes.NewGenesisState(stakingParams, validators, delegations)
 	genesisState[stakingtypes.ModuleName] = app.AppCodec().MustMarshalJSON(stakingGenesis)

@@ -87,7 +87,7 @@ func runRefundPost(
 		WithValue(energyante.CtxKeyEnergySigner, signer)
 	tx := fakeFeeTx{
 		gas:      gasLimit,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(1_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1_000))),
 		feePayer: signer,
 		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
 	}

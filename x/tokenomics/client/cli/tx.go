@@ -83,7 +83,7 @@ func NewClaimMigrationTokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claim-migration-tokens AMOUNT PROOF_HEX[,PROOF_HEX...]",
 		Short: "Redeem pre-mine migration ATOS using a Merkle proof",
-		Long: `AMOUNT is the integer aatos amount allocated to your address in the snapshot.
+		Long: `AMOUNT is the integer liao amount allocated to your address in the snapshot.
 PROOF_HEX is a comma-separated list of sibling node hashes (hex, no 0x), in
 order from leaf to root. The leaf hash is computed on-chain from the signer
 address and amount.`,

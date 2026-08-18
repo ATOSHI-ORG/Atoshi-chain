@@ -581,7 +581,7 @@ func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
 
 	// After 1st delegate: bank 270k, locked 30k, eligible should be
 	// unchanged at 300k.
-	bank1 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	bank1 := bank.GetBalance(ctx, delegator, "liao").Amount
 	require.True(t, bank1.Equal(math.NewIntWithDecimal(270_000, 18)),
 		"after 1st delegate bank should be 270k, got %s", bank1)
 	acct1 := k.GetEnergyAccount(ctx, delegator)
@@ -603,7 +603,7 @@ func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
 	// After 2nd delegate: bank 240k, locked 60k, eligible should STILL
 	// be 300k. This is where the production testnet account diverges —
 	// it shows snapshot = bank + 30k (only one lock counted).
-	bank2 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	bank2 := bank.GetBalance(ctx, delegator, "liao").Amount
 	require.True(t, bank2.Equal(math.NewIntWithDecimal(240_000, 18)),
 		"after 2nd delegate bank should be 240k, got %s", bank2)
 	acct2 := k.GetEnergyAccount(ctx, delegator)
@@ -618,26 +618,26 @@ func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
 
 	// EXTENDED REPRO: simulate the fee-paying tx that happened AFTER
 	// the 2nd delegate on the user's testnet account 0x30F288... — bank
-	// dropped by ~245194 aatos (one 245k-gas MsgSend at 1 gwei). This
+	// dropped by ~245194 liao (one 245k-gas MsgSend at 1 gwei). This
 	// fee deduction goes through SendCoinsFromAccountToModule(payer,
 	// FeeCollectorName, fee) which DOES fire SendRestriction, so
 	// snapshot should be re-projected.
 	feeAmount := math.NewInt(245_194_000_000_000) // ≈ 0.000245194 ATOS
 	err = bank.SendCoinsFromAccountToModule(ctx, delegator, "fee_collector",
-		sdk.NewCoins(sdk.NewCoin("aatos", feeAmount)))
+		sdk.NewCoins(sdk.NewCoin("liao", feeAmount)))
 	require.NoError(t, err)
 
-	bank3 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	bank3 := bank.GetBalance(ctx, delegator, "liao").Amount
 	expectedBank3 := math.NewIntWithDecimal(240_000, 18).Sub(feeAmount)
 	require.True(t, bank3.Equal(expectedBank3),
-		"after fee tx bank should be 240k - 245194_aatos, got %s", bank3)
+		"after fee tx bank should be 240k - 245194_liao, got %s", bank3)
 
 	acct3 := k.GetEnergyAccount(ctx, delegator)
 	require.True(t, acct3.LockedAtos.Equal(math.NewIntWithDecimal(60_000, 18)),
 		"LockedAtos unchanged by fee tx (still 60k), got %s", acct3.LockedAtos)
 
 	// AT THIS POINT — this is exactly the user's chain state shape.
-	// Expected snapshot: bank_post + LockedAtos = (240k - 245194_aatos) + 60k
+	// Expected snapshot: bank_post + LockedAtos = (240k - 245194_liao) + 60k
 	//                  = 299_999.999754806 ATOS
 	// Actual on testnet:  248_999.999754806 ATOS  ← 30k short
 	expectedSnapshot := expectedBank3.Add(math.NewIntWithDecimal(60_000, 18))
@@ -716,11 +716,11 @@ func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
 	// restriction. Modeling as send-to-module captures the SendRestriction
 	// invocation faithfully.
 	err = bank.SendCoinsFromAccountToModule(ctx, delegator, "external_recipient_module",
-		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(30_000, 18))))
+		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(30_000, 18))))
 	require.NoError(t, err)
 
 	final := k.GetEnergyAccount(ctx, delegator)
-	finalBank := bank.GetBalance(ctx, delegator, "aatos").Amount
+	finalBank := bank.GetBalance(ctx, delegator, "liao").Amount
 	t.Logf("After MsgSend: bank=%s, locked=%s, snapshot=%s",
 		finalBank, final.LockedAtos, final.LastBalanceSnapshot)
 
@@ -778,7 +778,7 @@ func TestDelegate_IsCapNeutralOnEligibleBalance(t *testing.T) {
 
 	// Cross-check the components: bank dropped by 30k, LockedAtos rose
 	// by 30k, sum unchanged.
-	bankAmt := bank.GetBalance(ctx, delegator, "aatos").Amount
+	bankAmt := bank.GetBalance(ctx, delegator, "liao").Amount
 	require.True(t, bankAmt.Equal(math.NewIntWithDecimal(60_000, 18)),
 		"bank balance must drop by lockedATOS=30k")
 	acct := k.GetEnergyAccount(ctx, delegator)
@@ -824,7 +824,7 @@ func TestDelegateUndelegate_RoundTripPreservesEligibleBalance(t *testing.T) {
 	acct := k.GetEnergyAccount(ctx, delegator)
 	require.True(t, acct.LockedAtos.IsZero(),
 		"LockedAtos counter returns to zero after full undelegate")
-	require.True(t, bank.GetBalance(ctx, delegator, "aatos").Amount.Equal(math.NewIntWithDecimal(90_000, 18)),
+	require.True(t, bank.GetBalance(ctx, delegator, "liao").Amount.Equal(math.NewIntWithDecimal(90_000, 18)),
 		"bank balance fully restored")
 }
 

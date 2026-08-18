@@ -38,7 +38,7 @@ cd "$ROOT"
 CHAIN_ID="atoshi_88388-1"
 HOME_DIR="$(mktemp -d /tmp/atoshid-energy-itest.XXXXXX)"
 KEYRING="test"
-DENOM="aatos"
+DENOM="liao"
 # Use NON-default ports so we don't collide with a running local_node.sh
 # instance on the same machine. CometBFT defaults are 26656/26657/26658;
 # Cosmos defaults are 9090/1317/8545. We shift everything by +20.
@@ -51,9 +51,9 @@ EVM_PORT=8565      # Ethereum JSON-RPC (default 8545)
 NODE_RPC="tcp://localhost:${RPC_PORT}"
 ATOSHID="$ROOT/build/atoshid"
 
-# 1 ATOS = 1e18 aatos. Use a helper that APPENDS 18 zeros to a count
+# 1 ATOS = 1e18 liao. Use a helper that APPENDS 18 zeros to a count
 # (we can't use bash arithmetic — 10^18 overflows int64) so callers
-# write `$(atos 60000)aatos` for 60000 ATOS.
+# write `$(atos 60000)liao` for 60000 ATOS.
 atos() { printf '%s000000000000000000' "$1"; }
 
 cleanup() {
@@ -190,7 +190,7 @@ QFL=( --home "$HOME_DIR" --node "$NODE_RPC" --output json )
 TFL=( --home "$HOME_DIR" --chain-id "$CHAIN_ID" --keyring-backend $KEYRING --node "$NODE_RPC" --yes \
       --gas 500000 --gas-prices "1$DENOM" --output json )
 
-# helper: query alice's bank balance in aatos (string)
+# helper: query alice's bank balance in liao (string)
 bank_bal() {
   "$ATOSHID" query bank balance "$1" "$DENOM" "${QFL[@]}" | jq -r '.balance.amount'
 }
@@ -218,7 +218,7 @@ echo "  feeder addr: $FEEDER"
 # first touch (AnteHandler / msg_server). A query alone does not initialize.
 # So we send a tiny tx from alice -> bob first to register her account,
 # then wait, then check accrual.
-log "2a) warmup: alice -> bob (1 aatos) to initialize alice's energy account"
+log "2a) warmup: alice -> bob (1 liao) to initialize alice's energy account"
 "$ATOSHID" "${H[@]}" tx bank send alice "$BOB" "1$DENOM" --from alice "${TFL[@]}" >/dev/null
 sleep 3
 INIT_ENERGY=$(energy_acc "$ALICE" | jq -r '.settled.tx_energy_accrued')
@@ -253,7 +253,7 @@ BAL_AFTER=$(bank_bal "$CHARLIE")
 DELTA=$(( BAL_BEFORE - BAL_AFTER ))
 # delta = 1 (sent) + gas_fee
 [[ "$DELTA" -gt 100 ]] || fail "charlie should have paid gas (delta=$DELTA)"
-ok "charlie paid $DELTA aatos (1 sent + $(( DELTA - 1 )) gas)"
+ok "charlie paid $DELTA liao (1 sent + $(( DELTA - 1 )) gas)"
 
 # ============================================================================
 log "5) alice (60k ATOS, has accrued energy) → energy covers some gas"
@@ -267,7 +267,7 @@ BAL_BEFORE=$(bank_bal "$ALICE")
 sleep 3
 BAL_AFTER=$(bank_bal "$ALICE")
 ATOS_DELTA=$(( BAL_BEFORE - BAL_AFTER ))
-ok "alice spent $ATOS_DELTA aatos for the same MsgSend (charlie paid $CHARLIE_PAID)"
+ok "alice spent $ATOS_DELTA liao for the same MsgSend (charlie paid $CHARLIE_PAID)"
 [[ "$ATOS_DELTA" -lt "$CHARLIE_PAID" ]] \
   || fail "alice ($ATOS_DELTA) should have paid LESS than charlie ($CHARLIE_PAID) thanks to energy coverage"
 
@@ -310,7 +310,7 @@ ok "delegation id = $DELEG_ID"
 
 # ============================================================================
 log "7) bob uses delegated energy to partially cover gas"
-# Bob sends 1 aatos. He has no own energy (5k ATOS, below threshold)
+# Bob sends 1 liao. He has no own energy (5k ATOS, below threshold)
 # but inherits the 1000 gas units alice delegated. Expected: bob's
 # inbound_usable drops by 1000 (fully consumed); bob still pays the
 # remaining ~499000 in ATOS gas.
@@ -322,7 +322,7 @@ BOB_BAL_AFTER=$(bank_bal "$BOB")
 BOB_IN_AFTER=$(energy_acc "$BOB" | jq -r '.settled.delegated_in_usable')
 BOB_DELTA=$(( BOB_BAL_BEFORE - BOB_BAL_AFTER ))
 INBOUND_DELTA=$(( BOB_IN_BEFORE - BOB_IN_AFTER ))
-ok "bob spent $BOB_DELTA aatos, inbound energy $BOB_IN_BEFORE → $BOB_IN_AFTER (Δ=$INBOUND_DELTA)"
+ok "bob spent $BOB_DELTA liao, inbound energy $BOB_IN_BEFORE → $BOB_IN_AFTER (Δ=$INBOUND_DELTA)"
 [[ "$INBOUND_DELTA" -gt 0 ]] || fail "bob should have consumed inbound delegated energy"
 
 # ============================================================================

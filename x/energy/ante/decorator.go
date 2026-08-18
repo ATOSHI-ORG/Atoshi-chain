@@ -250,15 +250,15 @@ func (d EnergyDeductDecorator) AnteHandle(
 //
 // Audit Question 6 (round2): the prior implementation used integer
 // arithmetic without the floor on the non-zero-offered branch. A user
-// could submit fee = 1 aatos against gasLimit = 200_000:
+// could submit fee = 1 liao against gasLimit = 200_000:
 //   num = 1 × shortfallGas
 //   amt = num / 200_000 = 0   (integer division truncation)
 // chargeAtos.IsZero() then short-circuited the ante to next(), letting
-// the user pay literally one aatos in fee while consuming the chain's
+// the user pay literally one liao in fee while consuming the chain's
 // gas for an arbitrary tx — a complete shortfall fee evasion.
 //
 // The zero-offered branch already floored at InsufficientGasPrice, but
-// a 1-aatos offer dodged that branch. The fix unifies both paths
+// a 1-liao offer dodged that branch. The fix unifies both paths
 // through a single gas-price floor:
 //
 //   offeredPerGas := offered / gasLimit  (Dec to avoid truncation)
@@ -270,7 +270,7 @@ func (d EnergyDeductDecorator) AnteHandle(
 //   - A user offering >= InsufficientGasPrice * gasLimit pays the
 //     pro-rated portion — same as the old code's intended path.
 //   - A user offering < InsufficientGasPrice * gasLimit (including 0,
-//     including the 1-aatos evasion shape) pays at least
+//     including the 1-liao evasion shape) pays at least
 //     InsufficientGasPrice × shortfallGas — minimum economic cost.
 //   - shortfallGas == 0 or gasLimit == 0 still short-circuits to
 //     empty coins (no charge — Consume covered all gas).
@@ -289,7 +289,7 @@ func computeShortfallFee(
 
 	// Step 1: compute the user's offered per-gas rate. Use LegacyDec
 	// so truncation doesn't happen here (integer Quo would lose
-	// fractional precision below 1 aatos/gas, and that fraction
+	// fractional precision below 1 liao/gas, and that fraction
 	// matters when shortfallGas < gasLimit).
 	gasLimitDec := math.LegacyNewDec(int64(gasLimit))
 	offeredPerGas := math.LegacyZeroDec()
@@ -298,7 +298,7 @@ func computeShortfallFee(
 	}
 
 	// Step 2: floor at InsufficientGasPrice. This is the single
-	// chokepoint that prevents the 1-aatos evasion the audit flagged.
+	// chokepoint that prevents the 1-liao evasion the audit flagged.
 	if !params.InsufficientGasPrice.IsNil() && params.InsufficientGasPrice.IsPositive() &&
 		offeredPerGas.LT(params.InsufficientGasPrice) {
 		offeredPerGas = params.InsufficientGasPrice
@@ -342,12 +342,12 @@ func computeShortfallFee(
 const maxInt64Priority = int64(^uint64(0) >> 1)
 
 // Audit Issue-15 (round1-issue8): getTxPriority must only consider the
-// chain's base denom (aatos). The previous signature took no denom
+// chain's base denom (liao). The previous signature took no denom
 // and iterated every coin in the fee bag, treating each as if it
 // could move the priority needle. The chain is single-fee-denom
 // today, so the bug is latent — but as soon as governance enables
 // IBC vouchers, gov-staked alt-coins, or any non-base fee path, an
-// attacker could attach a high-amount alt-coin to a low-aatos tx and
+// attacker could attach a high-amount alt-coin to a low-liao tx and
 // either crowd into the mempool's front (if their alt-coin yielded
 // MaxInt64 priority and the min-selection happened to pick it) or
 // drag priority down (if the alt-coin yielded a tiny per-gas number

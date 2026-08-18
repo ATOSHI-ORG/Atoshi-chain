@@ -30,7 +30,7 @@ func DefaultParams() Params {
 		AllowedFeeders:       []string{},
 		MaxPriceAgeSeconds:   3600,  // 1 hour
 		MinValidReports:      1,
-		Denom:                "aatos",
+		Denom:                "liao",
 		TWAPLookbackSeconds:  86400, // 24 hours
 		MaxPriceDeviationBps: 5000,  // 50% (audit Issue 10-A: widen from 10%)
 	}

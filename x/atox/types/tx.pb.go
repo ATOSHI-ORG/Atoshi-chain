@@ -77,7 +77,7 @@ func (m *MsgClaimAtos) GetClaimer() string {
 }
 
 type MsgClaimAtosResponse struct {
-	// amount is the ATOS paid out by this call, in aatos.
+	// amount is the ATOS paid out by this call, in liao.
 	Amount cosmossdk_io_math.Int `protobuf:"bytes,1,opt,name=amount,proto3,customtype=cosmossdk.io/math.Int" json:"amount"`
 }
 

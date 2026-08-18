@@ -64,7 +64,7 @@ func newEstFeeKeeper(t *testing.T, fk types.FeemarketKeeper) (keeper.Keeper, sdk
 	cdc := codec.NewProtoCodec(registry)
 
 	k := keeper.NewKeeper(cdc, storeKey, estFeeAcct{}, estFeeBank{}, fk,
-		sdk.AccAddress([]byte("authority")).String(), "aatos")
+		sdk.AccAddress([]byte("authority")).String(), "liao")
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
 	ctx := sdk.NewContext(cms, header, false, log.NewNopLogger()).
@@ -74,16 +74,16 @@ func newEstFeeKeeper(t *testing.T, fk types.FeemarketKeeper) (keeper.Keeper, sdk
 }
 
 // Production scenario: chain genesis sets feemarket.min_gas_price = 1 gwei
-// (10^9 aatos/gas). A typical 300k-gas MsgSend with zero accrued energy
+// (10^9 liao/gas). A typical 300k-gas MsgSend with zero accrued energy
 // has shortfall_gas = 300_000, so estimate_fee should return
 //
-//   atos_fee = 1e9 × 300_000 = 3e14 aatos = 0.0003 ATOS
+//   atos_fee = 1e9 × 300_000 = 3e14 liao = 0.0003 ATOS
 //
-// Pre-fix (round-3 only) this returned 0.0021 × 300_000 = 630 aatos
+// Pre-fix (round-3 only) this returned 0.0021 × 300_000 = 630 liao
 // (≈6.3e-16 ATOS) — off by 10^12, wallet UI displayed "0.000000..." and
 // looked broken.
 func TestEstimateFee_UsesFeemarketMinGasPrice(t *testing.T) {
-	gwei := math.LegacyNewDec(1_000_000_000) // 1 gwei in aatos/gas
+	gwei := math.LegacyNewDec(1_000_000_000) // 1 gwei in liao/gas
 	k, ctx := newEstFeeKeeper(t, stubFeemarket{price: gwei})
 
 	signer := sdk.AccAddress([]byte("alice___________________"))
@@ -97,9 +97,9 @@ func TestEstimateFee_UsesFeemarketMinGasPrice(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 300_000, resp.ShortfallGas)
 
-	expected := math.LegacyNewDec(300_000_000_000_000) // 0.0003 ATOS = 3e14 aatos
+	expected := math.LegacyNewDec(300_000_000_000_000) // 0.0003 ATOS = 3e14 liao
 	require.True(t, resp.AtosFee.Equal(expected),
-		"expected atos_fee = %s aatos, got %s", expected, resp.AtosFee)
+		"expected atos_fee = %s liao, got %s", expected, resp.AtosFee)
 }
 
 // Belt-and-suspenders: if production ever forgets to wire feemarket
@@ -117,10 +117,10 @@ func TestEstimateFee_FallbackToInsufficientGasPrice(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.EqualValues(t, 300_000, resp.ShortfallGas)
-	// DefaultParams.InsufficientGasPrice = 0.0021 aatos/gas
+	// DefaultParams.InsufficientGasPrice = 0.0021 liao/gas
 	// → 0.0021 × 300_000 = 630
 	require.True(t, resp.AtosFee.Equal(math.LegacyNewDec(630)),
-		"fallback path: expected 630 aatos, got %s", resp.AtosFee)
+		"fallback path: expected 630 liao, got %s", resp.AtosFee)
 }
 
 // Zero shortfall (energy fully covered the gas) should return atos_fee=0

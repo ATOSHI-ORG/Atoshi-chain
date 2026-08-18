@@ -6,7 +6,7 @@ package app
 import "cosmossdk.io/math"
 
 var (
-	// MainnetMinGasPrices defines 20B aatos as the minimum gas price value on the fee market module.
+	// MainnetMinGasPrices defines 20B liao as the minimum gas price value on the fee market module.
 	// See the corresponding Atoshi governance discussion for reference
 	MainnetMinGasPrices = math.LegacyNewDec(20_000_000_000)
 	// MainnetMinGasMultiplier defines the min gas multiplier value on the fee market module.

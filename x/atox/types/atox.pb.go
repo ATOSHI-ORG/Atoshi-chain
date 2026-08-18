@@ -105,20 +105,20 @@ func (m *Params) GetAutoSettlePerBlock() uint32 {
 
 // GlobalState is the module-wide accumulator singleton.
 type GlobalState struct {
-	// global_index is cumulative aatos owed per aatox held, and only ever grows.
+	// global_index is cumulative liao owed per aatox held, and only ever grows.
 	// An account holding `bal` aatox since index `i` is owed
-	// `bal * (global_index - i)` aatos. Range is 0 -> 1.0, since the ATOX cap and
+	// `bal * (global_index - i)` liao. Range is 0 -> 1.0, since the ATOX cap and
 	// the exchange pool are both 1 trillion tokens, so one ATOX ultimately
 	// converts to one ATOS.
 	GlobalIndex cosmossdk_io_math.LegacyDec `protobuf:"bytes,1,opt,name=global_index,json=globalIndex,proto3,customtype=cosmossdk.io/math.LegacyDec" json:"global_index"`
 	// index_remainder carries the sub-precision leftover of
 	// released * 10^18 / supply_cap across releases, in units of
-	// aatos * 10^18 mod supply_cap.
+	// liao * 10^18 mod supply_cap.
 	//
 	// Without it every release silently truncates up to one index tick, and the
 	// corresponding ATOS would be stranded in the pool forever. Carrying the
 	// remainder makes accumulation exact: the sum of applied index deltas always
-	// accounts for every aatos ever released.
+	// accounts for every liao ever released.
 	IndexRemainder cosmossdk_io_math.Int `protobuf:"bytes,2,opt,name=index_remainder,json=indexRemainder,proto3,customtype=cosmossdk.io/math.Int" json:"index_remainder"`
 	// total_released_to_pool is the cumulative ATOS moved into the exchange pool
 	// by tier releases. Audit counter; not used in the index math.
@@ -174,7 +174,7 @@ type AtoxAccount struct {
 	// index is the global_index value at this account's last settlement.
 	// Everything below it has already been credited to `pending`.
 	Index cosmossdk_io_math.LegacyDec `protobuf:"bytes,2,opt,name=index,proto3,customtype=cosmossdk.io/math.LegacyDec" json:"index"`
-	// pending is settled-but-unpaid ATOS in aatos.
+	// pending is settled-but-unpaid ATOS in liao.
 	//
 	// Settlement cannot pay out inline: it is driven from a bank SendRestriction,
 	// so transferring here would re-enter bank mid-write. Settlement therefore

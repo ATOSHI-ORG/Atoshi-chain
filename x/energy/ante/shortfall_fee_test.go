@@ -57,7 +57,7 @@ func newKeeperForShortfallTest(t *testing.T) (keeper.Keeper, sdk.Context) {
 	cdc := codec.NewProtoCodec(registry)
 
 	k := keeper.NewKeeper(cdc, storeKey, shortfallAcctStub{}, shortfallBankStub{}, nil,
-		sdk.AccAddress([]byte("authority")).String(), "aatos")
+		sdk.AccAddress([]byte("authority")).String(), "liao")
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
 	ctx := sdk.NewContext(cms, header, false, log.NewNopLogger())
@@ -65,7 +65,7 @@ func newKeeperForShortfallTest(t *testing.T) (keeper.Keeper, sdk.Context) {
 	return k, ctx
 }
 
-// Audit Question 6 (round2) regression: a user offering 1 aatos in
+// Audit Question 6 (round2) regression: a user offering 1 liao in
 // fee with gasLimit = 200,000 must NOT slip through with chargeAtos = 0
 // when there is genuine shortfall gas to bill.
 //
@@ -76,21 +76,21 @@ func newKeeperForShortfallTest(t *testing.T) (keeper.Keeper, sdk.Context) {
 //
 // Post-fix: the InsufficientGasPrice floor kicks in. With default
 // params (InsufficientGasPrice = 0.0021), and shortfallGas = 1000:
-//   floor amount = ceil(0.0021 × 1000) = ceil(2.1) = 3 aatos
-// So chargeAtos must be at least 3 aatos — never zero.
+//   floor amount = ceil(0.0021 × 1000) = ceil(2.1) = 3 liao
+// So chargeAtos must be at least 3 liao — never zero.
 func TestComputeShortfallFee_FloorsAtInsufficientGasPriceOnDustOffer(t *testing.T) {
 	k, ctx := newKeeperForShortfallTest(t)
 
-	// User offers a 1-aatos fee against gas_limit = 200_000.
-	fee := sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(1)))
+	// User offers a 1-liao fee against gas_limit = 200_000.
+	fee := sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1)))
 	got := computeShortfallFee(k, ctx, 1000 /* shortfallGas */, fee, 200_000 /* gasLimit */)
 
 	require.False(t, got.IsZero(),
-		"audit Q6: dust offer (1 aatos / 200k gas) must NOT produce chargeAtos = 0; the InsufficientGasPrice floor must trigger")
+		"audit Q6: dust offer (1 liao / 200k gas) must NOT produce chargeAtos = 0; the InsufficientGasPrice floor must trigger")
 
 	// Default InsufficientGasPrice = 0.0021. shortfallGas = 1000 →
-	// floor = ceil(0.0021 × 1000) = ceil(2.1) = 3 aatos.
-	require.EqualValues(t, int64(3), got.AmountOf("aatos").Int64(),
+	// floor = ceil(0.0021 × 1000) = ceil(2.1) = 3 liao.
+	require.EqualValues(t, int64(3), got.AmountOf("liao").Int64(),
 		"chargeAtos must equal ceil(InsufficientGasPrice × shortfallGas) when the user's offered rate falls below the floor")
 }
 
@@ -100,13 +100,13 @@ func TestComputeShortfallFee_FloorsAtInsufficientGasPriceOnDustOffer(t *testing.
 func TestComputeShortfallFee_ProRatesNormalOffer(t *testing.T) {
 	k, ctx := newKeeperForShortfallTest(t)
 
-	// 1 aatos/gas × 200_000 = 200_000 aatos total fee. Well above
+	// 1 liao/gas × 200_000 = 200_000 liao total fee. Well above
 	// the 0.0021 InsufficientGasPrice floor.
-	fee := sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(200_000)))
+	fee := sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(200_000)))
 	got := computeShortfallFee(k, ctx, 1000, fee, 200_000)
 
-	// Pro-rated: 200_000 × 1000 / 200_000 = 1000 aatos.
-	require.EqualValues(t, int64(1000), got.AmountOf("aatos").Int64(),
+	// Pro-rated: 200_000 × 1000 / 200_000 = 1000 liao.
+	require.EqualValues(t, int64(1000), got.AmountOf("liao").Int64(),
 		"normal offer must pro-rate exactly: offered × shortfallGas / gasLimit")
 }
 
@@ -120,7 +120,7 @@ func TestComputeShortfallFee_ZeroOfferStillFloors(t *testing.T) {
 	got := computeShortfallFee(k, ctx, 1000, sdk.NewCoins(), 200_000)
 
 	// ceil(0.0021 × 1000) = 3.
-	require.EqualValues(t, int64(3), got.AmountOf("aatos").Int64(),
+	require.EqualValues(t, int64(3), got.AmountOf("liao").Int64(),
 		"zero-offer floor unchanged after the unified rewrite")
 }
 
@@ -128,7 +128,7 @@ func TestComputeShortfallFee_ZeroOfferStillFloors(t *testing.T) {
 // covered all gas; nothing to charge.
 func TestComputeShortfallFee_ZeroShortfallChargesNothing(t *testing.T) {
 	k, ctx := newKeeperForShortfallTest(t)
-	fee := sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(1)))
+	fee := sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1)))
 	got := computeShortfallFee(k, ctx, 0, fee, 200_000)
 	require.True(t, got.IsZero(), "shortfallGas=0 must return empty coins")
 }

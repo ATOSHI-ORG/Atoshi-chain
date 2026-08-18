@@ -28,7 +28,7 @@ func TestSendRestriction_ReceiverSnapshotRefreshed(t *testing.T) {
 	// matches what the hook sees in production.
 	bank.balances[alice.String()] = math.NewIntWithDecimal(50_000, 18) // sub from alice
 	out, err := k.SendRestriction(ctx, alice, bob,
-		sdk.NewCoins(sdk.NewCoin("aatos", moved)))
+		sdk.NewCoins(sdk.NewCoin("liao", moved)))
 	require.NoError(t, err)
 	require.Equal(t, bob, out)
 
@@ -82,7 +82,7 @@ func TestSendRestriction_InboundIncreasesCapacity(t *testing.T) {
 	bank.balances[alice.String()] = math.NewIntWithDecimal(50_000, 18)
 	moved := math.NewIntWithDecimal(30_000, 18)
 	_, err := k.SendRestriction(ctx, alice, bob,
-		sdk.NewCoins(sdk.NewCoin("aatos", moved)))
+		sdk.NewCoins(sdk.NewCoin("liao", moved)))
 	require.NoError(t, err)
 
 	bobAcct := k.GetEnergyAccount(ctx, bob)
@@ -104,7 +104,7 @@ func TestSendRestriction_DrainsToZero(t *testing.T) {
 	// Evmos sub-first ordering: subUnlockedCoins drains alice's bank
 	// to zero before SendRestriction fires.
 	bank.balances[alice.String()] = math.ZeroInt()
-	_, err := k.SendRestriction(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin("aatos", bal)))
+	_, err := k.SendRestriction(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin("liao", bal)))
 	require.NoError(t, err)
 
 	aliceAcct := k.GetEnergyAccount(ctx, alice)

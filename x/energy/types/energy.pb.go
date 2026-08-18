@@ -34,7 +34,7 @@ type Params struct {
 	// Existing accrued energy and delegations are preserved.
 	EnergyEnabled bool `protobuf:"varint,1,opt,name=energy_enabled,json=energyEnabled,proto3" json:"energy_enabled,omitempty"`
 	// tx_energy_holding_threshold is the amount of ATOS a holder needs to
-	// accrue one "tx-energy unit" worth (default 30,000 ATOS in aatos).
+	// accrue one "tx-energy unit" worth (default 30,000 ATOS in liao).
 	TxEnergyHoldingThreshold cosmossdk_io_math.Int `protobuf:"bytes,2,opt,name=tx_energy_holding_threshold,json=txEnergyHoldingThreshold,proto3,customtype=cosmossdk.io/math.Int" json:"tx_energy_holding_threshold"`
 	// tx_energy_per_threshold is how much TxEnergy (in gas units) one
 	// "tx-energy unit" represents (default 50,000 — equivalent to ~1 ERC20

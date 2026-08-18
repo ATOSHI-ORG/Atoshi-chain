@@ -101,7 +101,7 @@ type Params struct {
 	MaxPriceAgeSeconds uint64 `protobuf:"varint,2,opt,name=max_price_age_seconds,json=maxPriceAgeSeconds,proto3" json:"max_price_age_seconds,omitempty"`
 	// min_valid_reports is the minimum number of valid reports needed for consensus
 	MinValidReports uint32 `protobuf:"varint,3,opt,name=min_valid_reports,json=minValidReports,proto3" json:"min_valid_reports,omitempty"`
-	// denom is the token denom being tracked (e.g., "aatos")
+	// denom is the token denom being tracked (e.g., "liao")
 	Denom string `protobuf:"bytes,4,opt,name=denom,proto3" json:"denom,omitempty"`
 	// twap_lookback_seconds defines the lookback window for TWAP calculation
 	TWAPLookbackSeconds uint64 `protobuf:"varint,5,opt,name=twap_lookback_seconds,json=twapLookbackSeconds,proto3" json:"twap_lookback_seconds,omitempty"`

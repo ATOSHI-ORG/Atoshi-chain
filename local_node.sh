@@ -11,7 +11,7 @@
 
 # Development Chain ID (also used for testing)
 CHAINID="${CHAIN_ID:-atoshi_88388-1}"
-BASE_DENOM="aatos"
+BASE_DENOM="liao"
 DISPLAY_DENOM="atos"
 MONIKER="atoshi-dev-node"
 

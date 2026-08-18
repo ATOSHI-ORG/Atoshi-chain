@@ -105,7 +105,7 @@ func TestSDKTxFeeChecker(t *testing.T) {
 				return txBuilder.GetTx()
 			},
 			false,
-			"10aatos",
+			"10liao",
 			0,
 			true,
 		},
@@ -150,7 +150,7 @@ func TestSDKTxFeeChecker(t *testing.T) {
 				return txBuilder.GetTx()
 			},
 			true,
-			"10aatos",
+			"10liao",
 			0,
 			true,
 		},
@@ -167,7 +167,7 @@ func TestSDKTxFeeChecker(t *testing.T) {
 				return txBuilder.GetTx()
 			},
 			true,
-			"10000010aatos",
+			"10000010liao",
 			10,
 			true,
 		},
@@ -188,7 +188,7 @@ func TestSDKTxFeeChecker(t *testing.T) {
 				return txBuilder.GetTx()
 			},
 			true,
-			"10aatos",
+			"10liao",
 			0,
 			true,
 		},
@@ -211,7 +211,7 @@ func TestSDKTxFeeChecker(t *testing.T) {
 				return txBuilder.GetTx()
 			},
 			true,
-			"5000010aatos",
+			"5000010liao",
 			5,
 			true,
 		},

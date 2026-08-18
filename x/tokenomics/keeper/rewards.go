@@ -38,7 +38,7 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 	// any validator bonds, or a degenerate scenario where all
 	// validators got unbonded), the function returned at line 54
 	// without calling SetBlockRewardState/SetReleaseState. Effect:
-	//   - bank moved aatos from MinerPool to FeeCollector (committed),
+	//   - bank moved liao from MinerPool to FeeCollector (committed),
 	//   - releaseState.TotalImmediateDistributed never persisted,
 	//   - blockRewardState.TotalDistributed never persisted.
 	// Next block, currentReward repeats the SAME amount (TotalDistributed

@@ -327,7 +327,7 @@ var xxx_messageInfo_QueryExchangePoolRequest proto.InternalMessageInfo
 type QueryExchangePoolResponse struct {
 	// address of the atox_exchange_pool module account.
 	Address string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
-	// balance currently held by the pool, in aatos.
+	// balance currently held by the pool, in liao.
 	Balance cosmossdk_io_math.Int `protobuf:"bytes,2,opt,name=balance,proto3,customtype=cosmossdk.io/math.Int" json:"balance"`
 	// outstanding is total_pending: already settled and owed but not yet paid.
 	// balance must always cover it.

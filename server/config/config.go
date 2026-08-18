@@ -119,7 +119,7 @@ const (
 	DefaultRosettaGasToSuggest = 300_000
 
 	// DefaultRosettaDenomToSuggest defines the default denom for fee suggestion
-	DefaultRosettaDenomToSuggest = "aatos"
+	DefaultRosettaDenomToSuggest = "liao"
 
 	// ============================
 	//           MemIAVL

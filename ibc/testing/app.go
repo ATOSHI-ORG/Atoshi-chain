@@ -70,7 +70,7 @@ func SetupWithGenesisValSet(t *testing.T, valSet *cmttypes.ValidatorSet, genAccs
 
 	// set validators and delegations
 	stakingParams := stakingtypes.DefaultParams()
-	// set bond denom to be aatos
+	// set bond denom to be liao
 	stakingParams.BondDenom = types.BaseDenom
 	stakingGenesis := stakingtypes.NewGenesisState(stakingParams, validators, delegations)
 	genesisState[stakingtypes.ModuleName] = app.AppCodec().MustMarshalJSON(stakingGenesis)

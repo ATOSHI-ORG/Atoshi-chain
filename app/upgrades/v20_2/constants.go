@@ -9,7 +9,7 @@ package v20_2
 //
 //   1. Force-disable x/inflation. The module was inherited from evmos
 //      but is logically redundant in Atoshi (x/tokenomics owns ALL
-//      issuance). Leaving inflation enabled would mint aatos that
+//      issuance). Leaving inflation enabled would mint liao that
 //      bypasses the 10-trillion supply guard. The DefaultParams
 //      change ships in the same release, but live chains were
 //      initialized with EnableInflation=true at genesis and would

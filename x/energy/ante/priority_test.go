@@ -19,9 +19,9 @@ func TestGetTxPriority_OverflowDefaultsToMaxInt64(t *testing.T) {
 	// fixed code should return MaxInt64.
 	amount, ok := sdkmath.NewIntFromString("36893488147419103232") // 2^65
 	require.True(t, ok)
-	fee := sdk.NewCoins(sdk.NewCoin("aatos", amount))
+	fee := sdk.NewCoins(sdk.NewCoin("liao", amount))
 
-	got := getTxPriority(fee, 1, "aatos")
+	got := getTxPriority(fee, 1, "liao")
 	require.EqualValues(t, int64(math.MaxInt64), got,
 		"priority must clamp to MaxInt64 on int64 overflow, "+
 			"matching upstream SDK behavior; got %d", got)
@@ -29,13 +29,13 @@ func TestGetTxPriority_OverflowDefaultsToMaxInt64(t *testing.T) {
 
 // Sanity: ordinary gas prices map straight through.
 func TestGetTxPriority_NormalGasPrice(t *testing.T) {
-	// 1 gwei × 100,000 gas = 100,000,000,000,000 aatos total fee.
+	// 1 gwei × 100,000 gas = 100,000,000,000,000 liao total fee.
 	// Divided by gas = 1 gwei = 10^9. Fits comfortably in int64.
 	amount, ok := sdkmath.NewIntFromString("100000000000000")
 	require.True(t, ok)
-	fee := sdk.NewCoins(sdk.NewCoin("aatos", amount))
+	fee := sdk.NewCoins(sdk.NewCoin("liao", amount))
 
-	got := getTxPriority(fee, 100_000, "aatos")
+	got := getTxPriority(fee, 100_000, "liao")
 	require.EqualValues(t, int64(1_000_000_000), got,
 		"expected gasPrice = 1 gwei (10^9); got %d", got)
 }
@@ -49,19 +49,19 @@ func TestGetTxPriority_NormalGasPrice(t *testing.T) {
 // QuoRaw), then ride to the front of the mempool min-ordering.
 //
 // Post-fix the function takes baseDenom and skips everything else.
-// The bag below has a normal aatos fee plus a 1-unit IBC voucher
+// The bag below has a normal liao fee plus a 1-unit IBC voucher
 // that, pre-fix, would have shrunk priority to 0; post-fix the
-// voucher is ignored and priority reflects the aatos gas price.
+// voucher is ignored and priority reflects the liao gas price.
 func TestGetTxPriority_OnlyBaseDenomCounts(t *testing.T) {
 	normalAmt, ok := sdkmath.NewIntFromString("100000000000000")
 	require.True(t, ok)
 	fee := sdk.NewCoins(
-		sdk.NewCoin("aatos", normalAmt),                // gasPrice 10^9
+		sdk.NewCoin("liao", normalAmt),                // gasPrice 10^9
 		sdk.NewCoin("ibc/abc123", sdkmath.NewInt(1)),   // would give priority=0 pre-fix
 		sdk.NewCoin("usdc", sdkmath.NewInt(999_999_9)), // arbitrary noise
 	)
 
-	got := getTxPriority(fee, 100_000, "aatos")
+	got := getTxPriority(fee, 100_000, "liao")
 	require.EqualValues(t, int64(1_000_000_000), got,
 		"audit Issue-15: non-base coins must be skipped; pre-fix a 1-unit IBC voucher would have dragged priority to 0")
 }
@@ -75,9 +75,9 @@ func TestGetTxPriority_NoBaseDenomReturnsZero(t *testing.T) {
 		sdk.NewCoin("ibc/abc123", sdkmath.NewInt(1_000_000)),
 		sdk.NewCoin("usdc", sdkmath.NewInt(50_000_000)),
 	)
-	got := getTxPriority(fee, 100_000, "aatos")
+	got := getTxPriority(fee, 100_000, "liao")
 	require.EqualValues(t, int64(0), got,
-		"audit Issue-15: a fee bag without aatos earns no priority")
+		"audit Issue-15: a fee bag without liao earns no priority")
 }
 
 // The local constant must equal stdlib math.MaxInt64.
@@ -94,11 +94,11 @@ func TestMaxInt64PriorityConstant(t *testing.T) {
 // with no economic stake. The fix passes (chargeAtos, shortfallGas).
 //
 // Numerical check:
-//   gasLimit = 200_000,  stdFee = 200_000 aatos (declared 1 aatos/gas)
+//   gasLimit = 200_000,  stdFee = 200_000 liao (declared 1 liao/gas)
 //   shortfallGas = 10_000 (energy covered 190k)
 //   chargeAtos (pro-rated) = stdFee × shortfall / gasLimit
 //                          = 200_000 × 10_000 / 200_000
-//                          = 10_000 aatos
+//                          = 10_000 liao
 //   Pre-fix priority = stdFee / gasLimit = 200_000 / 200_000 = 1
 //   Post-fix priority = chargeAtos / shortfallGas = 10_000 / 10_000 = 1
 // Same numerical answer here BUT for the right reason. The behavioral
@@ -112,7 +112,7 @@ func TestMaxInt64PriorityConstant(t *testing.T) {
 // stdFee, the per-gas rate is identical by construction. The audit's
 // concern manifests when computeShortfallFee diverges (e.g.
 // InsufficientGasPrice flooring — Q6 fix). Once Q6 lands, a user who
-// declares stdFee = 1 aatos will have chargeAtos floored to
+// declares stdFee = 1 liao will have chargeAtos floored to
 // InsufficientGasPrice × shortfall — and priority will reflect the
 // floored amount, NOT the user's nominal stdFee of 1. That is the
 // real change.
@@ -120,9 +120,9 @@ func TestMaxInt64PriorityConstant(t *testing.T) {
 // This test pins the post-fix invariant: priority is exactly
 // chargeAtos / shortfallGas.
 func TestGetTxPriority_BasedOnChargeAtosNotStdFee(t *testing.T) {
-	// Pretend chargeAtos = 5000 aatos, shortfallGas = 1000.
-	chargeAtos := sdk.NewCoins(sdk.NewCoin("aatos", sdkmath.NewInt(5000)))
-	got := getTxPriority(chargeAtos, 1000, "aatos")
+	// Pretend chargeAtos = 5000 liao, shortfallGas = 1000.
+	chargeAtos := sdk.NewCoins(sdk.NewCoin("liao", sdkmath.NewInt(5000)))
+	got := getTxPriority(chargeAtos, 1000, "liao")
 	require.EqualValues(t, int64(5), got,
 		"audit Q1: priority = chargeAtos / shortfallGas = 5000/1000 = 5")
 }

@@ -25,7 +25,7 @@ import (
 // pre-send balance, subtract/add the moved amount, and pass the
 // projected post-send balance to ApplyBalanceChange.
 //
-// Only transfers of the base denom (aatos) move energy-eligible
+// Only transfers of the base denom (liao) move energy-eligible
 // funds. Other denoms (IBC vouchers, future tokens) are ignored.
 func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) (sdk.AccAddress, error) {
 	moved := amt.AmountOf(k.baseDenom)
@@ -64,7 +64,7 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 	//
 	// Old code computed `projected_from = fromBefore - moved + fromLocked`,
 	// which on Evmos became `(real_pre - moved) - moved + fromLocked`
-	// = `real_pre - 2*moved + fromLocked`. snapshot lost `moved` aatos
+	// = `real_pre - 2*moved + fromLocked`. snapshot lost `moved` liao
 	// on every transfer — even pure delegations that should be
 	// cap-neutral. For a 30k ATOS lock that's exactly one
 	// TxEnergyHoldingThreshold worth of eligible balance → capacity

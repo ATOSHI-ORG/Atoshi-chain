@@ -104,9 +104,9 @@ func newKeeperForTest(t *testing.T) (Keeper, sdk.Context, *fakeBank) {
 	registry := codectypes.NewInterfaceRegistry()
 	cdc := codec.NewProtoCodec(registry)
 
-	bank := newFakeBank("aatos")
+	bank := newFakeBank("liao")
 	k := NewKeeper(cdc, storeKey, fakeAccountKeeper{}, bank, nil,
-		sdk.AccAddress([]byte("authority")).String(), "aatos")
+		sdk.AccAddress([]byte("authority")).String(), "liao")
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
 	ctx := sdk.NewContext(cms, header, false, log.NewNopLogger())
@@ -322,7 +322,7 @@ func TestConsume_AfterBalanceDrop_PreservesDelegatedCommitment(t *testing.T) {
 	// before addCoins).
 	sold := math.NewIntWithDecimal(30_000, 18)
 	bank.balances[alice.String()] = math.NewIntWithDecimal(30_000, 18) // 1. sub from alice
-	_, err := k.SendRestriction(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin("aatos", sold)))
+	_, err := k.SendRestriction(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin("liao", sold)))
 	require.NoError(t, err)
 	bank.balances[bob.String()] = sold                                  // 3. add to bob (post-hook)
 

@@ -83,7 +83,7 @@ message QueryExchangePoolResponse {
   // address of the atox_exchange_pool module account.
   string address = 1;
 
-  // balance currently held by the pool, in aatos.
+  // balance currently held by the pool, in liao.
   string balance = 2 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false,
