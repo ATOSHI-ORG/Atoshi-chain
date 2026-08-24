@@ -7,7 +7,13 @@ import (
 )
 
 // AccountKeeper expected interface.
+//
+// GetAccount is needed to recognise module accounts, which must be excluded from
+// settlement: ATOX passes through the atox module account, fee_collector and
+// distribution in transit, and settling those would book conversion claims
+// against coins that belong to nobody yet.
 type AccountKeeper interface {
+	GetAccount(ctx context.Context, addr sdk.AccAddress) sdk.AccountI
 	GetModuleAddress(name string) sdk.AccAddress
 	GetModuleAccount(ctx context.Context, name string) sdk.ModuleAccountI
 }
