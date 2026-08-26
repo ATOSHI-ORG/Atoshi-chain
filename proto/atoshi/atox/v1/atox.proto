@@ -46,6 +46,21 @@ message Params {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+
+  // transfer_fee_bps is charged ON TOP of an account-to-account ATOX transfer:
+  // moving 100 ATOX at 1000 bps costs the sender 110 and credits the receiver
+  // 100. The fee is burned, which recycles it into the mining pool — see
+  // GlobalState.total_fee_burned for why burning is the recycling mechanism.
+  //
+  // Transfers where either side is a module account are exempt. ATOX reaches
+  // holders through the atox module account, fee_collector and distribution, so
+  // taxing those paths would take 10% out of every holder's mining income.
+  //
+  // The fee suppresses an ATOX secondary market and pushes holders down the
+  // intended path — hold ATOX, let it convert to ATOS, bridge the ATOS out. It
+  // is not a solvency control: the conversion index already guarantees that
+  // passing ATOX between accounts cannot extract more than holding it still.
+  uint32 transfer_fee_bps = 5;
 }
 
 // GlobalState is the module-wide accumulator singleton.
@@ -96,6 +111,28 @@ message GlobalState {
   // total_paid_out is the cumulative ATOS actually transferred out of the
   // exchange pool to holders.
   string total_paid_out = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // total_fee_burned is the cumulative ATOX destroyed by transfer fees, in
+  // aatox. Live supply is not enough to see this: burning lowers supply, which
+  // is exactly how the fee is recycled into the mining pool, so without a
+  // separate counter there is no way to tell mined-and-burned apart from
+  // never-mined.
+  //
+  // Burning IS the recycling. MintAtox caps against LIVE supply, not against
+  // total ever minted, so destroying 10 aatox restores headroom for 10 more to
+  // be mined as future block rewards. It also lines up exactly with the index:
+  // the burned ATOX's remaining claim, balance * (1.0 - current_index), is left
+  // unclaimed in the exchange pool, and the replacement ATOX minted later
+  // starts at the current index and claims precisely that much.
+  //
+  // Note this is unrelated to the settled question of whether CONVERSION should
+  // burn ATOX — it must not, since burning on conversion pays holders only
+  // 1-1/e of what they are owed. Only the fee is burned.
+  string total_fee_burned = 6 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true

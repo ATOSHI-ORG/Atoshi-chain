@@ -39,6 +39,8 @@ type fakeBank struct {
 	supply   sdk.Coins
 	modAddrs map[string]sdk.AccAddress
 	hook     func(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) (sdk.AccAddress, error)
+	depth    int
+	failed   bool
 }
 
 func newFakeBank(modAddrs map[string]sdk.AccAddress) *fakeBank {
@@ -60,7 +62,55 @@ func (b *fakeBank) MintCoins(_ context.Context, module string, amt sdk.Coins) er
 	return nil
 }
 
+func (b *fakeBank) BurnCoins(_ context.Context, module string, amt sdk.Coins) error {
+	addr := b.modAddrs[module]
+	cur := b.balances[addr.String()]
+	if !cur.IsAllGTE(amt) {
+		return fmt.Errorf("burn: %s holds %s, needs %s", module, cur, amt)
+	}
+	b.balances[addr.String()] = cur.Sub(amt...)
+	b.supply = b.supply.Sub(amt...)
+	return nil
+}
+
+func (b *fakeBank) SendCoinsFromAccountToModule(ctx context.Context, from sdk.AccAddress, module string, amt sdk.Coins) error {
+	return b.send(ctx, from, b.modAddrs[module], amt)
+}
+
+// send mirrors the Evmos ordering AND the tx-level atomicity that baseapp
+// provides in production.
+//
+// The atomicity has to be modelled here rather than with ctx.CacheContext(),
+// because these balances live in a Go map that a cache-wrapped store does not
+// isolate. It matters: bank does not undo the debit it already made when the
+// restriction returns an error, so without a rollback a failed transfer would
+// leave the sender short and later assertions in the same test would be
+// meaningless. Only the outermost call snapshots, so the nested fee send is part
+// of the same atomic unit.
 func (b *fakeBank) send(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) error {
+	if b.depth == 0 {
+		snapBalances := make(map[string]sdk.Coins, len(b.balances))
+		for k, v := range b.balances {
+			snapBalances[k] = v
+		}
+		snapSupply := b.supply
+		defer func() {
+			if b.depth == 0 && b.failed {
+				b.balances, b.supply, b.failed = snapBalances, snapSupply, false
+			}
+		}()
+	}
+	b.depth++
+	defer func() { b.depth-- }()
+
+	if err := b.sendInner(ctx, from, to, amt); err != nil {
+		b.failed = true
+		return err
+	}
+	return nil
+}
+
+func (b *fakeBank) sendInner(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) error {
 	cur := b.balances[from.String()]
 	if !cur.IsAllGTE(amt) {
 		return fmt.Errorf("insufficient funds: %s has %s, needs %s", from, cur, amt)
@@ -149,6 +199,15 @@ func setup(t *testing.T) (keeper.Keeper, sdk.Context, *fakeBank) {
 		sdk.NewCoins(sdk.NewCoin(atosDenom, math.NewIntWithDecimal(1, 32)))))
 
 	return k, ctx, bank
+}
+
+// disableTransferFee zeroes the ATOX transfer fee for tests that isolate the
+// conversion index from the fee.
+func disableTransferFee(t *testing.T, k keeper.Keeper, ctx sdk.Context) {
+	t.Helper()
+	p := k.GetParams(ctx)
+	p.TransferFeeBps = 0
+	require.NoError(t, k.SetParams(ctx, p))
 }
 
 func acc(name string) sdk.AccAddress {
@@ -289,6 +348,10 @@ func TestModuleAccountsNeverAccrue(t *testing.T) {
 // this design exists to prevent.
 func TestSolvency_NinetyTransfersCannotOutEarnStayingPut(t *testing.T) {
 	k, ctx, bank := setup(t)
+	// The transfer fee is exercised in transfer_fee_test.go. Disabling it here
+	// keeps the pot constant across hops so the comparison against a stationary
+	// holder isolates the index mechanism.
+	disableTransferFee(t, k, ctx)
 
 	const hops = 90
 	pot := k.GetParams(ctx).SupplyCap.QuoRaw(100) // 1% of the cap changes hands
@@ -297,6 +360,7 @@ func TestSolvency_NinetyTransfersCannotOutEarnStayingPut(t *testing.T) {
 	// Baseline: one holder, same pot, all 90 releases, never moves.
 	baseline := func() math.Int {
 		bk, bctx, _ := setup(t)
+		disableTransferFee(t, bk, bctx)
 		holder := acc("stationary")
 		require.NoError(t, bk.MintAtox(bctx, holder, pot))
 		for i := 0; i < hops; i++ {
@@ -347,6 +411,8 @@ func TestSolvency_NinetyTransfersCannotOutEarnStayingPut(t *testing.T) {
 // where the arithmetic is checkable by hand.
 func TestTransfer_SplitsSpanBetweenSenderAndReceiver(t *testing.T) {
 	k, ctx, bank := setup(t)
+	// Fee off so the whole pot moves and the arithmetic stays checkable by hand.
+	disableTransferFee(t, k, ctx)
 	alice, bob := acc("alice"), acc("bob")
 
 	pot := k.GetParams(ctx).SupplyCap // hold the whole cap so index == payout rate

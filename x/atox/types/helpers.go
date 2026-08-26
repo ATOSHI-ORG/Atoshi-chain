@@ -13,6 +13,15 @@ import (
 // and stall the chain.
 const MaxAutoSettlePerBlock = 1000
 
+// MaxTransferFeeBps caps Params.TransferFeeBps at 30%. The fee is a behavioural
+// lever, not a safety control, so governance has no legitimate reason to push it
+// near 100% — and an unbounded value would let one proposal make ATOX
+// effectively untransferable, or make every transfer fail for lack of headroom.
+const MaxTransferFeeBps = 3000
+
+// BpsDenominator is the basis-point scale.
+const BpsDenominator = 10000
+
 // IndexPrecision is the fixed-point scale of GlobalIndex, matching
 // math.LegacyDec's 18 decimal places. Index arithmetic is done on integers
 // scaled by this factor so it stays exact.
@@ -56,6 +65,48 @@ func ComputeIndexDelta(amount, remainderIn, supplyCap math.Int) (math.LegacyDec,
 	return math.LegacyNewDecFromIntWithPrec(deltaScaled, 18), remainderOut, nil
 }
 
+// ComputeTransferFee returns the fee charged ON TOP of an ATOX transfer of
+// `amount`, rounded up.
+//
+// Rounding up rather than down keeps the fee from being avoidable by splitting:
+// truncating would make any transfer below BpsDenominator/feeBps aatox free, so
+// a sender could move an unlimited amount fee-free in dust-sized pieces. Rounding
+// up costs at most 1 aatox extra on a legitimate transfer.
+func ComputeTransferFee(amount math.Int, feeBps uint32) math.Int {
+	if feeBps == 0 || amount.IsNil() || !amount.IsPositive() {
+		return math.ZeroInt()
+	}
+	num := amount.MulRaw(int64(feeBps))
+	den := math.NewInt(BpsDenominator)
+	fee := num.Quo(den)
+	if !num.Mod(den).IsZero() {
+		fee = fee.AddRaw(1)
+	}
+	return fee
+}
+
+// MaxSendableWithFee returns the largest amount an account holding `balance` can
+// transfer once the on-top fee is accounted for, i.e. the value a wallet's "Max"
+// button must use. Sending more than this always fails for want of fee headroom.
+func MaxSendableWithFee(balance math.Int, feeBps uint32) math.Int {
+	if balance.IsNil() || !balance.IsPositive() {
+		return math.ZeroInt()
+	}
+	if feeBps == 0 {
+		return balance
+	}
+	// Largest a with a + ceil(a*bps/10000) <= balance. Start from the exact
+	// division and walk back, which is at most one step.
+	a := balance.MulRaw(BpsDenominator).Quo(math.NewInt(int64(BpsDenominator + int(feeBps))))
+	for a.IsPositive() && a.Add(ComputeTransferFee(a, feeBps)).GT(balance) {
+		a = a.SubRaw(1)
+	}
+	if a.IsNegative() {
+		return math.ZeroInt()
+	}
+	return a
+}
+
 // ComputeOwed returns the ATOS owed to a holder of `atoxBalance` aatox over an
 // index span of `delta`, truncated toward zero.
 //
@@ -90,6 +141,10 @@ func DefaultParams() Params {
 		// 0.001 ATOS. Below this the sweep still settles (the debt is recorded)
 		// but skips the transfer, so dust payouts do not dominate block space.
 		MinAutoPayout: math.NewIntWithDecimal(1, 15),
+		// 10% on top of every account-to-account transfer, burned to recycle it
+		// into the mining pool. Governance-tunable so the rate can be dialled
+		// back without a chain upgrade if 10% turns out to be too steep.
+		TransferFeeBps: 1000,
 	}
 }
 
@@ -105,6 +160,10 @@ func (p Params) Validate() error {
 	if p.MinAutoPayout.IsNil() || p.MinAutoPayout.IsNegative() {
 		return fmt.Errorf("min auto payout must not be negative, got %s", p.MinAutoPayout)
 	}
+	if p.TransferFeeBps > MaxTransferFeeBps {
+		return fmt.Errorf("transfer fee bps must be <= %d, got %d",
+			MaxTransferFeeBps, p.TransferFeeBps)
+	}
 	return nil
 }
 
@@ -119,6 +178,7 @@ func DefaultGlobalState() GlobalState {
 		TotalReleasedToPool: math.ZeroInt(),
 		TotalPending:        math.ZeroInt(),
 		TotalPaidOut:        math.ZeroInt(),
+		TotalFeeBurned:      math.ZeroInt(),
 	}
 }
 
@@ -135,6 +195,7 @@ func (s GlobalState) Validate() error {
 		{"total_released_to_pool", s.TotalReleasedToPool},
 		{"total_pending", s.TotalPending},
 		{"total_paid_out", s.TotalPaidOut},
+		{"total_fee_burned", s.TotalFeeBurned},
 	}
 	for _, c := range ints {
 		if c.v.IsNil() {
