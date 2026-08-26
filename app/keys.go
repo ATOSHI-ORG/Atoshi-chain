@@ -27,6 +27,7 @@ import (
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	feemarkettypes "github.com/atoshi-chain/atoshi/v20/x/feemarket/types"
 	inflationtypes "github.com/atoshi-chain/atoshi/v20/x/inflation/v1/types"
+	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
 	energytypes "github.com/atoshi-chain/atoshi/v20/x/energy/types"
 	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
@@ -60,6 +61,7 @@ func StoreKeys() (
 		epochstypes.StoreKey, vestingtypes.StoreKey,
 		// atoshi custom keys
 		oracletypes.StoreKey, tokenomicstypes.StoreKey, energytypes.StoreKey,
+		atoxtypes.StoreKey,
 	}
 
 	keys := storetypes.NewKVStoreKeys(storeKeys...)

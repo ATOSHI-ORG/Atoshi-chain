@@ -157,6 +157,9 @@ import (
 	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 	"github.com/atoshi-chain/atoshi/v20/x/staking"
 	stakingkeeper "github.com/atoshi-chain/atoshi/v20/x/staking/keeper"
+	atox "github.com/atoshi-chain/atoshi/v20/x/atox"
+	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
+	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
 	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
 	tokenomicskeeper "github.com/atoshi-chain/atoshi/v20/x/tokenomics/keeper"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
@@ -219,6 +222,10 @@ var (
 		tokenomicstypes.ProjectPoolName:     {authtypes.Minter},
 		tokenomicstypes.MigrationPoolName:   {authtypes.Minter},
 		tokenomicstypes.MinerLockedPoolName: {authtypes.Minter},
+		// Minter to emit ATOX as block rewards; Burner because the ATOX transfer
+		// fee is burned, which is what recycles it back into the mining pool.
+		atoxtypes.ModuleName:       {authtypes.Minter, authtypes.Burner},
+		atoxtypes.ExchangePoolName: nil,
 		energytypes.ModuleName:              nil,
 		energytypes.LockedEnergyPoolName:    nil,
 		ratelimittypes.ModuleName:      nil,
@@ -284,6 +291,7 @@ type Atoshi struct {
 	VestingKeeper   vestingkeeper.Keeper
 	OracleKeeper    oraclekeeper.Keeper
 	TokenomicsKeeper tokenomicskeeper.Keeper
+	AtoxKeeper       atoxkeeper.Keeper
 	EnergyKeeper    energykeeper.Keeper
 
 	// the module manager
@@ -566,7 +574,24 @@ func NewAtoshi(
 	// hook, snapshots only update on the explicit OnBalanceChange call sites
 	// in delegation flows, so receiving wallets accrue energy against a stale
 	// (often zero) snapshot.
+	app.AtoxKeeper = atoxkeeper.NewKeeper(
+		appCodec,
+		keys[atoxtypes.StoreKey],
+		app.AccountKeeper,
+		app.BankKeeper,
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		atoshitypes.BaseDenom,
+		atoshitypes.AtoxBaseDenom,
+	)
+
 	app.BankKeeper.AppendSendRestriction(app.EnergyKeeper.SendRestriction)
+
+	// The atox restriction settles both parties' conversion index before their
+	// ATOX balances move, and collects the transfer fee. Registering it on bank
+	// rather than behind a dedicated message is deliberate: MsgSend, IBC, Authz
+	// and the ERC20 precompile that EVM wallets use all funnel through
+	// bank.SendCoins, so none of them can route around the index or the fee.
+	app.BankKeeper.AppendSendRestriction(app.AtoxKeeper.SendRestriction)
 
 	// register the staking hooks
 	// NOTE: stakingKeeper above is passed by reference, so that it will contain these hooks
@@ -746,6 +771,7 @@ func NewAtoshi(
 		vesting.NewAppModule(app.VestingKeeper, app.AccountKeeper, app.BankKeeper, *app.StakingKeeper.Keeper),
 		oracle.NewAppModule(app.OracleKeeper),
 		tokenomics.NewAppModule(app.TokenomicsKeeper),
+		atox.NewAppModule(app.AtoxKeeper),
 		energy.NewAppModule(app.EnergyKeeper),
 	)
 
@@ -803,6 +829,9 @@ func NewAtoshi(
 		stakingtypes.ModuleName,
 		oracletypes.ModuleName,
 		tokenomicstypes.ModuleName,
+		// After tokenomics: its EndBlocker is what advances tier release state, so
+		// the conversion sweep sees the current index in the same block.
+		atoxtypes.ModuleName,
 		energytypes.ModuleName,
 		evmtypes.ModuleName,
 		feemarkettypes.ModuleName,
@@ -843,6 +872,7 @@ func NewAtoshi(
 		ratelimittypes.ModuleName,
 		oracletypes.ModuleName,
 		tokenomicstypes.ModuleName,
+		atoxtypes.ModuleName,
 		energytypes.ModuleName,
 	)
 
