@@ -7,14 +7,15 @@ import (
 
 	"cosmossdk.io/math"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	testkeyring "github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/keyring"
 	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/network"
 	evmostypes "github.com/atoshi-chain/atoshi/v20/types"
 	"github.com/atoshi-chain/atoshi/v20/utils"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	"github.com/atoshi-chain/atoshi/v20/x/inflation/v1/types"
+	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -180,7 +181,10 @@ func TestGetCirculatingSupplyAndInflationRate(t *testing.T) {
 				require.NoError(t, err)
 
 				circulatingSupply := nw.App.InflationKeeper.GetCirculatingSupply(ctx, nw.GetBaseDenom())
-				expCirculatingSupply := math.LegacyNewDecFromInt(tc.bankSupply.Add(bondedAmount).Add(accsFreeAmount))
+				// Plus the tokenomics genesis pre-mint, which bank counts and
+				// GetCirculatingSupply therefore includes.
+				expCirculatingSupply := math.LegacyNewDecFromInt(
+					tc.bankSupply.Add(bondedAmount).Add(accsFreeAmount).Add(tokenomicsPoolTotal()))
 				require.Equal(t, expCirculatingSupply, circulatingSupply)
 
 				epp := nw.App.InflationKeeper.GetEpochsPerPeriod(ctx)
@@ -197,6 +201,13 @@ func TestGetCirculatingSupplyAndInflationRate(t *testing.T) {
 			})
 		}
 	}
+}
+
+// tokenomicsPoolTotal is the ATOS x/tokenomics mints at genesis: the miner,
+// project and migration pools, which together are the entire supply.
+func tokenomicsPoolTotal() math.Int {
+	p := tokenomicstypes.DefaultParams()
+	return p.MinerPoolTotal.Add(p.ProjectPoolTotal).Add(p.MigrationPoolTotal)
 }
 
 func TestBondedRatio(t *testing.T) {
@@ -241,11 +252,18 @@ func TestBondedRatio(t *testing.T) {
 			accsBondAmount := math.OneInt().MulRaw(nVals)
 			bondedAmount := valBondedAmt.Add(accsBondAmount)
 
+			// x/tokenomics pre-mints the whole 10 trillion ATOS supply into its
+			// three pools at genesis, and StakingTokenSupply — what BondedRatio
+			// divides by — counts it. Modelled from the params rather than read
+			// back off the chain so this still catches a wrong supply figure.
+			tokenomicsPreMint := tokenomicsPoolTotal()
+
 			totalSupply := network.PrefundedAccountInitialBalance.
 				MulRaw(nAccs).
 				Sub(accsBondAmount).
 				Add(bondedAmount).
-				Add(teamAllocation)
+				Add(teamAllocation).
+				Add(tokenomicsPreMint)
 
 			// reset
 			keyring := testkeyring.New(int(nAccs))

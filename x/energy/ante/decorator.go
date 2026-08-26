@@ -191,11 +191,21 @@ func (d EnergyDeductDecorator) AnteHandle(
 	// Compute the ATOS owed for the gas not covered by energy.
 	stdFee := feeTx.GetFee()
 	if consumed.ShortfallGas == 0 {
-		// All gas covered by energy: zero out the fee for downstream.
-		// We still call the txFeeChecker to validate priority.
-		_, _, err := d.txFeeChecker(ctx, tx)
-		if err != nil {
-			return ctx, err
+		// All gas covered by energy: nothing to charge in ATOS. The txFeeChecker
+		// still runs to validate the declared fee and priority — but NOT during
+		// simulation.
+		//
+		// Simulation is how a client discovers the gas it needs, so it submits the
+		// tx with gas 0 by definition. The dynamic fee checker rejects gas 0
+		// outright (app/ante/evm/fee_checker.go), so calling it here made
+		// `--gas auto` fail with "gas cannot be zero" for every tx the energy
+		// module fully covers. The SDK's own DeductFeeDecorator guards the same
+		// call with !simulate (x/auth/ante/fee.go:58); this path is a replacement
+		// for that decorator and has to match it.
+		if !simulate {
+			if _, _, err := d.txFeeChecker(ctx, tx); err != nil {
+				return ctx, err
+			}
 		}
 		return next(ctx, tx, simulate)
 	}

@@ -235,7 +235,16 @@ func TestAccAddressFromBech32(t *testing.T) {
 
 func TestAddressConversion(t *testing.T) {
 	hex := "0x7cB61D4117AE31a12E393a1Cfa3BaC666481D02E"
-	bech32 := "atoshi10jmp6sgh4cc6zt3e8gw05wavvejgr5pj8xy5h"
+	// Deliberately hardcoded rather than derived: deriving it from `hex` with the
+	// same helpers under test would make the assertion tautological. The pair is a
+	// known-good fixture, verified against an independent bech32 implementation.
+	//
+	// The previous value was one character short. Its data part matched the evmos
+	// encoding of the same 20 bytes exactly, so the `evmos` prefix had been
+	// swapped for `atoshi` without recomputing the checksum — which a longer HRP
+	// changes. If the bech32 prefix ever changes again, recompute this, do not
+	// edit it.
+	bech32 := "atoshi10jmp6sgh4cc6zt3e8gw05wavvejgr5pwvzgc6r"
 
 	hexAddr := common.HexToAddress(hex)
 	require.Equal(t, bech32, EthToCosmosAddr(hexAddr).String())

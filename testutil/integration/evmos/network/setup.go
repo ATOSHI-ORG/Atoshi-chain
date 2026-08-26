@@ -458,6 +458,26 @@ func setDefaultGovGenesisState(evmosApp *app.Atoshi, genesisState evmostypes.Gen
 	minDepositAmt := sdkmath.NewInt(1e18).Quo(evmtypes.GetEVMCoinDecimals().ConversionFactor())
 	updatedParams.MinDeposit = sdktypes.NewCoins(sdktypes.NewCoin(overwriteParams.denom, minDepositAmt))
 	updatedParams.ExpeditedMinDeposit = sdktypes.NewCoins(sdktypes.NewCoin(overwriteParams.denom, minDepositAmt))
+
+	// Quorum is zero for tests.
+	//
+	// createDelegations gives only the FIRST genesis account any stake, and only
+	// ONE SHARE per validator, while each validator bonds 1e18. A proposer's
+	// voting power is therefore about 3 out of 3e18 — one part in 1e18 — so the
+	// default 33.4% quorum can never be reached and every proposal ends up
+	// REJECTED for want of quorum. utils.ApproveProposal cannot do what its name
+	// says, which is why every test that reaches params through governance fails.
+	//
+	// Zero rather than a small value: at 1e-18 the margin is a single unit of
+	// LegacyDec precision, so any change to the validator count or bonded amount
+	// would silently break it again. Raising the delegation instead would be the
+	// alternative, but several tests model the bonded total as exactly
+	// 1 * numValidators and would all need updating.
+	//
+	// The threshold is left at its default. Only Yes votes are ever cast, so it is
+	// satisfied on its own and still fails a proposal that was genuinely rejected.
+	updatedParams.Quorum = sdkmath.LegacyZeroDec().String()
+
 	govGen.Params = updatedParams
 	genesisState[govtypes.ModuleName] = evmosApp.AppCodec().MustMarshalJSON(govGen)
 	return genesisState
