@@ -624,10 +624,12 @@ func NewAtoshi(
 		// the fee denom is asatos. Reading it here makes the two agree by
 		// construction for every registered chain id.
 		//
-		// Safe at this point: atoshiAppOptions sets the coin info at line ~400,
-		// well before this. Unit tests that build the keeper directly keep passing
-		// a literal, so they are unaffected by the global being unset.
-		evmtypes.GetEVMCoinDenom(),
+		// Passed as a getter, NOT called here. atoshiAppOptions does populate the
+		// coin info at line ~400, but it is not always the real one: cmd/atoshid's
+		// NewRootCmd builds a throwaway app with NoOpAtoshiOptions just to read
+		// the encoding config, leaving the global nil. Calling it here therefore
+		// panicked on every atoshid invocation, including `atoshid version`.
+		evmtypes.GetEVMCoinDenom,
 	)
 
 	// Wire the energy snapshot updater into bank's send restriction chain.

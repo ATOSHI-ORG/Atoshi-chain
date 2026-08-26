@@ -106,7 +106,7 @@ func newKeeperForTest(t *testing.T) (Keeper, sdk.Context, *fakeBank) {
 
 	bank := newFakeBank("liao")
 	k := NewKeeper(cdc, storeKey, fakeAccountKeeper{}, bank, nil, nil,
-		sdk.AccAddress([]byte("authority")).String(), "liao")
+		sdk.AccAddress([]byte("authority")).String(), func() string { return "liao" })
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
 	ctx := sdk.NewContext(cms, header, false, log.NewNopLogger())

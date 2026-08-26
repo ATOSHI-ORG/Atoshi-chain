@@ -28,7 +28,7 @@ import (
 // Only transfers of the base denom (liao) move energy-eligible
 // funds. Other denoms (IBC vouchers, future tokens) are ignored.
 func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) (sdk.AccAddress, error) {
-	moved := amt.AmountOf(k.baseDenom)
+	moved := amt.AmountOf(k.BaseDenom())
 	if !moved.IsPositive() {
 		return to, nil
 	}
@@ -43,8 +43,8 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 
-	fromBefore := k.bankKeeper.GetBalance(sdkCtx, from, k.baseDenom).Amount
-	toBefore := k.bankKeeper.GetBalance(sdkCtx, to, k.baseDenom).Amount
+	fromBefore := k.bankKeeper.GetBalance(sdkCtx, from, k.BaseDenom()).Amount
+	toBefore := k.bankKeeper.GetBalance(sdkCtx, to, k.BaseDenom()).Amount
 
 	// Audit Question 2 (round2): the projected post-send "eligible
 	// balance" we pass into ApplyBalanceChange must match what

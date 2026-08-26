@@ -69,7 +69,7 @@ func newKeeperWithStaking(t *testing.T) (Keeper, sdk.Context, *fakeBank, *fakeSt
 	bank := newFakeBank("liao")
 	staking := newFakeStaking()
 	k := NewKeeper(cdc, storeKey, fakeAccountKeeper{}, bank, staking, nil,
-		sdk.AccAddress([]byte("authority")).String(), "liao")
+		sdk.AccAddress([]byte("authority")).String(), func() string { return "liao" })
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
 	ctx := sdk.NewContext(cms, header, false, log.NewNopLogger())

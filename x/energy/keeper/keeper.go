@@ -23,7 +23,16 @@ type Keeper struct {
 	stakingKeeper   types.StakingKeeper   // optional; nil-safe (EligibleBalance then omits staked ATOS)
 	feemarketKeeper types.FeemarketKeeper // optional; nil-safe (EstimateFee falls back to InsufficientGasPrice)
 	authority       string
-	baseDenom       string
+	// baseDenomFn resolves the denom energy is measured in. It is a getter, not
+	// a captured string, because the value it must agree with -- the EVM fee
+	// denom -- lives in a global that is only populated once the app's chain id
+	// is known. NewAtoshi is also constructed with that global deliberately
+	// unset: cmd/atoshid's NewRootCmd builds a throwaway app with
+	// NoOpAtoshiOptions purely to read the encoding config, so reading the
+	// global at construction time panicked on every atoshid invocation.
+	// Deferring the read to first use keeps the two denoms equal by
+	// construction without depending on keeper wiring order.
+	baseDenomFn func() string
 }
 
 func NewKeeper(
@@ -34,8 +43,11 @@ func NewKeeper(
 	sk types.StakingKeeper,
 	fk types.FeemarketKeeper,
 	authority string,
-	baseDenom string,
+	baseDenomFn func() string,
 ) Keeper {
+	if baseDenomFn == nil {
+		panic("energy keeper: baseDenomFn must not be nil")
+	}
 	return Keeper{
 		cdc:             cdc,
 		storeKey:        storeKey,
@@ -44,7 +56,7 @@ func NewKeeper(
 		stakingKeeper:   sk,
 		feemarketKeeper: fk,
 		authority:       authority,
-		baseDenom:       baseDenom,
+		baseDenomFn:     baseDenomFn,
 	}
 }
 
@@ -53,7 +65,7 @@ func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 }
 
 func (k Keeper) GetAuthority() string { return k.authority }
-func (k Keeper) BaseDenom() string    { return k.baseDenom }
+func (k Keeper) BaseDenom() string    { return k.baseDenomFn() }
 
 // ===== Params =====
 
@@ -236,7 +248,7 @@ func (k Keeper) iterateDelegationsByIndex(ctx sdk.Context, prefix []byte, fn fun
 // hand out gas that was not earned. Reads are deterministic, so every node
 // computes the same value either way and there is no fork risk.
 func (k Keeper) EligibleBalance(ctx sdk.Context, addr sdk.AccAddress) math.Int {
-	total := k.bankKeeper.GetBalance(ctx, addr, k.baseDenom).Amount
+	total := k.bankKeeper.GetBalance(ctx, addr, k.BaseDenom()).Amount
 
 	acct := k.GetEnergyAccount(ctx, addr)
 	if !acct.LockedAtos.IsNil() && acct.LockedAtos.IsPositive() {

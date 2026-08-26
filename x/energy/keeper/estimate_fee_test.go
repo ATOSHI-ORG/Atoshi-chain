@@ -64,7 +64,7 @@ func newEstFeeKeeper(t *testing.T, fk types.FeemarketKeeper) (keeper.Keeper, sdk
 	cdc := codec.NewProtoCodec(registry)
 
 	k := keeper.NewKeeper(cdc, storeKey, estFeeAcct{}, estFeeBank{}, nil, fk,
-		sdk.AccAddress([]byte("authority")).String(), "liao")
+		sdk.AccAddress([]byte("authority")).String(), func() string { return "liao" })
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
 	ctx := sdk.NewContext(cms, header, false, log.NewNopLogger()).
