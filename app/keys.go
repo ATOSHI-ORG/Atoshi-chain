@@ -27,6 +27,8 @@ import (
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	feemarkettypes "github.com/atoshi-chain/atoshi/v20/x/feemarket/types"
 	inflationtypes "github.com/atoshi-chain/atoshi/v20/x/inflation/v1/types"
+	hlcoretypes "github.com/bcp-innovations/hyperlane-cosmos/x/core/types"
+
 	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
 	energytypes "github.com/atoshi-chain/atoshi/v20/x/energy/types"
 	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
@@ -62,6 +64,9 @@ func StoreKeys() (
 		// atoshi custom keys
 		oracletypes.StoreKey, tokenomicstypes.StoreKey, energytypes.StoreKey,
 		atoxtypes.StoreKey,
+		// hyperlane: x/core owns this store; its ISM and post-dispatch
+		// sub-keepers share the same KVStoreService.
+		hlcoretypes.ModuleName,
 	}
 
 	keys := storetypes.NewKVStoreKeys(storeKeys...)

@@ -157,6 +157,10 @@ import (
 	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 	"github.com/atoshi-chain/atoshi/v20/x/staking"
 	stakingkeeper "github.com/atoshi-chain/atoshi/v20/x/staking/keeper"
+	hlcore "github.com/bcp-innovations/hyperlane-cosmos/x/core"
+	hlcorekeeper "github.com/bcp-innovations/hyperlane-cosmos/x/core/keeper"
+	hlcoretypes "github.com/bcp-innovations/hyperlane-cosmos/x/core/types"
+
 	atox "github.com/atoshi-chain/atoshi/v20/x/atox"
 	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
 	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
@@ -226,6 +230,11 @@ var (
 		// fee is burned, which is what recycles it back into the mining pool.
 		atoxtypes.ModuleName:       {authtypes.Minter, authtypes.Burner},
 		atoxtypes.ExchangePoolName: nil,
+		// No permissions on purpose. x/core never mints or burns; the account
+		// only holds interchain gas-paymaster fees that relayers pay in and the
+		// IGP owner claims out. Granting Minter to a bridge module would let a
+		// compromised mailbox print the gas token.
+		hlcoretypes.ModuleName: nil,
 		energytypes.ModuleName:              nil,
 		energytypes.LockedEnergyPoolName:    nil,
 		ratelimittypes.ModuleName:      nil,
@@ -292,6 +301,7 @@ type Atoshi struct {
 	OracleKeeper    oraclekeeper.Keeper
 	TokenomicsKeeper tokenomicskeeper.Keeper
 	AtoxKeeper       atoxkeeper.Keeper
+	HyperlaneKeeper  *hlcorekeeper.Keeper
 	EnergyKeeper    energykeeper.Keeper
 
 	// the module manager
@@ -535,6 +545,15 @@ func NewAtoshi(
 		authtypes.NewModuleAddress(govtypes.ModuleName),
 	)
 
+	hyperlaneKeeper := hlcorekeeper.NewKeeper(
+		appCodec,
+		authcodec.NewBech32Codec(sdk.GetConfig().GetBech32AccountAddrPrefix()),
+		runtime.NewKVStoreService(keys[hlcoretypes.ModuleName]),
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		app.BankKeeper,
+	)
+	app.HyperlaneKeeper = &hyperlaneKeeper
+
 	// Constructed before tokenomics: block rewards are ATOX and tier releases
 	// fund the ATOX conversion pool, so the tokenomics keeper needs this one.
 	app.AtoxKeeper = atoxkeeper.NewKeeper(
@@ -775,6 +794,7 @@ func NewAtoshi(
 		oracle.NewAppModule(app.OracleKeeper),
 		tokenomics.NewAppModule(app.TokenomicsKeeper),
 		atox.NewAppModule(app.AtoxKeeper),
+		hlcore.NewAppModule(appCodec, app.HyperlaneKeeper),
 		energy.NewAppModule(app.EnergyKeeper),
 	)
 
@@ -877,6 +897,7 @@ func NewAtoshi(
 		tokenomicstypes.ModuleName,
 		atoxtypes.ModuleName,
 		energytypes.ModuleName,
+		hlcoretypes.ModuleName,
 	)
 
 	app.configurator = module.NewConfigurator(app.appCodec, app.MsgServiceRouter(), app.GRPCQueryRouter())
