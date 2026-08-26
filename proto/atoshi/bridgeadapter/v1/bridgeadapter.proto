@@ -1,0 +1,82 @@
+syntax = "proto3";
+package atoshi.bridgeadapter.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types";
+
+// Params holds the governance-tunable parameters of the bridge adapter.
+message Params {
+  // enabled is the kill-switch. When false, incoming receipts are rejected
+  // rather than silently dropped, so a paused adapter cannot lose a release —
+  // Hyperlane will keep the message deliverable for a later retry.
+  bool enabled = 1;
+
+  // ethereum_domain is Ethereum's Hyperlane domain id, conventionally its chain
+  // id. Hyperlane is permissionless, so this is configuration rather than
+  // something granted by anyone — but it is protocol-level provenance carried in
+  // every message header, and checking it is what stops a contract on some other
+  // connected chain from forging a release.
+  uint32 ethereum_domain = 2;
+
+  // tier_release_vault is the 32-byte Hyperlane address of the Ethereum contract
+  // allowed to send receipts.
+  //
+  // This check is the one the ISM cannot make. A multisig ISM proves a message
+  // really came from the origin chain; it says nothing about WHICH contract
+  // there sent it. Without this, any contract on Ethereum could claim a release
+  // and the ISM would happily sign for it.
+  bytes tier_release_vault = 3;
+
+  // atos_per_erc20 converts the ERC20 amounts a receipt reports into ATOS.
+  //
+  // Receipts speak in ERC20 units because that is what Ethereum knows. This is
+  // the peg itself — 10 trillion ATOS against 100 billion ERC20 — so
+  // MsgUpdateParams rejects any change to it: raising it would release ATOS with
+  // nothing behind it, lowering it would strand ATOS that is already backed.
+  uint64 atos_per_erc20 = 4;
+
+  // ism_id optionally pins a specific interchain security module for messages
+  // addressed to this app. Empty falls back to the mailbox default ISM, which is
+  // acceptable only if that default is already the 5-of-7 multisig; pinning it
+  // here means a change to the mailbox default cannot silently weaken the
+  // verification protecting tier releases.
+  bytes ism_id = 5;
+}
+
+// ReceiptState tracks what Ethereum has confirmed, in ERC20 units.
+//
+// Both figures are CUMULATIVE totals, not per-release deltas, and that is what
+// makes the channel safe without any replay bookkeeping:
+//
+//   - a duplicate receipt computes a delta of zero and does nothing
+//   - a lost receipt is repaired by the next one, which carries the full total
+//   - a reordered receipt reports less than what was applied and is rejected
+//
+// Nonces, dedup tables and retry logic all become unnecessary.
+message ReceiptState {
+  // applied_to_bridge is the cumulative ERC20 confirmed into the Ethereum bridge
+  // vault, whose ATOS counterpart has been moved into the ATOX conversion pool.
+  string applied_to_bridge = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // applied_to_project is the cumulative ERC20 confirmed as sent to the project
+  // cold wallet, whose ATOS counterpart has been authorised as claimable.
+  string applied_to_project = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // app_id is this app's 32-byte Hyperlane recipient address, assigned at
+  // genesis from the core app router. Ethereum addresses receipts to it.
+  bytes app_id = 3;
+
+  // last_message_id is the id of the most recently applied receipt, for
+  // operators correlating chain state with Hyperlane's message log.
+  bytes last_message_id = 4;
+}

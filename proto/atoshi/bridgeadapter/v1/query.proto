@@ -1,0 +1,48 @@
+syntax = "proto3";
+package atoshi.bridgeadapter.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "atoshi/bridgeadapter/v1/bridgeadapter.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types";
+
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/atoshi/bridgeadapter/v1/params";
+  }
+
+  // ReceiptState is what an auditor compares against the Ethereum vault: the
+  // cumulative ERC20 confirmed here must equal what the vault reports having
+  // released.
+  rpc ReceiptState(QueryReceiptStateRequest) returns (QueryReceiptStateResponse) {
+    option (google.api.http).get = "/atoshi/bridgeadapter/v1/receipt_state";
+  }
+}
+
+message QueryParamsRequest {}
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryReceiptStateRequest {}
+message QueryReceiptStateResponse {
+  ReceiptState state = 1 [(gogoproto.nullable) = false];
+
+  // pending_bridge is what tier judgments have authorised but Ethereum has not
+  // yet confirmed, in ERC20 units. A figure that stays positive means receipts
+  // are not arriving and the ATOX conversion rate has stopped advancing.
+  string pending_bridge = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // pending_project is the same figure for the project share.
+  string pending_project = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

@@ -1,0 +1,40 @@
+package keeper
+
+import (
+	"fmt"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types"
+)
+
+func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) {
+	if err := k.SetParams(ctx, gs.Params); err != nil {
+		panic(err)
+	}
+
+	state := gs.ReceiptState
+
+	// Draw this app's recipient address from the core app router unless genesis
+	// already carries one (an exported chain does). The address encodes our
+	// module id in its type field, which is what makes the mailbox route
+	// receipts here rather than to warp.
+	if len(state.AppId) != types.HexAddressLen {
+		appID, err := k.coreKeeper.AppRouter().GetNextSequence(ctx, types.AppModuleID)
+		if err != nil {
+			panic(fmt.Errorf("failed to assign bridgeadapter app id: %w", err))
+		}
+		state.AppId = appID[:]
+	}
+
+	if err := k.SetReceiptState(ctx, state); err != nil {
+		panic(err)
+	}
+}
+
+func (k Keeper) ExportGenesis(ctx sdk.Context) *types.GenesisState {
+	return &types.GenesisState{
+		Params:       k.GetParams(ctx),
+		ReceiptState: k.GetReceiptState(ctx),
+	}
+}

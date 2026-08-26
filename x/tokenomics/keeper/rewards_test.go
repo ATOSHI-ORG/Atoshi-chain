@@ -297,10 +297,11 @@ func TestBeginBlocker_StopsAtAtoxCapWithoutErroring(t *testing.T) {
 	require.Equal(t, math.NewInt(30).String(), xk.minted[authtypes.FeeCollectorName].String())
 }
 
-// TestTriggerRelease_FundsAtoxExchangePool covers the other half of the change:
-// the miner share of a tier release now raises the ATOX conversion rate instead
-// of crediting per-validator locked balances.
-func TestTriggerRelease_FundsAtoxExchangePool(t *testing.T) {
+// TestTriggerRelease_RecordsWithoutMovingAtos pins the half of the round trip
+// that lives here: a tier judgment only authorises. The ATOS stays in the miner
+// pool until x/bridgeadapter sees Ethereum confirm the matching ERC20, because
+// releasing first would let holders convert ATOX into ATOS nothing backs.
+func TestTriggerRelease_RecordsWithoutMovingAtos(t *testing.T) {
 	bk := newTestBankKeeper()
 	minerAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName)
 	projectAddr := authtypes.NewModuleAddress(tokenomicstypes.ProjectPoolName)
@@ -320,29 +321,43 @@ func TestTriggerRelease_FundsAtoxExchangePool(t *testing.T) {
 	quota := k.GetCirculatingSupply(ctx).MulRaw(int64(params.ReleasePercentageBps)).QuoRaw(10000)
 	expectMiner := quota.MulRaw(int64(params.MinerReleaseShareBps)).QuoRaw(10000)
 
-	require.Equal(t, expectMiner.String(), xk.pooled[tokenomicstypes.MinerPoolName].String(),
-		"the miner share must be routed into the ATOX conversion pool")
-	require.Equal(t, expectMiner.String(), state.TotalMinerReleased.String())
-	require.True(t, state.TotalProjectReleased.IsPositive(), "the project share still raises ProjectClaimable")
+	require.Equal(t, expectMiner.String(), state.TotalMinerReleased.String(),
+		"the authorised figure is recorded")
+	require.True(t, state.TotalProjectReleased.IsPositive())
+
+	require.Empty(t, xk.pooled,
+		"no ATOS may reach the conversion pool until Ethereum confirms")
+	require.Equal(t, math.NewIntWithDecimal(1, 30).String(),
+		bk.GetBalance(ctx, minerAddr, atoshitypes.BaseDenom).Amount.String(),
+		"the miner pool balance is untouched by a tier judgment")
+
+	// What bridgeadapter will read to bound an incoming receipt. It reads
+	// COMMITTED state, which is why the caller must persist first: TriggerRelease
+	// only mutates the state it was handed, and EndBlocker is what writes it. The
+	// asymmetry is correct — receipts arrive in later blocks, by which time the
+	// authorisation is committed — but it means a reader in the same block as the
+	// judgment would see the pre-release figure.
+	require.NoError(t, k.SetReleaseState(ctx, state))
+	authMiner, authProject := k.AuthorizedReleases(ctx)
+	require.Equal(t, state.TotalMinerReleased.String(), authMiner.String())
+	require.Equal(t, state.TotalProjectReleased.String(), authProject.String())
 }
 
-// TestTriggerRelease_CappedByMinerPoolBalance — the quota is derived from
-// circulating supply, so it must be clamped to what the pool actually holds
-// rather than trusted.
-func TestTriggerRelease_CappedByMinerPoolBalance(t *testing.T) {
+// TestTriggerRelease_AuthorizationCappedByPoolBalance — the quota is derived from
+// circulating supply, so authorising more than the pool holds would let a
+// receipt later demand ATOS that does not exist.
+func TestTriggerRelease_AuthorizationCappedByPoolBalance(t *testing.T) {
 	bk := newTestBankKeeper()
 	minerAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName)
 	bk.balances[minerAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewInt(7)))
 
 	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{}, testOracleKeeper{})
-	xk := k.atoxKeeper.(*testAtoxKeeper)
 
 	state := k.GetReleaseState(ctx)
 	require.NoError(t, k.TriggerRelease(ctx, &state, k.GetParams(ctx)))
 
-	require.Equal(t, "7", xk.pooled[tokenomicstypes.MinerPoolName].String(),
-		"cannot move more ATOS than the miner pool holds")
-	require.Equal(t, "7", state.TotalMinerReleased.String())
+	require.Equal(t, "7", state.TotalMinerReleased.String(),
+		"cannot authorise more ATOS than the miner pool holds")
 }
 
 func TestReleaseMinerLockedRewards(t *testing.T) {

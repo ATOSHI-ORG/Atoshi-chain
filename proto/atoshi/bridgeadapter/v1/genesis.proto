@@ -1,0 +1,15 @@
+syntax = "proto3";
+package atoshi.bridgeadapter.v1;
+
+import "gogoproto/gogo.proto";
+import "atoshi/bridgeadapter/v1/bridgeadapter.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types";
+
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+
+  // Both cumulative figures start at zero on a fresh chain: nothing has been
+  // released on Ethereum, so nothing may be released here.
+  ReceiptState receipt_state = 2 [(gogoproto.nullable) = false];
+}

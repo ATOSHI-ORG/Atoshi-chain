@@ -178,7 +178,16 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	minerTarget := releaseQuota.MulRaw(int64(params.MinerReleaseShareBps)).QuoRaw(10000)
 	projectTarget := releaseQuota.Sub(minerTarget)
 
-	actualMinerRelease, err := k.releaseMinerShareToExchangePool(ctx, minerTarget)
+	// Record only. The ATOS behind this authorisation does not move here: it is
+	// released by x/bridgeadapter once Ethereum confirms, by Hyperlane receipt,
+	// that the matching ERC20 has landed in the bridge vault.
+	//
+	// Releasing here instead would let holders convert ATOX into ATOS that
+	// nothing backs, for as long as the Ethereum side lagged or failed — which is
+	// the exact failure the receipt round-trip exists to prevent. The authorised
+	// figure is capped to the miner pool's balance so it can never authorise more
+	// ATOS than exists to release.
+	actualMinerRelease, err := k.authorizeMinerRelease(ctx, minerTarget)
 	if err != nil {
 		return err
 	}
@@ -215,19 +224,18 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	return nil
 }
 
-// releaseMinerShareToExchangePool moves the miner share of a tier release into
-// the x/atox conversion pool, which is what raises the ATOX -> ATOS rate.
+// authorizeMinerRelease records how much of the miner pool a tier judgment has
+// authorised for release, without moving any ATOS.
 //
-// This replaces the old per-validator locked-balance accounting. Under the ATOX
-// model the miner share is not owed to specific validators: it backs every ATOX
-// holder pro rata, and x/atox's index is what apportions it. Moving the ATOS and
-// advancing the index happen in one call there, so the pool balance and what the
-// index promises cannot diverge.
+// Under the ATOX model the miner share is not owed to specific validators — it
+// backs every ATOX holder pro rata, and x/atox's index apportions it — so there
+// is no per-validator accounting to do here. What remains is to cap the
+// authorisation at the pool's actual balance, so a mis-specified release
+// percentage can never authorise more ATOS than exists.
 //
-// The transfer is capped by the miner pool's actual balance rather than trusted
-// from the quota, so a mis-specified release percentage can never overdraw it.
-func (k Keeper) releaseMinerShareToExchangePool(ctx sdk.Context, target math.Int) (math.Int, error) {
-	if !target.IsPositive() || k.atoxKeeper == nil {
+// x/bridgeadapter does the moving, when Ethereum confirms the matching ERC20.
+func (k Keeper) authorizeMinerRelease(ctx sdk.Context, target math.Int) (math.Int, error) {
+	if !target.IsPositive() {
 		return math.ZeroInt(), nil
 	}
 
@@ -237,16 +245,22 @@ func (k Keeper) releaseMinerShareToExchangePool(ctx sdk.Context, target math.Int
 		return math.ZeroInt(), nil
 	}
 
-	amount := target
-	if amount.GT(available) {
-		amount = available
+	if target.GT(available) {
+		return available, nil
 	}
-
-	if err := k.atoxKeeper.AddToExchangePool(ctx, tokenomicstypes.MinerPoolName, amount); err != nil {
-		return math.ZeroInt(), err
-	}
-	return amount, nil
+	return target, nil
 }
+
+// AuthorizedReleases returns the cumulative miner and project shares that tier
+// judgments have authorised, in ATOS. x/bridgeadapter reads these to reject a
+// receipt claiming more than the chain ever authorised.
+func (k Keeper) AuthorizedReleases(ctx sdk.Context) (miner, project math.Int) {
+	state := k.GetReleaseState(ctx)
+	return state.TotalMinerReleased, state.TotalProjectReleased
+}
+
+// MinerPoolName is the module account holding the ATOS that backs ATOX.
+func (k Keeper) MinerPoolName() string { return tokenomicstypes.MinerPoolName }
 
 // ReleaseMinerLockedRewards distributes newly unlocked miner rewards
 // proportionally to existing locked balances.

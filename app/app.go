@@ -162,6 +162,9 @@ import (
 	hlcoretypes "github.com/bcp-innovations/hyperlane-cosmos/x/core/types"
 
 	atox "github.com/atoshi-chain/atoshi/v20/x/atox"
+	bridgeadapter "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter"
+	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
+	batypes "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types"
 	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
 	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
 	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
@@ -302,6 +305,7 @@ type Atoshi struct {
 	TokenomicsKeeper tokenomicskeeper.Keeper
 	AtoxKeeper       atoxkeeper.Keeper
 	HyperlaneKeeper  *hlcorekeeper.Keeper
+	BridgeAdapterKeeper bakeeper.Keeper
 	EnergyKeeper    energykeeper.Keeper
 
 	// the module manager
@@ -579,6 +583,22 @@ func NewAtoshi(
 		app.AtoxKeeper,
 	)
 
+	// After atox and tokenomics: the adapter releases into the ATOX conversion
+	// pool and reads what tier judgments authorised.
+	app.BridgeAdapterKeeper = bakeeper.NewKeeper(
+		appCodec,
+		keys[batypes.StoreKey],
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		app.AtoxKeeper,
+		app.TokenomicsKeeper,
+		app.HyperlaneKeeper,
+	)
+
+	// Register as a Hyperlane app so the mailbox can route verified receipts
+	// here. The router keys on the recipient address's type field, and this
+	// module id is what distinguishes our receipts from a warp transfer.
+	app.HyperlaneKeeper.AppRouter().RegisterModule(batypes.AppModuleID, &app.BridgeAdapterKeeper)
+
 	app.EnergyKeeper = energykeeper.NewKeeper(
 		appCodec,
 		keys[energytypes.StoreKey],
@@ -795,6 +815,7 @@ func NewAtoshi(
 		tokenomics.NewAppModule(app.TokenomicsKeeper),
 		atox.NewAppModule(app.AtoxKeeper),
 		hlcore.NewAppModule(appCodec, app.HyperlaneKeeper),
+		bridgeadapter.NewAppModule(app.BridgeAdapterKeeper),
 		energy.NewAppModule(app.EnergyKeeper),
 	)
 
@@ -898,6 +919,9 @@ func NewAtoshi(
 		atoxtypes.ModuleName,
 		energytypes.ModuleName,
 		hlcoretypes.ModuleName,
+		// After hyperlane: genesis draws this app's recipient address from the
+		// core app router's sequence.
+		batypes.ModuleName,
 	)
 
 	app.configurator = module.NewConfigurator(app.appCodec, app.MsgServiceRouter(), app.GRPCQueryRouter())

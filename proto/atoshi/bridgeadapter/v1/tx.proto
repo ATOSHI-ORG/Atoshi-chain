@@ -1,0 +1,35 @@
+syntax = "proto3";
+package atoshi.bridgeadapter.v1;
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "atoshi/bridgeadapter/v1/bridgeadapter.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types";
+
+// Msg defines the bridge adapter Msg service.
+//
+// There is deliberately no message for applying a release. Releases arrive only
+// as Hyperlane receipts verified by the ISM; exposing a privileged "apply"
+// transaction would create a way to release ATOS without any ERC20 behind it,
+// which is the single thing this module exists to prevent.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+}
+
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) = "authority";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  Params params = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message MsgUpdateParamsResponse {}
