@@ -40,7 +40,7 @@ func TestIPs(t *testing.T) {
 	RunSpecs(t, "EvmosIPs Suite")
 }
 
-var _ = Describe("Improvement proposal evmos_0 - ", Ordered, func() {
+var _ = Describe("Improvement proposal atoshi_0 - ", Ordered, func() {
 	var (
 		in network.Network
 		tf factory.TxFactory
@@ -55,7 +55,7 @@ var _ = Describe("Improvement proposal evmos_0 - ", Ordered, func() {
 		gasUsedPre int64
 	)
 
-	// Multiplier used to modify the opcodes associated with evmos_0 IP.
+	// Multiplier used to modify the opcodes associated with atoshi_0 IP.
 	ipMultiplier := uint64(5)
 
 	// The factory counter is used because it will create a new instance of
@@ -111,7 +111,7 @@ var _ = Describe("Improvement proposal evmos_0 - ", Ordered, func() {
 
 	It("should enable the new IP", func() {
 		eips.Multiplier = ipMultiplier
-		newIP := "evmos_0"
+		newIP := "atoshi_0"
 
 		qRes, err := gh.GetEvmParams()
 		Expect(err).To(BeNil(), "failed during query to evm params")
@@ -130,10 +130,10 @@ var _ = Describe("Improvement proposal evmos_0 - ", Ordered, func() {
 
 		qRes, err = gh.GetEvmParams()
 		Expect(err).To(BeNil(), "failed during query to evm params")
-		Expect(qRes.Params.ExtraEIPs).To(ContainElement(newIP), "expected to have IP evmos_0 in evm params")
+		Expect(qRes.Params.ExtraEIPs).To(ContainElement(newIP), "expected to have IP atoshi_0 in evm params")
 	})
 
-	It("should change CREATE opcode constant gas after enabling evmos_0 IP", func() {
+	It("should change CREATE opcode constant gas after enabling atoshi_0 IP", func() {
 		gasCostPre := params.CreateGas
 
 		deploymentTxArgs, err := tf.GenerateDeployContractArgs(senderAddr2, evmtypes.EvmTxArgs{}, deploymentData)
@@ -154,7 +154,7 @@ var _ = Describe("Improvement proposal evmos_0 - ", Ordered, func() {
 	})
 })
 
-var _ = Describe("Improvement proposal evmos_1 - ", Ordered, func() {
+var _ = Describe("Improvement proposal atoshi_1 - ", Ordered, func() {
 	var (
 		in network.Network
 		tf factory.TxFactory
@@ -170,7 +170,7 @@ var _ = Describe("Improvement proposal evmos_1 - ", Ordered, func() {
 		counterFactoryAddr common.Address
 	)
 
-	// Multiplier used to modify the opcodes associated with evmos_1.
+	// Multiplier used to modify the opcodes associated with atoshi_1.
 	eipMultiplier := uint64(5)
 	initialCounterValue := 1
 
@@ -259,7 +259,7 @@ var _ = Describe("Improvement proposal evmos_1 - ", Ordered, func() {
 	})
 	It("should enable the new IP", func() {
 		eips.Multiplier = eipMultiplier
-		newIP := "evmos_1"
+		newIP := "atoshi_1"
 
 		qRes, err := gh.GetEvmParams()
 		Expect(err).To(BeNil(), "failed during query to evm params")
@@ -279,7 +279,7 @@ var _ = Describe("Improvement proposal evmos_1 - ", Ordered, func() {
 
 		qRes, err = gh.GetEvmParams()
 		Expect(err).To(BeNil(), "failed during query to evm params")
-		Expect(qRes.Params.ExtraEIPs).To(ContainElement(newIP), "expected to have ip evmos_1 in evm params")
+		Expect(qRes.Params.ExtraEIPs).To(ContainElement(newIP), "expected to have ip atoshi_1 in evm params")
 	})
 	It("should change CALL opcode constant gas after enabling IP", func() {
 		// Constant gas cost used before enabling the new IP.
@@ -331,7 +331,7 @@ var _ = Describe("Improvement proposal evmos_1 - ", Ordered, func() {
 	})
 })
 
-var _ = Describe("Improvement proposal evmos_2 - ", Ordered, func() {
+var _ = Describe("Improvement proposal atoshi_2 - ", Ordered, func() {
 	var (
 		in network.Network
 		tf factory.TxFactory
@@ -344,7 +344,7 @@ var _ = Describe("Improvement proposal evmos_2 - ", Ordered, func() {
 		senderAddr2 common.Address
 		gasUsedPre  int64
 	)
-	// Constant gas used to modify the opcodes associated with evmos_2.
+	// Constant gas used to modify the opcodes associated with atoshi_2.
 	constantGas := uint64(500)
 
 	counterContract, err := testdata.LoadCounterContract()
@@ -401,7 +401,7 @@ var _ = Describe("Improvement proposal evmos_2 - ", Ordered, func() {
 
 	It("should enable the new IP", func() {
 		eips.SstoreConstantGas = constantGas
-		newIP := "evmos_2"
+		newIP := "atoshi_2"
 
 		qRes, err := gh.GetEvmParams()
 		Expect(err).To(BeNil(), "failed during query to evm params")
@@ -420,7 +420,7 @@ var _ = Describe("Improvement proposal evmos_2 - ", Ordered, func() {
 
 		qRes, err = gh.GetEvmParams()
 		Expect(err).To(BeNil(), "failed during query to evm params")
-		Expect(qRes.Params.ExtraEIPs).To(ContainElement(newIP), "expected to have ip evmos_2 in evm params")
+		Expect(qRes.Params.ExtraEIPs).To(ContainElement(newIP), "expected to have ip atoshi_2 in evm params")
 	})
 
 	It("should change SSTORE opcode constant gas after enabling IP", func() {

@@ -15,9 +15,6 @@ import (
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 
-	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/atoshi-chain/atoshi/v20/contracts"
 	testfactory "github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/factory"
 	testhandler "github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/grpc"
@@ -28,6 +25,9 @@ import (
 	"github.com/atoshi-chain/atoshi/v20/x/evm/core/vm"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/statedb"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/types"
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -716,8 +716,14 @@ func (suite *KeeperTestSuite) CreateTestTx(msg *types.MsgEthereumTx, priv crypto
 func (suite *KeeperTestSuite) TestAddLog() {
 	addr, privKey := utiltx.NewAddrKey()
 	toAddr := suite.keyring.GetAddr(0)
+
+	// The signer below is built from the chain's own EVM chain id, so the txs must
+	// carry the same one. A literal 1 (Ethereum mainnet) fails signing with
+	// "invalid chain id for signer" — it was left over from the evmos fork, whose
+	// EVM chain id differed.
+	chainID := types.GetEthChainConfig().ChainID
 	ethTxParams := &types.EvmTxArgs{
-		ChainID:  big.NewInt(1),
+		ChainID:  chainID,
 		Nonce:    0,
 		To:       &toAddr,
 		Amount:   big.NewInt(1),
@@ -733,7 +739,7 @@ func (suite *KeeperTestSuite) TestAddLog() {
 	txHash := msg.AsTransaction().Hash()
 
 	ethTx2Params := &types.EvmTxArgs{
-		ChainID:  big.NewInt(1),
+		ChainID:  chainID,
 		Nonce:    2,
 		To:       &toAddr,
 		Amount:   big.NewInt(1),
@@ -745,7 +751,7 @@ func (suite *KeeperTestSuite) TestAddLog() {
 	msg2.From = addr.Hex()
 
 	ethTx3Params := &types.EvmTxArgs{
-		ChainID:   big.NewInt(9001),
+		ChainID:   chainID,
 		Nonce:     0,
 		To:        &toAddr,
 		Amount:    big.NewInt(1),
@@ -762,7 +768,7 @@ func (suite *KeeperTestSuite) TestAddLog() {
 	txHash3 := msg3.AsTransaction().Hash()
 
 	ethTx4Params := &types.EvmTxArgs{
-		ChainID:   big.NewInt(1),
+		ChainID:   chainID,
 		Nonce:     1,
 		To:        &toAddr,
 		Amount:    big.NewInt(1),
