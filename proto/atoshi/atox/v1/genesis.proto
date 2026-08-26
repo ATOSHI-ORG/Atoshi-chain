@@ -22,4 +22,16 @@ message GenesisState {
   // the sweep where it stopped instead of restarting from the first account and
   // starving the tail of the keyspace.
   bytes scan_cursor = 4;
+
+  // swept_index is the global_index at which the last full sweep pass finished.
+  //
+  // The index only moves when a tier release lands, and that needs 30
+  // consecutive qualifying days, so it happens rarely. Between releases every
+  // account the sweep visits has a zero span and nothing to settle, making the
+  // pass pure waste. Comparing this against the live index lets the EndBlocker
+  // skip entirely in that steady state.
+  string swept_index = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
 }

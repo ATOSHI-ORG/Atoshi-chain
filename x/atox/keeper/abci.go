@@ -36,6 +36,34 @@ func (k Keeper) EndBlocker(ctx sdk.Context) error {
 		return nil
 	}
 
+	globalIndex := k.GetGlobalState(ctx).GlobalIndex
+
+	// An empty cursor means no pass is in flight, so this block either starts a
+	// new one or stands down.
+	if len(k.GetScanCursor(ctx)) == 0 {
+		// Steady-state skip. The index only advances when a tier release lands,
+		// and that needs 30 consecutive qualifying days, so most of the time it
+		// does not move. With the index unchanged since the last pass began,
+		// every account has a zero span and a pass would read the whole account
+		// table to do nothing.
+		//
+		// Accounts left with sub-threshold `pending` by MinAutoPayout wait for
+		// the pass after the next release, which is the point of the threshold:
+		// by then their accrual has had time to clear it.
+		if k.GetSweptIndex(ctx).Equal(globalIndex) {
+			return nil
+		}
+
+		// Starting a fresh pass: stamp the index it will cover NOW, at the start,
+		// not when it finishes. A pass spans many blocks, and a tier release can
+		// land midway. Stamping at the end would record the post-release index and
+		// so claim that accounts settled earlier in the pass — at the lower index
+		// — were up to date, skipping them until some later release moved the
+		// index again. Stamping at the start leaves swept_index behind the live
+		// index in that case, which correctly schedules another pass.
+		k.SetSweptIndex(ctx, globalIndex)
+	}
+
 	keys, hasMore := k.collectSweepBatch(ctx, params.AutoSettlePerBlock)
 
 	for _, key := range keys {

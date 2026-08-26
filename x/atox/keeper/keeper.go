@@ -184,6 +184,28 @@ func (k Keeper) SetScanCursor(ctx sdk.Context, cursor []byte) {
 	store.Set(types.KeyScanCursor, cursor)
 }
 
+// GetSweptIndex returns the global index at which the last full sweep pass
+// completed. Zero when no pass has finished yet.
+func (k Keeper) GetSweptIndex(ctx sdk.Context) math.LegacyDec {
+	bz := ctx.KVStore(k.storeKey).Get(types.KeySweptIndex)
+	if bz == nil {
+		return math.LegacyZeroDec()
+	}
+	var d math.LegacyDec
+	if err := d.Unmarshal(bz); err != nil {
+		panic(fmt.Errorf("failed to unmarshal atox swept index: %w", err))
+	}
+	return d
+}
+
+func (k Keeper) SetSweptIndex(ctx sdk.Context, index math.LegacyDec) {
+	bz, err := index.Marshal()
+	if err != nil {
+		panic(fmt.Errorf("failed to marshal atox swept index: %w", err))
+	}
+	ctx.KVStore(k.storeKey).Set(types.KeySweptIndex, bz)
+}
+
 // ===== Balance helpers =====
 
 // AtoxBalance is the live ATOX held by addr, in aatox.

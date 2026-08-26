@@ -17,6 +17,7 @@ const (
 	prefixGlobalState
 	prefixAccount
 	prefixScanCursor
+	prefixSweptIndex
 )
 
 var (
@@ -24,6 +25,7 @@ var (
 	KeyGlobalState   = []byte{prefixGlobalState}
 	KeyPrefixAccount = []byte{prefixAccount}
 	KeyScanCursor    = []byte{prefixScanCursor}
+	KeySweptIndex    = []byte{prefixSweptIndex}
 )
 
 // AccountKey returns the KV key for an account's settlement record.

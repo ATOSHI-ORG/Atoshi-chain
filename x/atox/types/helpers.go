@@ -256,6 +256,7 @@ func DefaultGenesisState() *GenesisState {
 		GlobalState: DefaultGlobalState(),
 		Accounts:    []AtoxAccount{},
 		ScanCursor:  nil,
+		SweptIndex:  math.LegacyZeroDec(),
 	}
 }
 
@@ -266,6 +267,15 @@ func (gs GenesisState) Validate() error {
 	}
 	if err := gs.GlobalState.Validate(); err != nil {
 		return fmt.Errorf("invalid global_state: %w", err)
+	}
+	if gs.SweptIndex.IsNil() || gs.SweptIndex.IsNegative() {
+		return fmt.Errorf("invalid swept_index: must not be negative, got %s", gs.SweptIndex)
+	}
+	// A swept_index above the live index would make the EndBlocker skip forever,
+	// silently disabling automatic conversion for the whole chain.
+	if gs.SweptIndex.GT(gs.GlobalState.GlobalIndex) {
+		return fmt.Errorf("invalid swept_index: %s exceeds global_index %s",
+			gs.SweptIndex, gs.GlobalState.GlobalIndex)
 	}
 
 	seen := make(map[string]struct{}, len(gs.Accounts))

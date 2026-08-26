@@ -550,3 +550,129 @@ func TestSolvency_PoolAlwaysCoversBooks(t *testing.T) {
 			"round %d: booked exceeds released", round)
 	}
 }
+
+// TestEndBlocker_SkipsWhenIndexUnchanged is the steady-state optimisation: with
+// no tier release since the last pass, every account has a zero span and the
+// sweep must not walk the account table at all.
+func TestEndBlocker_SkipsWhenIndexUnchanged(t *testing.T) {
+	k, ctx, bank := setup(t)
+
+	const holders = 4
+	share := k.GetParams(ctx).SupplyCap.QuoRaw(holders)
+	for i := 0; i < holders; i++ {
+		require.NoError(t, k.MintAtox(ctx, acc(fmt.Sprintf("h%d", i)), share))
+	}
+	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, math.NewIntWithDecimal(1, 28)))
+
+	// One block is enough to cover four accounts at the default rate.
+	require.NoError(t, k.EndBlocker(ctx))
+	require.Empty(t, k.GetScanCursor(ctx), "pass should have completed")
+	require.Equal(t, k.GlobalIndex(ctx).String(), k.GetSweptIndex(ctx).String())
+
+	paid := make([]string, holders)
+	for i := 0; i < holders; i++ {
+		paid[i] = bank.GetBalance(ctx, acc(fmt.Sprintf("h%d", i)), atosDenom).Amount.String()
+		require.NotEqual(t, "0", paid[i])
+	}
+
+	// Further blocks with no release must change nothing.
+	for b := 0; b < 5; b++ {
+		require.NoError(t, k.EndBlocker(ctx))
+	}
+	for i := 0; i < holders; i++ {
+		require.Equal(t, paid[i], bank.GetBalance(ctx, acc(fmt.Sprintf("h%d", i)), atosDenom).Amount.String(),
+			"h%d changed while the index stood still", i)
+	}
+
+	// A new release must wake the sweep back up.
+	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, math.NewIntWithDecimal(1, 28)))
+	require.NoError(t, k.EndBlocker(ctx))
+	for i := 0; i < holders; i++ {
+		require.NotEqual(t, paid[i], bank.GetBalance(ctx, acc(fmt.Sprintf("h%d", i)), atosDenom).Amount.String(),
+			"h%d should have been paid again after a release", i)
+	}
+}
+
+// TestEndBlocker_ReleaseMidPassSchedulesAnotherPass is the reason swept_index is
+// stamped when a pass STARTS. Accounts settled early in a pass saw a lower index;
+// if the stamp were taken at the end it would record the post-release value and
+// those accounts would be skipped until some later release.
+func TestEndBlocker_ReleaseMidPassSchedulesAnotherPass(t *testing.T) {
+	k, ctx, bank := setup(t)
+
+	const holders = 6
+	share := k.GetParams(ctx).SupplyCap.QuoRaw(holders)
+	for i := 0; i < holders; i++ {
+		require.NoError(t, k.MintAtox(ctx, acc(fmt.Sprintf("h%d", i)), share))
+	}
+
+	p := k.GetParams(ctx)
+	p.AutoSettlePerBlock = 2 // three blocks per pass
+	require.NoError(t, k.SetParams(ctx, p))
+
+	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, math.NewIntWithDecimal(1, 28)))
+
+	require.NoError(t, k.EndBlocker(ctx)) // block 1: first two accounts
+	require.NotEmpty(t, k.GetScanCursor(ctx))
+	indexAtPassStart := k.GetSweptIndex(ctx)
+
+	// A release lands mid-pass.
+	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, math.NewIntWithDecimal(1, 28)))
+
+	require.NoError(t, k.EndBlocker(ctx)) // block 2
+	require.NoError(t, k.EndBlocker(ctx)) // block 3: pass completes
+	require.Empty(t, k.GetScanCursor(ctx))
+
+	require.Equal(t, indexAtPassStart.String(), k.GetSweptIndex(ctx).String(),
+		"the stamp must stay at the pass's starting index")
+	require.True(t, k.GetSweptIndex(ctx).LT(k.GlobalIndex(ctx)),
+		"stamp below the live index is what schedules the catch-up pass")
+
+	// The catch-up pass must reach every account, including the ones settled at
+	// the pre-release index. Sweep order follows address bytes rather than
+	// creation order, so which accounts were in which batch is not predictable —
+	// assert on the whole set after a full pass instead.
+	before := make([]math.Int, holders)
+	for i := 0; i < holders; i++ {
+		before[i] = bank.GetBalance(ctx, acc(fmt.Sprintf("h%d", i)), atosDenom).Amount
+	}
+	for b := 0; b < 3; b++ {
+		require.NoError(t, k.EndBlocker(ctx))
+	}
+	require.Empty(t, k.GetScanCursor(ctx), "catch-up pass should have completed")
+
+	// Whether a given holder gains depends on which batch caught it relative to
+	// the release — one swept after the release was already paid in full. The
+	// property that must hold for everyone is that nothing is left owed.
+	caughtUp := 0
+	for i := 0; i < holders; i++ {
+		addr := acc(fmt.Sprintf("h%d", i))
+		pending, unsettled := k.Claimable(ctx, addr)
+		require.True(t, pending.Add(unsettled).IsZero(),
+			"h%d still owed %s after the catch-up pass", i, pending.Add(unsettled))
+		if bank.GetBalance(ctx, addr, atosDenom).Amount.GT(before[i]) {
+			caughtUp++
+		}
+	}
+	require.Positive(t, caughtUp,
+		"the catch-up pass must actually pay the accounts settled at the old index")
+	require.Equal(t, k.GlobalIndex(ctx).String(), k.GetSweptIndex(ctx).String(),
+		"the catch-up pass covered the live index, so the sweep may now stand down")
+}
+
+func TestGenesis_SweptIndexRoundTrip(t *testing.T) {
+	k, ctx, _ := setup(t)
+	require.NoError(t, k.MintAtox(ctx, acc("alice"), k.GetParams(ctx).SupplyCap))
+	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, math.NewIntWithDecimal(1, 28)))
+	require.NoError(t, k.EndBlocker(ctx))
+
+	exported := k.ExportGenesis(ctx)
+	require.NoError(t, exported.Validate())
+	require.Equal(t, k.GetSweptIndex(ctx).String(), exported.SweptIndex.String())
+
+	// A swept index above the live one would disable automatic conversion for the
+	// whole chain, so genesis must reject it.
+	bad := k.ExportGenesis(ctx)
+	bad.SweptIndex = bad.GlobalState.GlobalIndex.Add(math.LegacyOneDec())
+	require.ErrorContains(t, bad.Validate(), "exceeds global_index")
+}

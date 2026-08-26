@@ -21,6 +21,7 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) {
 		}
 	}
 	k.SetScanCursor(ctx, gs.ScanCursor)
+	k.SetSweptIndex(ctx, gs.SweptIndex)
 
 	// No ATOX is minted here and the exchange pool starts empty. Supply grows
 	// only through block rewards, and the pool is only ever funded by tier
@@ -40,5 +41,6 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) *types.GenesisState {
 		GlobalState: k.GetGlobalState(ctx),
 		Accounts:    accounts,
 		ScanCursor:  k.GetScanCursor(ctx),
+		SweptIndex:  k.GetSweptIndex(ctx),
 	}
 }
