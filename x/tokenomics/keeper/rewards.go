@@ -5,55 +5,55 @@ import (
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
 
-// BeginBlocker handles per-block miner reward distribution.
-// 20% is immediate (counted into circulating supply tracking), 80% is locked to validators by voting power.
+// BeginBlocker emits the per-block mining reward.
+//
+// The reward is ATOX, not ATOS. It is minted into the fee collector so
+// x/distribution splits it across the active validator set and their delegators
+// by commission, on exactly the path transaction fees take — which means
+// delegators receive mining rewards without any new distribution logic here.
+// The consequence for clients is that rewards are now multi-denom: ATOS from
+// fees, ATOX from mining, withdrawn together.
+//
+// The ATOS that backs ATOX stays in the miner pool and only moves into the
+// x/atox conversion pool on a tier release, once the matching ERC20 has landed
+// in the Ethereum bridge vault. Nothing here spends ATOS.
 func (k Keeper) BeginBlocker(ctx sdk.Context) error {
+	if k.atoxKeeper == nil {
+		return nil
+	}
+
 	params := k.GetParams(ctx)
 	blockRewardState := k.GetBlockRewardState(ctx)
-	releaseState := k.GetReleaseState(ctx)
 
 	currentReward := k.GetCurrentBlockReward(ctx)
 	if currentReward.IsZero() {
 		return nil
 	}
 
-	// Ensure we do not exceed the miner pool.
-	if blockRewardState.TotalDistributed.Add(currentReward).GT(params.MinerPoolTotal) {
-		remaining := params.MinerPoolTotal.Sub(blockRewardState.TotalDistributed)
+	// Clamp against the ATOX cap held by x/atox, which is the authoritative
+	// ceiling and is immutable there. Clamping rather than letting MintAtox
+	// reject matters: an error here propagates into FinalizeBlock, so once the
+	// cap were reached every block on every node would fail and the chain would
+	// halt. Emission must simply stop.
+	supply := k.atoxKeeper.AtoxSupply(ctx)
+	cap := k.atoxKeeper.AtoxSupplyCap(ctx)
+	if remaining := cap.Sub(supply); remaining.LT(currentReward) {
 		if !remaining.IsPositive() {
 			return nil
 		}
 		currentReward = remaining
 	}
 
-	// Audit Issue-18 (round2): check totalBonded BEFORE any state
-	// mutation. The pre-fix code transferred the immediate share to
-	// the fee collector and updated releaseState IN MEMORY, then
-	// looked up totalBonded; if it was zero (genesis bootstrap before
-	// any validator bonds, or a degenerate scenario where all
-	// validators got unbonded), the function returned at line 54
-	// without calling SetBlockRewardState/SetReleaseState. Effect:
-	//   - bank moved liao from MinerPool to FeeCollector (committed),
-	//   - releaseState.TotalImmediateDistributed never persisted,
-	//   - blockRewardState.TotalDistributed never persisted.
-	// Next block, currentReward repeats the SAME amount (TotalDistributed
-	// hasn't advanced), bank gets another chunk of coins, and the
-	// tokenomics accounting silently drifts further from bank reality.
-	// Over enough blocks the immediate share would over-distribute
-	// without the supply cap (MinerPoolTotal) catching up.
-	//
-	// Moving the check up front means: if no validator can receive
-	// locked rewards, we skip the whole block — no bank send, no
-	// releaseState bump, no drift. This is a safe no-op for chains
-	// with no bonded validators (which shouldn't be producing blocks
-	// at all under normal CometBFT consensus, but the audit's concern
-	// is the genesis bootstrap window where the first block may be
-	// processed before any validator bond is recorded).
+	// Audit Issue-18 (round2): check totalBonded BEFORE any state mutation. With
+	// nothing bonded, x/distribution has no validator to allocate to and would
+	// sweep the whole reward into the community pool — a module account, which
+	// never accrues a conversion claim, so the ATOX would be stranded there. This
+	// is reachable during the genesis bootstrap window before the first validator
+	// bonds.
 	totalBonded, err := k.stakingKeeper.TotalBondedTokens(ctx)
 	if err != nil {
 		return err
@@ -62,69 +62,17 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 		return nil
 	}
 
-	immediate := currentReward.MulRaw(int64(params.ImmediateRewardBps)).QuoRaw(10000)
-	locked := currentReward.Sub(immediate)
-
-	if immediate.IsPositive() {
-		coin := sdk.NewCoin(k.baseDenom(), immediate)
-		if err := k.bankKeeper.SendCoinsFromModuleToModule(ctx, tokenomicstypes.MinerPoolName, k.feeCollectorName, sdk.NewCoins(coin)); err != nil {
-			return err
-		}
-	}
-
-	// Track immediate rewards globally as circulating supply.
-	releaseState.TotalImmediateDistributed = releaseState.TotalImmediateDistributed.Add(immediate)
-	releaseState.TotalMinerLocked = releaseState.TotalMinerLocked.Add(locked)
-
-	// Audit Recommendation-2 (round2): a block handler must NOT panic
-	// on a recoverable failure. cosmos-sdk runs BeginBlocker /
-	// EndBlocker as part of every block's FinalizeBlock; a panic here
-	// propagates up to baseapp and halts consensus across every node
-	// hitting the same condition. The prior code panicked on
-	// SetMinerLockedBalance errors — serialization issues, store
-	// problems, schema mismatches — any of which would freeze the
-	// chain until a coordinated binary fix and migration. We capture
-	// the error into a shadowed variable and break out of the
-	// validator iterator instead, returning it from BeginBlocker so
-	// the FinalizeBlock pipeline can record and surface it as a
-	// regular block error.
-	remainingLocked := locked
-	var setErr error
-	err = k.stakingKeeper.IterateBondedValidatorsByPower(ctx, func(_ int64, validator stakingtypes.ValidatorI) bool {
-		valPower := validator.GetTokens()
-		if !valPower.IsPositive() {
-			return false
-		}
-
-		share := locked.Mul(valPower).Quo(totalBonded)
-		if share.GT(remainingLocked) {
-			share = remainingLocked
-		}
-		if share.IsPositive() {
-			bal := k.GetMinerLockedBalance(ctx, validator.GetOperator())
-			bal.LockedAccrued = bal.LockedAccrued.Add(share)
-			if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-				setErr = fmt.Errorf("set miner locked balance %q: %w", validator.GetOperator(), err)
-				return true // stop the iterator
-			}
-			remainingLocked = remainingLocked.Sub(share)
-		}
-		return false
-	})
-	if err != nil {
+	if err := k.atoxKeeper.MintAtoxToModule(ctx, k.feeCollectorName, currentReward); err != nil {
 		return err
 	}
-	if setErr != nil {
-		return setErr
-	}
 
+	// TotalDistributed counts ATOX emitted. ReleaseState.TotalImmediateDistributed
+	// is deliberately NOT touched: it feeds GetCirculatingSupply, which is an ATOS
+	// figure and the basis for tier release quotas. Adding ATOX amounts to it
+	// would inflate circulating supply and so inflate every future release.
 	blockRewardState.TotalDistributed = blockRewardState.TotalDistributed.Add(currentReward)
 	blockRewardState.CurrentPeriod = uint64(ctx.BlockHeight() / params.HalvingIntervalBlocks)
-
 	if err := k.SetBlockRewardState(ctx, blockRewardState); err != nil {
-		return err
-	}
-	if err := k.SetReleaseState(ctx, releaseState); err != nil {
 		return err
 	}
 
@@ -230,7 +178,7 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	minerTarget := releaseQuota.MulRaw(int64(params.MinerReleaseShareBps)).QuoRaw(10000)
 	projectTarget := releaseQuota.Sub(minerTarget)
 
-	actualMinerRelease, err := k.ReleaseMinerLockedRewards(ctx, minerTarget)
+	actualMinerRelease, err := k.releaseMinerShareToExchangePool(ctx, minerTarget)
 	if err != nil {
 		return err
 	}
@@ -267,8 +215,45 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	return nil
 }
 
+// releaseMinerShareToExchangePool moves the miner share of a tier release into
+// the x/atox conversion pool, which is what raises the ATOX -> ATOS rate.
+//
+// This replaces the old per-validator locked-balance accounting. Under the ATOX
+// model the miner share is not owed to specific validators: it backs every ATOX
+// holder pro rata, and x/atox's index is what apportions it. Moving the ATOS and
+// advancing the index happen in one call there, so the pool balance and what the
+// index promises cannot diverge.
+//
+// The transfer is capped by the miner pool's actual balance rather than trusted
+// from the quota, so a mis-specified release percentage can never overdraw it.
+func (k Keeper) releaseMinerShareToExchangePool(ctx sdk.Context, target math.Int) (math.Int, error) {
+	if !target.IsPositive() || k.atoxKeeper == nil {
+		return math.ZeroInt(), nil
+	}
+
+	poolAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.MinerPoolName)
+	available := k.bankKeeper.GetBalance(ctx, poolAddr, k.baseDenom()).Amount
+	if !available.IsPositive() {
+		return math.ZeroInt(), nil
+	}
+
+	amount := target
+	if amount.GT(available) {
+		amount = available
+	}
+
+	if err := k.atoxKeeper.AddToExchangePool(ctx, tokenomicstypes.MinerPoolName, amount); err != nil {
+		return math.ZeroInt(), err
+	}
+	return amount, nil
+}
+
 // ReleaseMinerLockedRewards distributes newly unlocked miner rewards
 // proportionally to existing locked balances.
+//
+// Deprecated: unused since block rewards became ATOX. The locked-balance table is
+// no longer fed by BeginBlocker, so this always finds nothing to release. Kept
+// only until the MinerLockedBalance machinery is removed wholesale.
 //
 // Audit Recommendation-2 (round2): return any SetMinerLockedBalance
 // error to the caller instead of panicking. The caller (TriggerRelease

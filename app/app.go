@@ -535,6 +535,18 @@ func NewAtoshi(
 		authtypes.NewModuleAddress(govtypes.ModuleName),
 	)
 
+	// Constructed before tokenomics: block rewards are ATOX and tier releases
+	// fund the ATOX conversion pool, so the tokenomics keeper needs this one.
+	app.AtoxKeeper = atoxkeeper.NewKeeper(
+		appCodec,
+		keys[atoxtypes.StoreKey],
+		app.AccountKeeper,
+		app.BankKeeper,
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		atoshitypes.BaseDenom,
+		atoshitypes.AtoxBaseDenom,
+	)
+
 	app.TokenomicsKeeper = tokenomicskeeper.NewKeeper(
 		keys[tokenomicstypes.StoreKey],
 		appCodec,
@@ -545,6 +557,7 @@ func NewAtoshi(
 		stakingKeeper,
 		app.DistrKeeper,
 		app.OracleKeeper,
+		app.AtoxKeeper,
 	)
 
 	app.EnergyKeeper = energykeeper.NewKeeper(
@@ -574,16 +587,6 @@ func NewAtoshi(
 	// hook, snapshots only update on the explicit OnBalanceChange call sites
 	// in delegation flows, so receiving wallets accrue energy against a stale
 	// (often zero) snapshot.
-	app.AtoxKeeper = atoxkeeper.NewKeeper(
-		appCodec,
-		keys[atoxtypes.StoreKey],
-		app.AccountKeeper,
-		app.BankKeeper,
-		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
-		atoshitypes.BaseDenom,
-		atoshitypes.AtoxBaseDenom,
-	)
-
 	app.BankKeeper.AppendSendRestriction(app.EnergyKeeper.SendRestriction)
 
 	// The atox restriction settles both parties' conversion index before their

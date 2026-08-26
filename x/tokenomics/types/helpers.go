@@ -10,10 +10,25 @@ import (
 // ----- Params -----
 
 // DefaultParams returns the genesis tokenomics parameters.
+// Pool layout, as fractions of the 10 trillion ATOS supply. Each pool is backed
+// 100:1 by ERC20 ATOS on Ethereum, and the three add up to the whole supply:
+//
+//	miner      10,000 billion ATOS  (10%)  <-  100 billion ERC20
+//	project    87,000 billion ATOS  (87%)  <-  870 billion ERC20
+//	migration   3,000 billion ATOS   (3%)  <-   30 billion ERC20
+//	                                            ------------------
+//	                    10 trillion ATOS         1,000 billion ERC20
+//
+// The miner pool no longer pays block rewards — those are ATOX now. It holds the
+// ATOS that backs ATOX one-for-one, and tier releases move it into the x/atox
+// conversion pool as the matching ERC20 lands in the Ethereum bridge vault.
 func DefaultParams() Params {
-	minerPool := math.NewIntWithDecimal(1, 30)
-	projectPool := math.NewIntWithDecimal(89, 29)
-	migrationPool := math.NewIntWithDecimal(1, 29)
+	minerPool := math.NewIntWithDecimal(1, 30)     // 10,000 billion ATOS
+	projectPool := math.NewIntWithDecimal(87, 29)  // 87,000 billion ATOS
+	migrationPool := math.NewIntWithDecimal(3, 29) // 3,000 billion ATOS
+	// ATOX per block. Kept at the value calibrated for 5s blocks: over two
+	// halvings of 25,228,800 blocks (4 years each) this emits the full 1 trillion
+	// ATOX cap, matching the miner pool exactly.
 	blockReward := math.NewIntWithDecimal(19819, 18)
 
 	return Params{
@@ -21,8 +36,13 @@ func DefaultParams() Params {
 		ProjectPoolTotal:   projectPool,
 		MigrationPoolTotal: migrationPool,
 
-		ImmediateRewardBps: 2000,
-		LockedRewardBps:    8000,
+		// ATOX block rewards are entirely immediate. The old 20/80 immediate/
+		// locked split existed because rewards were ATOS and the locked share was
+		// released to validators over time; ATOX replaces that mechanism — its
+		// value is gated by the conversion index instead of by a lockup, so there
+		// is nothing left to lock.
+		ImmediateRewardBps: 10000,
+		LockedRewardBps:    0,
 
 		HalvingIntervalBlocks: 25_228_800,
 		InitialBlockReward:    blockReward,

@@ -24,6 +24,9 @@ type Keeper struct {
 	stakingKeeper    tokenomicstypes.StakingKeeper
 	distrKeeper      tokenomicstypes.DistrKeeper
 	oracleKeeper     tokenomicstypes.OracleKeeper
+	// atoxKeeper is optional so unit tests can exercise the tier engine
+	// without the ATOX module; block rewards are skipped when it is nil.
+	atoxKeeper tokenomicstypes.AtoxKeeper
 }
 
 func NewKeeper(
@@ -36,6 +39,7 @@ func NewKeeper(
 	sk tokenomicstypes.StakingKeeper,
 	dk tokenomicstypes.DistrKeeper,
 	ok tokenomicstypes.OracleKeeper,
+	xk tokenomicstypes.AtoxKeeper,
 ) Keeper {
 	if err := sdk.VerifyAddressFormat(authority); err != nil {
 		panic(err)
@@ -50,6 +54,7 @@ func NewKeeper(
 		stakingKeeper:    sk,
 		distrKeeper:      dk,
 		oracleKeeper:     ok,
+		atoxKeeper:       xk,
 	}
 }
 

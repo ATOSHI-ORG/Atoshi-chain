@@ -276,3 +276,43 @@ func (k Keeper) PayoutPending(
 
 	return amount, nil
 }
+
+// MintAtoxToModule emits ATOX directly into a module account.
+//
+// Used for block rewards, which go to the fee collector so x/distribution
+// splits them across the active validator set and their delegators by
+// commission — the same path transaction fees take. No settlement happens here:
+// module accounts never accrue a conversion claim, and the eventual recipient is
+// settled when x/distribution pays them, by the send hook.
+func (k Keeper) MintAtoxToModule(ctx sdk.Context, module string, amount math.Int) error {
+	if !k.GetParams(ctx).Enabled {
+		return types.ErrAtoxDisabled
+	}
+	if amount.IsNil() || !amount.IsPositive() {
+		return types.ErrInvalidAmount
+	}
+	if k.AtoxSupply(ctx).Add(amount).GT(k.GetParams(ctx).SupplyCap) {
+		return types.ErrSupplyCapReached
+	}
+
+	coins := sdk.NewCoins(sdk.NewCoin(k.atoxDenom, amount))
+	if err := k.bankKeeper.MintCoins(ctx, types.ModuleName, coins); err != nil {
+		return err
+	}
+	if err := k.bankKeeper.SendCoinsFromModuleToModule(ctx, types.ModuleName, module, coins); err != nil {
+		return err
+	}
+
+	ctx.EventManager().EmitEvent(sdk.NewEvent(
+		types.EventTypeMintAtox,
+		sdk.NewAttribute(types.AttributeKeyAddress, module),
+		sdk.NewAttribute(types.AttributeKeyAmount, amount.String()),
+	))
+	return nil
+}
+
+// AtoxSupplyCap exposes the cap so callers can stop before hitting it rather
+// than relying on an error every block.
+func (k Keeper) AtoxSupplyCap(ctx sdk.Context) math.Int {
+	return k.GetParams(ctx).SupplyCap
+}

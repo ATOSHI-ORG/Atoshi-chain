@@ -13,8 +13,8 @@ import (
 	"cosmossdk.io/store/metrics"
 	"cosmossdk.io/store/rootmulti"
 	storetypes "cosmossdk.io/store/types"
-	dbm "github.com/cosmos/cosmos-db"
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -85,19 +85,25 @@ func (bk *testBankKeeper) transfer(from, to sdk.AccAddress, amt sdk.Coins) error
 
 type testAccountKeeper struct{}
 
-func (testAccountKeeper) GetModuleAddress(name string) sdk.AccAddress { return authtypes.NewModuleAddress(name) }
+func (testAccountKeeper) GetModuleAddress(name string) sdk.AccAddress {
+	return authtypes.NewModuleAddress(name)
+}
 func (testAccountKeeper) GetModuleAccount(ctx context.Context, moduleName string) sdk.ModuleAccountI {
 	return nil
 }
-func (testAccountKeeper) GetAccount(ctx context.Context, addr sdk.AccAddress) sdk.AccountI { return nil }
-func (testAccountKeeper) SetAccount(ctx context.Context, acc sdk.AccountI)               {}
+func (testAccountKeeper) GetAccount(ctx context.Context, addr sdk.AccAddress) sdk.AccountI {
+	return nil
+}
+func (testAccountKeeper) SetAccount(ctx context.Context, acc sdk.AccountI) {}
 
 type testStakingKeeper struct {
 	totalBonded math.Int
 	validators  []stakingtypes.Validator
 }
 
-func (sk testStakingKeeper) TotalBondedTokens(ctx context.Context) (math.Int, error) { return sk.totalBonded, nil }
+func (sk testStakingKeeper) TotalBondedTokens(ctx context.Context) (math.Int, error) {
+	return sk.totalBonded, nil
+}
 func (sk testStakingKeeper) IterateBondedValidatorsByPower(ctx context.Context, fn func(index int64, validator stakingtypes.ValidatorI) bool) error {
 	for i, v := range sk.validators {
 		if fn(int64(i), v) {
@@ -150,35 +156,193 @@ func newKeeperForTest(t *testing.T, bk *testBankKeeper, sk testStakingKeeper, ok
 
 	interfaceRegistry := codectypes.NewInterfaceRegistry()
 	cdc := codec.NewProtoCodec(interfaceRegistry)
-	k := NewKeeper(key, cdc, authtypes.NewModuleAddress("gov"), authtypes.FeeCollectorName, testAccountKeeper{}, bk, sk, testDistrKeeper{}, ok)
+	xk := newTestAtoxKeeper()
+	k := NewKeeper(key, cdc, authtypes.NewModuleAddress("gov"), authtypes.FeeCollectorName, testAccountKeeper{}, bk, sk, testDistrKeeper{}, ok, xk)
 	require.NoError(t, k.SetParams(ctx, tokenomicstypes.DefaultParams()))
 	require.NoError(t, k.SetReleaseState(ctx, tokenomicstypes.DefaultReleaseState()))
 	require.NoError(t, k.SetBlockRewardState(ctx, tokenomicstypes.DefaultBlockRewardState()))
 	return k, ctx
 }
 
-func TestBeginBlockerDistributesImmediateAndLockedRewards(t *testing.T) {
+// testAtoxKeeper records what tokenomics asks x/atox to do, so the tier engine
+// can be tested without wiring the real module.
+type testAtoxKeeper struct {
+	minted      map[string]math.Int
+	pooled      map[string]math.Int
+	supply      math.Int
+	cap         math.Int
+	mintErr     error
+	addPoolErr  error
+	totalMinted math.Int
+	totalPooled math.Int
+}
+
+func newTestAtoxKeeper() *testAtoxKeeper {
+	return &testAtoxKeeper{
+		minted:      map[string]math.Int{},
+		pooled:      map[string]math.Int{},
+		supply:      math.ZeroInt(),
+		cap:         math.NewIntWithDecimal(1, 30),
+		totalMinted: math.ZeroInt(),
+		totalPooled: math.ZeroInt(),
+	}
+}
+
+func (a *testAtoxKeeper) MintAtoxToModule(_ sdk.Context, module string, amount math.Int) error {
+	if a.mintErr != nil {
+		return a.mintErr
+	}
+	cur, ok := a.minted[module]
+	if !ok {
+		cur = math.ZeroInt()
+	}
+	a.minted[module] = cur.Add(amount)
+	a.supply = a.supply.Add(amount)
+	a.totalMinted = a.totalMinted.Add(amount)
+	return nil
+}
+
+func (a *testAtoxKeeper) AddToExchangePool(_ sdk.Context, fromModule string, amount math.Int) error {
+	if a.addPoolErr != nil {
+		return a.addPoolErr
+	}
+	cur, ok := a.pooled[fromModule]
+	if !ok {
+		cur = math.ZeroInt()
+	}
+	a.pooled[fromModule] = cur.Add(amount)
+	a.totalPooled = a.totalPooled.Add(amount)
+	return nil
+}
+
+func (a *testAtoxKeeper) AtoxSupply(_ sdk.Context) math.Int    { return a.supply }
+func (a *testAtoxKeeper) AtoxSupplyCap(_ sdk.Context) math.Int { return a.cap }
+
+// TestBeginBlocker_MintsAtoxToFeeCollector replaces the old immediate/locked ATOS
+// split test. Block rewards are ATOX now, minted into the fee collector so
+// x/distribution apportions them across the active set and their delegators by
+// commission — no ATOS leaves the miner pool.
+func TestBeginBlocker_MintsAtoxToFeeCollector(t *testing.T) {
 	bk := newTestBankKeeper()
-	bk.balances[authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName).String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewIntWithDecimal(1, 20)))
+	minerAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName)
+	bk.balances[minerAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewIntWithDecimal(1, 20)))
 
 	v1 := stakingtypes.Validator{OperatorAddress: "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Tokens: math.NewInt(100)}
-	v2 := stakingtypes.Validator{OperatorAddress: "atoshivaloper1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Tokens: math.NewInt(300)}
-	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{totalBonded: math.NewInt(400), validators: []stakingtypes.Validator{v1, v2}}, testOracleKeeper{})
+	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{totalBonded: math.NewInt(400), validators: []stakingtypes.Validator{v1}}, testOracleKeeper{})
+	xk := k.atoxKeeper.(*testAtoxKeeper)
 
 	params := k.GetParams(ctx)
 	params.InitialBlockReward = math.NewInt(100)
 	params.HalvingIntervalBlocks = 100
 	require.NoError(t, k.SetParams(ctx, params))
 
+	minerBefore := bk.GetBalance(ctx, minerAddr, atoshitypes.BaseDenom).Amount
 	require.NoError(t, k.BeginBlocker(ctx.WithBlockHeight(1)))
 
-	feeCollectorBalance := bk.GetBalance(ctx, authtypes.NewModuleAddress(authtypes.FeeCollectorName), atoshitypes.BaseDenom)
-	require.Equal(t, math.NewInt(20), feeCollectorBalance.Amount)
+	require.Equal(t, math.NewInt(100).String(), xk.minted[authtypes.FeeCollectorName].String(),
+		"the whole reward is ATOX and goes to the fee collector")
+	require.Equal(t, minerBefore.String(), bk.GetBalance(ctx, minerAddr, atoshitypes.BaseDenom).Amount.String(),
+		"no ATOS may leave the miner pool for a block reward")
+	require.Equal(t, math.NewInt(100).String(), k.GetBlockRewardState(ctx).TotalDistributed.String())
+}
 
-	balA := k.GetMinerLockedBalance(ctx, v1.OperatorAddress)
-	balB := k.GetMinerLockedBalance(ctx, v2.OperatorAddress)
-	require.Equal(t, math.NewInt(20), balA.LockedAccrued)
-	require.Equal(t, math.NewInt(60), balB.LockedAccrued)
+// TestBeginBlocker_DoesNotInflateCirculatingSupply is the correctness point
+// behind the change: circulating supply is an ATOS figure and sets the tier
+// release quota, so ATOX emission must not touch it.
+func TestBeginBlocker_DoesNotInflateCirculatingSupply(t *testing.T) {
+	bk := newTestBankKeeper()
+	v1 := stakingtypes.Validator{OperatorAddress: "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Tokens: math.NewInt(100)}
+	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{totalBonded: math.NewInt(100), validators: []stakingtypes.Validator{v1}}, testOracleKeeper{})
+
+	params := k.GetParams(ctx)
+	params.InitialBlockReward = math.NewIntWithDecimal(1, 20)
+	params.HalvingIntervalBlocks = 1_000_000
+	require.NoError(t, k.SetParams(ctx, params))
+
+	before := k.GetCirculatingSupply(ctx)
+	for h := int64(1); h <= 10; h++ {
+		require.NoError(t, k.BeginBlocker(ctx.WithBlockHeight(h)))
+	}
+	require.Equal(t, before.String(), k.GetCirculatingSupply(ctx).String(),
+		"ATOX emission must leave the ATOS circulating figure untouched")
+	require.True(t, k.GetReleaseState(ctx).TotalImmediateDistributed.IsZero())
+}
+
+// TestBeginBlocker_StopsAtAtoxCapWithoutErroring — an error here propagates into
+// FinalizeBlock, so once the cap is reached every block on every node would fail
+// and the chain would halt. Emission has to just stop.
+func TestBeginBlocker_StopsAtAtoxCapWithoutErroring(t *testing.T) {
+	bk := newTestBankKeeper()
+	v1 := stakingtypes.Validator{OperatorAddress: "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Tokens: math.NewInt(100)}
+	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{totalBonded: math.NewInt(100), validators: []stakingtypes.Validator{v1}}, testOracleKeeper{})
+	xk := k.atoxKeeper.(*testAtoxKeeper)
+
+	params := k.GetParams(ctx)
+	params.InitialBlockReward = math.NewInt(100)
+	params.HalvingIntervalBlocks = 1_000_000
+	require.NoError(t, k.SetParams(ctx, params))
+
+	// Only 30 of headroom left against a reward of 100.
+	xk.cap = math.NewInt(1000)
+	xk.supply = math.NewInt(970)
+
+	require.NoError(t, k.BeginBlocker(ctx.WithBlockHeight(1)))
+	require.Equal(t, math.NewInt(30).String(), xk.minted[authtypes.FeeCollectorName].String(),
+		"the last block must emit only the remaining headroom")
+
+	// Cap now reached: further blocks are quiet no-ops, not errors.
+	for h := int64(2); h <= 5; h++ {
+		require.NoError(t, k.BeginBlocker(ctx.WithBlockHeight(h)))
+	}
+	require.Equal(t, math.NewInt(30).String(), xk.minted[authtypes.FeeCollectorName].String())
+}
+
+// TestTriggerRelease_FundsAtoxExchangePool covers the other half of the change:
+// the miner share of a tier release now raises the ATOX conversion rate instead
+// of crediting per-validator locked balances.
+func TestTriggerRelease_FundsAtoxExchangePool(t *testing.T) {
+	bk := newTestBankKeeper()
+	minerAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName)
+	projectAddr := authtypes.NewModuleAddress(tokenomicstypes.ProjectPoolName)
+	// Fund both pools at their real genesis sizes so the release is not clamped;
+	// clamping is covered separately below.
+	bk.balances[minerAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewIntWithDecimal(1, 30)))
+	bk.balances[projectAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewIntWithDecimal(87, 29)))
+
+	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{}, testOracleKeeper{})
+	xk := k.atoxKeeper.(*testAtoxKeeper)
+
+	state := k.GetReleaseState(ctx)
+	params := k.GetParams(ctx)
+	require.NoError(t, k.TriggerRelease(ctx, &state, params))
+
+	// 5% of circulating, split 50/50 between miner and project.
+	quota := k.GetCirculatingSupply(ctx).MulRaw(int64(params.ReleasePercentageBps)).QuoRaw(10000)
+	expectMiner := quota.MulRaw(int64(params.MinerReleaseShareBps)).QuoRaw(10000)
+
+	require.Equal(t, expectMiner.String(), xk.pooled[tokenomicstypes.MinerPoolName].String(),
+		"the miner share must be routed into the ATOX conversion pool")
+	require.Equal(t, expectMiner.String(), state.TotalMinerReleased.String())
+	require.True(t, state.TotalProjectReleased.IsPositive(), "the project share still raises ProjectClaimable")
+}
+
+// TestTriggerRelease_CappedByMinerPoolBalance — the quota is derived from
+// circulating supply, so it must be clamped to what the pool actually holds
+// rather than trusted.
+func TestTriggerRelease_CappedByMinerPoolBalance(t *testing.T) {
+	bk := newTestBankKeeper()
+	minerAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName)
+	bk.balances[minerAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewInt(7)))
+
+	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{}, testOracleKeeper{})
+	xk := k.atoxKeeper.(*testAtoxKeeper)
+
+	state := k.GetReleaseState(ctx)
+	require.NoError(t, k.TriggerRelease(ctx, &state, k.GetParams(ctx)))
+
+	require.Equal(t, "7", xk.pooled[tokenomicstypes.MinerPoolName].String(),
+		"cannot move more ATOS than the miner pool holds")
+	require.Equal(t, "7", state.TotalMinerReleased.String())
 }
 
 func TestReleaseMinerLockedRewards(t *testing.T) {
@@ -389,6 +553,7 @@ func TestEndBlocker_ZeroTimestampIsTreatedAsStale(t *testing.T) {
 //   - bank state: FeeCollector got the liao (committed),
 //   - releaseState.TotalImmediateDistributed: not persisted,
 //   - blockRewardState.TotalDistributed: not persisted.
+//
 // On the next block, the same currentReward would be computed again
 // (TotalDistributed unchanged) and another chunk would land in the
 // FeeCollector — silently over-distributing while tokenomics
