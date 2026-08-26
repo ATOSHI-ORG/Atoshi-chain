@@ -3,6 +3,8 @@ package types
 const (
 	EventTypeReceiptApplied = "bridge_receipt_applied"
 	EventTypeUpdateParams   = "bridge_adapter_update_params"
+	EventTypeBridgeOut      = "bridge_out"
+	EventTypeBridgeIn       = "bridge_in"
 
 	AttributeKeyMessageID         = "message_id"
 	AttributeKeyBridgeDelta       = "bridge_delta_erc20"
@@ -11,4 +13,8 @@ const (
 	AttributeKeyAtosToProject     = "atos_authorized_to_project"
 	AttributeKeyCumulativeBridge  = "cumulative_bridge_erc20"
 	AttributeKeyCumulativeProject = "cumulative_project_erc20"
+	AttributeKeySender            = "sender"
+	AttributeKeyRecipient         = "recipient"
+	AttributeKeyAmount            = "amount"
+	AttributeKeyErc20Amount       = "erc20_amount"
 )

@@ -592,6 +592,7 @@ func NewAtoshi(
 		app.AtoxKeeper,
 		app.TokenomicsKeeper,
 		app.HyperlaneKeeper,
+		app.BankKeeper,
 	)
 
 	// Register as a Hyperlane app so the mailbox can route verified receipts

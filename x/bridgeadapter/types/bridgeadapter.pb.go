@@ -52,6 +52,39 @@ type Params struct {
 	// MsgUpdateParams rejects any change to it: raising it would release ATOS with
 	// nothing behind it, lowering it would strand ATOS that is already backed.
 	AtosPerErc20 uint64 `protobuf:"varint,4,opt,name=atos_per_erc20,json=atosPerErc20,proto3" json:"atos_per_erc20,omitempty"`
+	// bridge_enabled gates the ATOS <-> ERC20 asset bridge independently of the
+	// tier-release channel, so one can be paused without stopping the other.
+	BridgeEnabled bool `protobuf:"varint,6,opt,name=bridge_enabled,json=bridgeEnabled,proto3" json:"bridge_enabled,omitempty"`
+	// mailbox_id is the Hyperlane mailbox outbound transfers dispatch through.
+	MailboxId []byte `protobuf:"bytes,7,opt,name=mailbox_id,json=mailboxId,proto3" json:"mailbox_id,omitempty"`
+	// remote_bridge_vault is the Ethereum contract that receives outbound
+	// transfers and originates inbound ones.
+	RemoteBridgeVault []byte `protobuf:"bytes,8,opt,name=remote_bridge_vault,json=remoteBridgeVault,proto3" json:"remote_bridge_vault,omitempty"`
+	// global_daily_cap and global_daily_cap_bps_of_pool bound outbound volume per
+	// day. The effective cap is the SMALLER of the two, so a shrinking migration
+	// pool tightens the limit automatically instead of waiting for a proposal.
+	GlobalDailyCap          cosmossdk_io_math.Int `protobuf:"bytes,9,opt,name=global_daily_cap,json=globalDailyCap,proto3,customtype=cosmossdk.io/math.Int" json:"global_daily_cap"`
+	GlobalDailyCapBpsOfPool uint32                `protobuf:"varint,10,opt,name=global_daily_cap_bps_of_pool,json=globalDailyCapBpsOfPool,proto3" json:"global_daily_cap_bps_of_pool,omitempty"`
+	// per_address_daily_bps caps one address at this fraction of the global daily
+	// cap, so a single actor cannot consume the day's whole allowance.
+	PerAddressDailyBps uint32 `protobuf:"varint,11,opt,name=per_address_daily_bps,json=perAddressDailyBps,proto3" json:"per_address_daily_bps,omitempty"`
+	// min_transfer_out keeps dust out of the bridge, where each transfer costs a
+	// cross-chain message regardless of size.
+	MinTransferOut cosmossdk_io_math.Int `protobuf:"bytes,12,opt,name=min_transfer_out,json=minTransferOut,proto3,customtype=cosmossdk.io/math.Int" json:"min_transfer_out"`
+	// small_transfer_threshold and small_quota_bps reserve part of the daily cap
+	// for transfers at or below the threshold.
+	//
+	// This is the layer that matters most for users. Without it a few large exits
+	// consume the whole daily allowance in the first minutes and ordinary holders
+	// are locked out for the rest of the day — which is precisely when they are
+	// most likely to want out. Large transfers may only use
+	// (global - reserved); small ones may use the whole cap.
+	SmallTransferThreshold cosmossdk_io_math.Int `protobuf:"bytes,13,opt,name=small_transfer_threshold,json=smallTransferThreshold,proto3,customtype=cosmossdk.io/math.Int" json:"small_transfer_threshold"`
+	SmallQuotaBps          uint32                `protobuf:"varint,14,opt,name=small_quota_bps,json=smallQuotaBps,proto3" json:"small_quota_bps,omitempty"`
+	// crisis_pool_bps puts the bridge into small-transfers-only mode once the
+	// migration pool falls below this fraction of its configured total, so the
+	// remaining liquidity serves many small holders rather than one large exit.
+	CrisisPoolBps uint32 `protobuf:"varint,15,opt,name=crisis_pool_bps,json=crisisPoolBps,proto3" json:"crisis_pool_bps,omitempty"`
 	// ism_id optionally pins a specific interchain security module for messages
 	// addressed to this app. Empty falls back to the mailbox default ISM, which is
 	// acceptable only if that default is already the 5-of-7 multisig; pinning it
@@ -121,6 +154,55 @@ func (m *Params) GetAtosPerErc20() uint64 {
 	return 0
 }
 
+func (m *Params) GetBridgeEnabled() bool {
+	if m != nil {
+		return m.BridgeEnabled
+	}
+	return false
+}
+
+func (m *Params) GetMailboxId() []byte {
+	if m != nil {
+		return m.MailboxId
+	}
+	return nil
+}
+
+func (m *Params) GetRemoteBridgeVault() []byte {
+	if m != nil {
+		return m.RemoteBridgeVault
+	}
+	return nil
+}
+
+func (m *Params) GetGlobalDailyCapBpsOfPool() uint32 {
+	if m != nil {
+		return m.GlobalDailyCapBpsOfPool
+	}
+	return 0
+}
+
+func (m *Params) GetPerAddressDailyBps() uint32 {
+	if m != nil {
+		return m.PerAddressDailyBps
+	}
+	return 0
+}
+
+func (m *Params) GetSmallQuotaBps() uint32 {
+	if m != nil {
+		return m.SmallQuotaBps
+	}
+	return 0
+}
+
+func (m *Params) GetCrisisPoolBps() uint32 {
+	if m != nil {
+		return m.CrisisPoolBps
+	}
+	return 0
+}
+
 func (m *Params) GetIsmId() []byte {
 	if m != nil {
 		return m.IsmId
@@ -151,6 +233,16 @@ type ReceiptState struct {
 	// last_message_id is the id of the most recently applied receipt, for
 	// operators correlating chain state with Hyperlane's message log.
 	LastMessageId []byte `protobuf:"bytes,4,opt,name=last_message_id,json=lastMessageId,proto3" json:"last_message_id,omitempty"`
+	// asset_app_id is the recipient address inbound asset transfers are sent to.
+	//
+	// Separate from app_id so the two channels cannot be confused: a message
+	// addressed to one is never parsed as the other, which means a malformed or
+	// hostile asset transfer can never be read as a tier release.
+	AssetAppId []byte `protobuf:"bytes,5,opt,name=asset_app_id,json=assetAppId,proto3" json:"asset_app_id,omitempty"`
+	// total_bridged_out / total_bridged_in are lifetime ATOS volumes, for
+	// reconciling against the Ethereum vault.
+	TotalBridgedOut cosmossdk_io_math.Int `protobuf:"bytes,6,opt,name=total_bridged_out,json=totalBridgedOut,proto3,customtype=cosmossdk.io/math.Int" json:"total_bridged_out"`
+	TotalBridgedIn  cosmossdk_io_math.Int `protobuf:"bytes,7,opt,name=total_bridged_in,json=totalBridgedIn,proto3,customtype=cosmossdk.io/math.Int" json:"total_bridged_in"`
 }
 
 func (m *ReceiptState) Reset()         { *m = ReceiptState{} }
@@ -200,9 +292,121 @@ func (m *ReceiptState) GetLastMessageId() []byte {
 	return nil
 }
 
+func (m *ReceiptState) GetAssetAppId() []byte {
+	if m != nil {
+		return m.AssetAppId
+	}
+	return nil
+}
+
+// RateLimitState is the global outbound usage for one day.
+//
+// Counters reset lazily: a stored day that is not today reads as zero, so no
+// EndBlocker sweep is needed to roll them over.
+type RateLimitState struct {
+	// day is the UTC day number the counters belong to (unix seconds / 86400).
+	Day int64 `protobuf:"varint,1,opt,name=day,proto3" json:"day,omitempty"`
+	// used is total outbound ATOS today, from transfers of every size.
+	Used cosmossdk_io_math.Int `protobuf:"bytes,2,opt,name=used,proto3,customtype=cosmossdk.io/math.Int" json:"used"`
+	// used_large counts only transfers above small_transfer_threshold.
+	//
+	// Tracking large usage separately is what makes the small-transfer reserve
+	// real: large transfers are bounded by (global - reserved) while small ones
+	// are bounded by the global cap, so the reserve cannot be eaten by whales.
+	UsedLarge cosmossdk_io_math.Int `protobuf:"bytes,3,opt,name=used_large,json=usedLarge,proto3,customtype=cosmossdk.io/math.Int" json:"used_large"`
+}
+
+func (m *RateLimitState) Reset()         { *m = RateLimitState{} }
+func (m *RateLimitState) String() string { return proto.CompactTextString(m) }
+func (*RateLimitState) ProtoMessage()    {}
+func (*RateLimitState) Descriptor() ([]byte, []int) {
+	return fileDescriptor_f65bd3547a917bb8, []int{2}
+}
+func (m *RateLimitState) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *RateLimitState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_RateLimitState.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *RateLimitState) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_RateLimitState.Merge(m, src)
+}
+func (m *RateLimitState) XXX_Size() int {
+	return m.Size()
+}
+func (m *RateLimitState) XXX_DiscardUnknown() {
+	xxx_messageInfo_RateLimitState.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_RateLimitState proto.InternalMessageInfo
+
+func (m *RateLimitState) GetDay() int64 {
+	if m != nil {
+		return m.Day
+	}
+	return 0
+}
+
+// AddressUsage is one address's outbound usage for one day.
+type AddressUsage struct {
+	Day  int64                 `protobuf:"varint,1,opt,name=day,proto3" json:"day,omitempty"`
+	Used cosmossdk_io_math.Int `protobuf:"bytes,2,opt,name=used,proto3,customtype=cosmossdk.io/math.Int" json:"used"`
+}
+
+func (m *AddressUsage) Reset()         { *m = AddressUsage{} }
+func (m *AddressUsage) String() string { return proto.CompactTextString(m) }
+func (*AddressUsage) ProtoMessage()    {}
+func (*AddressUsage) Descriptor() ([]byte, []int) {
+	return fileDescriptor_f65bd3547a917bb8, []int{3}
+}
+func (m *AddressUsage) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *AddressUsage) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_AddressUsage.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *AddressUsage) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_AddressUsage.Merge(m, src)
+}
+func (m *AddressUsage) XXX_Size() int {
+	return m.Size()
+}
+func (m *AddressUsage) XXX_DiscardUnknown() {
+	xxx_messageInfo_AddressUsage.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_AddressUsage proto.InternalMessageInfo
+
+func (m *AddressUsage) GetDay() int64 {
+	if m != nil {
+		return m.Day
+	}
+	return 0
+}
+
 func init() {
 	proto.RegisterType((*Params)(nil), "atoshi.bridgeadapter.v1.Params")
 	proto.RegisterType((*ReceiptState)(nil), "atoshi.bridgeadapter.v1.ReceiptState")
+	proto.RegisterType((*RateLimitState)(nil), "atoshi.bridgeadapter.v1.RateLimitState")
+	proto.RegisterType((*AddressUsage)(nil), "atoshi.bridgeadapter.v1.AddressUsage")
 }
 
 func init() {
@@ -210,35 +414,57 @@ func init() {
 }
 
 var fileDescriptor_f65bd3547a917bb8 = []byte{
-	// 440 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x8c, 0x92, 0xbf, 0x6e, 0x13, 0x41,
-	0x10, 0xc6, 0xbd, 0x60, 0x1b, 0x58, 0x39, 0x71, 0xb2, 0x22, 0xe2, 0x94, 0xe2, 0x62, 0x59, 0x08,
-	0x2c, 0xfe, 0xdc, 0x25, 0xa1, 0xa1, 0xb6, 0xa0, 0x70, 0x01, 0xb2, 0x0e, 0x44, 0x41, 0x73, 0x1a,
-	0xdf, 0x8e, 0xee, 0x16, 0x6e, 0x6f, 0x57, 0xbb, 0x6b, 0x0b, 0xde, 0x82, 0xc7, 0xa0, 0xa4, 0xe2,
-	0x19, 0x52, 0xa6, 0x44, 0x14, 0x11, 0xb2, 0x0b, 0x4a, 0x5e, 0x01, 0xed, 0x6d, 0x82, 0x30, 0x15,
-	0xcd, 0x69, 0xe7, 0xf7, 0xcd, 0x7c, 0xba, 0x6f, 0x34, 0xf4, 0x21, 0x38, 0x65, 0x2b, 0x91, 0x2e,
-	0x8c, 0xe0, 0x25, 0x02, 0x07, 0xed, 0xd0, 0xa4, 0xab, 0x93, 0x6d, 0x90, 0x68, 0xa3, 0x9c, 0x62,
-	0x77, 0x42, 0x73, 0xb2, 0xad, 0xad, 0x4e, 0x0e, 0xf7, 0x41, 0x8a, 0x46, 0xa5, 0xed, 0x37, 0xf4,
-	0x1e, 0xde, 0x2e, 0x55, 0xa9, 0xda, 0x67, 0xea, 0x5f, 0x81, 0x8e, 0xbf, 0x12, 0xda, 0x9f, 0x83,
-	0x01, 0x69, 0x59, 0x44, 0x6f, 0x60, 0x03, 0x8b, 0x1a, 0x79, 0x44, 0x46, 0x64, 0x72, 0x33, 0xbb,
-	0x2a, 0xd9, 0x7d, 0x3a, 0x44, 0x57, 0xa1, 0xc1, 0xa5, 0xcc, 0xb9, 0x92, 0x20, 0x9a, 0xe8, 0xda,
-	0x88, 0x4c, 0x76, 0xb2, 0xdd, 0x2b, 0xfc, 0xac, 0xa5, 0xec, 0x11, 0x65, 0x4e, 0xa0, 0xc9, 0x0d,
-	0xd6, 0x08, 0x16, 0xf3, 0x15, 0x2c, 0x6b, 0x17, 0x5d, 0x1f, 0x91, 0xc9, 0x20, 0xdb, 0xf3, 0x4a,
-	0x16, 0x84, 0x37, 0x9e, 0xb3, 0xbb, 0x74, 0xd7, 0xff, 0x7f, 0xae, 0xd1, 0xe4, 0x68, 0x8a, 0xd3,
-	0xe3, 0xa8, 0x3b, 0x22, 0x93, 0x6e, 0x36, 0xf0, 0x74, 0x8e, 0xe6, 0xb9, 0x67, 0xec, 0x80, 0xf6,
-	0x85, 0x95, 0xb9, 0xe0, 0x51, 0xaf, 0xf5, 0xe9, 0x09, 0x2b, 0x67, 0x7c, 0xfc, 0x8b, 0xd0, 0x41,
-	0x86, 0x05, 0x0a, 0xed, 0x5e, 0x39, 0x70, 0xc8, 0x5e, 0xd2, 0x7d, 0xd0, 0xba, 0x16, 0xc8, 0x73,
-	0xa7, 0xf2, 0xb0, 0x91, 0x36, 0xc8, 0xad, 0xe9, 0xf8, 0xec, 0xe2, 0xa8, 0xf3, 0xfd, 0xe2, 0xe8,
-	0xa0, 0x50, 0x56, 0x2a, 0x6b, 0xf9, 0xfb, 0x44, 0xa8, 0x54, 0x82, 0xab, 0x92, 0x59, 0xe3, 0x3e,
-	0xff, 0xfc, 0xf2, 0x80, 0x64, 0xc3, 0xcb, 0xe1, 0xd7, 0x6a, 0xda, 0x8e, 0xb2, 0x39, 0x65, 0x7f,
-	0xf9, 0x69, 0xa3, 0xde, 0x61, 0xe1, 0xda, 0xdc, 0xff, 0x67, 0xb8, 0xf7, 0xc7, 0x70, 0x1e, 0x66,
-	0x7d, 0x12, 0xd0, 0xda, 0x27, 0x09, 0x1b, 0xe9, 0x81, 0xd6, 0x33, 0xce, 0xee, 0xd1, 0x61, 0x0d,
-	0xd6, 0xe5, 0x12, 0xad, 0x85, 0x12, 0xbd, 0xde, 0x6d, 0xf5, 0x1d, 0x8f, 0x5f, 0x04, 0x3a, 0xe3,
-	0xd3, 0xec, 0x6c, 0x1d, 0x93, 0xf3, 0x75, 0x4c, 0x7e, 0xac, 0x63, 0xf2, 0x69, 0x13, 0x77, 0xce,
-	0x37, 0x71, 0xe7, 0xdb, 0x26, 0xee, 0xbc, 0x7d, 0x5a, 0x0a, 0x57, 0x2d, 0x17, 0x49, 0xa1, 0x64,
-	0x1a, 0x2e, 0xe2, 0x71, 0x51, 0x81, 0x68, 0x2e, 0x8b, 0x74, 0x75, 0x7a, 0x9c, 0x7e, 0xf8, 0xe7,
-	0xa2, 0xdc, 0x47, 0x8d, 0x76, 0xd1, 0x6f, 0xaf, 0xe0, 0xc9, 0xef, 0x00, 0x00, 0x00, 0xff, 0xff,
-	0x8f, 0xcd, 0xac, 0xc0, 0x76, 0x02, 0x00, 0x00,
+	// 789 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x55, 0xcd, 0x6e, 0x5b, 0x45,
+	0x14, 0xce, 0x25, 0x89, 0xdb, 0x0c, 0xfe, 0xcb, 0x40, 0xe8, 0x55, 0x05, 0xae, 0x65, 0x41, 0xb1,
+	0xf8, 0xb1, 0x9b, 0x22, 0x21, 0x36, 0x2c, 0x62, 0xda, 0x85, 0xa5, 0xd0, 0x9a, 0x4b, 0x40, 0x08,
+	0x21, 0x8d, 0x8e, 0xef, 0x9c, 0xd8, 0x03, 0x33, 0x77, 0x86, 0x99, 0x71, 0xd4, 0xbc, 0x05, 0x2f,
+	0xc0, 0x9e, 0x1d, 0x3c, 0x46, 0x97, 0x5d, 0x22, 0x16, 0x15, 0x4a, 0x16, 0xf0, 0x18, 0x68, 0x66,
+	0xae, 0xa1, 0xc9, 0xca, 0x48, 0xdd, 0xd8, 0x73, 0xbf, 0x73, 0xbe, 0xcf, 0xe7, 0x7c, 0x73, 0xce,
+	0x35, 0x79, 0x1f, 0xbc, 0x76, 0x4b, 0x31, 0x9e, 0x5b, 0xc1, 0x17, 0x08, 0x1c, 0x8c, 0x47, 0x3b,
+	0x3e, 0x3b, 0xbc, 0x0a, 0x8c, 0x8c, 0xd5, 0x5e, 0xd3, 0x5b, 0x29, 0x79, 0x74, 0x35, 0x76, 0x76,
+	0x78, 0x7b, 0x1f, 0x94, 0xa8, 0xf4, 0x38, 0x7e, 0xa6, 0xdc, 0xdb, 0xaf, 0x2f, 0xf4, 0x42, 0xc7,
+	0xe3, 0x38, 0x9c, 0x12, 0x3a, 0xf8, 0x7b, 0x97, 0x34, 0x66, 0x60, 0x41, 0x39, 0x9a, 0x93, 0x1b,
+	0x58, 0xc1, 0x5c, 0x22, 0xcf, 0xb3, 0x7e, 0x36, 0xbc, 0x59, 0xac, 0x1f, 0xe9, 0xbb, 0xa4, 0x83,
+	0x7e, 0x89, 0x16, 0x57, 0x8a, 0x71, 0xad, 0x40, 0x54, 0xf9, 0x2b, 0xfd, 0x6c, 0xd8, 0x2a, 0xda,
+	0x6b, 0xf8, 0x41, 0x44, 0xe9, 0x07, 0x84, 0x7a, 0x81, 0x96, 0x59, 0x94, 0x08, 0x0e, 0xd9, 0x19,
+	0xac, 0xa4, 0xcf, 0xb7, 0xfb, 0xd9, 0xb0, 0x59, 0x74, 0x43, 0xa4, 0x48, 0x81, 0xaf, 0x03, 0x4e,
+	0xdf, 0x26, 0xed, 0x50, 0x3f, 0x33, 0x68, 0x19, 0xda, 0xf2, 0xfe, 0xbd, 0x7c, 0xa7, 0x9f, 0x0d,
+	0x77, 0x8a, 0x66, 0x40, 0x67, 0x68, 0x1f, 0x06, 0x8c, 0xbe, 0x43, 0xda, 0xa9, 0x3d, 0xb6, 0xae,
+	0xae, 0x11, 0xab, 0x6b, 0x25, 0xf4, 0x61, 0x5d, 0xe3, 0x5b, 0x84, 0x28, 0x10, 0x72, 0xae, 0x9f,
+	0x30, 0xc1, 0xf3, 0x1b, 0xf1, 0x27, 0xf7, 0x6a, 0x64, 0xca, 0xe9, 0x88, 0xbc, 0x66, 0x51, 0x69,
+	0x8f, 0xac, 0x16, 0x4b, 0xa5, 0xdd, 0x8c, 0x79, 0xfb, 0x29, 0x34, 0x89, 0x91, 0x54, 0xdb, 0x31,
+	0xe9, 0x2e, 0xa4, 0x9e, 0x83, 0x64, 0x1c, 0x84, 0x3c, 0x67, 0x25, 0x98, 0x7c, 0xaf, 0x9f, 0x0d,
+	0xf7, 0x26, 0x83, 0xa7, 0xcf, 0xef, 0x6c, 0xfd, 0xf1, 0xfc, 0xce, 0x41, 0xa9, 0x9d, 0xd2, 0xce,
+	0xf1, 0x1f, 0x46, 0x42, 0x8f, 0x15, 0xf8, 0xe5, 0x68, 0x5a, 0xf9, 0x5f, 0xfe, 0xfa, 0xed, 0xbd,
+	0xac, 0x68, 0x27, 0xee, 0x83, 0x40, 0xfd, 0x0c, 0x0c, 0xfd, 0x94, 0xbc, 0x79, 0x5d, 0x8d, 0xcd,
+	0x8d, 0x63, 0xfa, 0x94, 0x19, 0xad, 0x65, 0x4e, 0xa2, 0x9b, 0xb7, 0xae, 0xb2, 0x26, 0xc6, 0x3d,
+	0x3e, 0x9d, 0x69, 0x2d, 0xe9, 0x21, 0x39, 0x08, 0x1e, 0x01, 0xe7, 0x16, 0x9d, 0xab, 0x35, 0xe6,
+	0xc6, 0xe5, 0xaf, 0x46, 0x1e, 0x35, 0x68, 0x8f, 0x52, 0x2c, 0x72, 0x27, 0xc6, 0x85, 0xfa, 0x95,
+	0xa8, 0x98, 0xb7, 0x50, 0xb9, 0x53, 0xb4, 0x4c, 0xaf, 0x7c, 0xde, 0xdc, 0xbc, 0x7e, 0x25, 0xaa,
+	0x93, 0x9a, 0xfa, 0x78, 0xe5, 0xe9, 0x77, 0x24, 0x77, 0x0a, 0xa4, 0xfc, 0x4f, 0xcf, 0x2f, 0x2d,
+	0xba, 0xa5, 0x96, 0x3c, 0x6f, 0x6d, 0xac, 0xfa, 0x46, 0xd4, 0x58, 0xeb, 0x9e, 0xac, 0x15, 0xe8,
+	0x5d, 0xd2, 0x49, 0xea, 0x3f, 0xae, 0xb4, 0x87, 0xd8, 0x58, 0x3b, 0x36, 0xd6, 0x8a, 0xf0, 0x17,
+	0x01, 0x0d, 0x3d, 0xdd, 0x25, 0x9d, 0xd2, 0x0a, 0x27, 0x5c, 0x34, 0x2d, 0xe6, 0x75, 0x52, 0x5e,
+	0x82, 0x83, 0x57, 0x21, 0xef, 0x80, 0x34, 0x84, 0x53, 0x61, 0x0c, 0x76, 0xe3, 0xf5, 0xee, 0x0a,
+	0xa7, 0xa6, 0x7c, 0xf0, 0xeb, 0x36, 0x69, 0x16, 0x58, 0xa2, 0x30, 0xfe, 0x4b, 0x0f, 0x1e, 0xe9,
+	0x23, 0xb2, 0x0f, 0xc6, 0x48, 0x81, 0x9c, 0x79, 0x5d, 0xcf, 0x45, 0x1c, 0xfd, 0xcd, 0xda, 0xe9,
+	0xd4, 0xe4, 0x13, 0x9d, 0x06, 0x87, 0xce, 0x08, 0x7d, 0x41, 0xcf, 0x58, 0xfd, 0x3d, 0x96, 0x3e,
+	0x6e, 0xca, 0x66, 0x82, 0xdd, 0x7f, 0x05, 0x67, 0x89, 0x1b, 0x3a, 0x01, 0x63, 0x42, 0x27, 0x69,
+	0x87, 0x76, 0xc1, 0x98, 0x69, 0x34, 0x4c, 0x82, 0xf3, 0x4c, 0xa1, 0x73, 0xb0, 0xc0, 0x10, 0xdf,
+	0x89, 0xf1, 0x56, 0x80, 0x3f, 0x4f, 0xe8, 0x94, 0xd3, 0x3e, 0x69, 0x82, 0x73, 0xe8, 0x59, 0x2d,
+	0x92, 0xec, 0x20, 0x11, 0x3b, 0x8a, 0x4a, 0x8f, 0xc8, 0xbe, 0xd7, 0x1e, 0x64, 0xdd, 0x3d, 0x8f,
+	0x73, 0xd2, 0xd8, 0xdc, 0x82, 0x48, 0x4e, 0xed, 0xf3, 0x30, 0x28, 0xc7, 0xa4, 0x7b, 0x55, 0x4f,
+	0x54, 0x71, 0x17, 0x37, 0x1c, 0xbb, 0x17, 0xe5, 0xa6, 0xd5, 0xe0, 0xe7, 0x8c, 0xb4, 0x0b, 0xf0,
+	0x78, 0x2c, 0x94, 0xa8, 0xef, 0xac, 0x4b, 0xb6, 0x39, 0x9c, 0xc7, 0x5b, 0xda, 0x2e, 0xc2, 0x91,
+	0x7e, 0x4c, 0x76, 0x56, 0x0e, 0xf9, 0xff, 0xf0, 0x39, 0xe6, 0xd3, 0x23, 0x42, 0xc2, 0x37, 0x93,
+	0x60, 0x17, 0x18, 0xfd, 0xdd, 0x8c, 0xbd, 0x17, 0x58, 0xc7, 0x81, 0x34, 0xf8, 0x86, 0x34, 0xeb,
+	0xbd, 0xfb, 0x2a, 0x38, 0xfe, 0xf2, 0x8a, 0x9b, 0x14, 0x4f, 0x2f, 0x7a, 0xd9, 0xb3, 0x8b, 0x5e,
+	0xf6, 0xe7, 0x45, 0x2f, 0xfb, 0xe9, 0xb2, 0xb7, 0xf5, 0xec, 0xb2, 0xb7, 0xf5, 0xfb, 0x65, 0x6f,
+	0xeb, 0xdb, 0x4f, 0x16, 0xc2, 0x2f, 0x57, 0xf3, 0x51, 0xa9, 0xd5, 0x38, 0xbd, 0xfd, 0x3f, 0x2c,
+	0x97, 0x20, 0xaa, 0xfa, 0x61, 0x7c, 0x76, 0xff, 0xde, 0xf8, 0xc9, 0xb5, 0x7f, 0x0f, 0x7f, 0x6e,
+	0xd0, 0xcd, 0x1b, 0xf1, 0x8d, 0xff, 0xd1, 0x3f, 0x01, 0x00, 0x00, 0xff, 0xff, 0x85, 0x89, 0xbf,
+	0x6c, 0x62, 0x06, 0x00, 0x00,
 }
 
 func (m *Params) Marshal() (dAtA []byte, err error) {
@@ -261,6 +487,80 @@ func (m *Params) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.CrisisPoolBps != 0 {
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(m.CrisisPoolBps))
+		i--
+		dAtA[i] = 0x78
+	}
+	if m.SmallQuotaBps != 0 {
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(m.SmallQuotaBps))
+		i--
+		dAtA[i] = 0x70
+	}
+	{
+		size := m.SmallTransferThreshold.Size()
+		i -= size
+		if _, err := m.SmallTransferThreshold.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x6a
+	{
+		size := m.MinTransferOut.Size()
+		i -= size
+		if _, err := m.MinTransferOut.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x62
+	if m.PerAddressDailyBps != 0 {
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(m.PerAddressDailyBps))
+		i--
+		dAtA[i] = 0x58
+	}
+	if m.GlobalDailyCapBpsOfPool != 0 {
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(m.GlobalDailyCapBpsOfPool))
+		i--
+		dAtA[i] = 0x50
+	}
+	{
+		size := m.GlobalDailyCap.Size()
+		i -= size
+		if _, err := m.GlobalDailyCap.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x4a
+	if len(m.RemoteBridgeVault) > 0 {
+		i -= len(m.RemoteBridgeVault)
+		copy(dAtA[i:], m.RemoteBridgeVault)
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(len(m.RemoteBridgeVault)))
+		i--
+		dAtA[i] = 0x42
+	}
+	if len(m.MailboxId) > 0 {
+		i -= len(m.MailboxId)
+		copy(dAtA[i:], m.MailboxId)
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(len(m.MailboxId)))
+		i--
+		dAtA[i] = 0x3a
+	}
+	if m.BridgeEnabled {
+		i--
+		if m.BridgeEnabled {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x30
+	}
 	if len(m.IsmId) > 0 {
 		i -= len(m.IsmId)
 		copy(dAtA[i:], m.IsmId)
@@ -318,6 +618,33 @@ func (m *ReceiptState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	{
+		size := m.TotalBridgedIn.Size()
+		i -= size
+		if _, err := m.TotalBridgedIn.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x3a
+	{
+		size := m.TotalBridgedOut.Size()
+		i -= size
+		if _, err := m.TotalBridgedOut.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x32
+	if len(m.AssetAppId) > 0 {
+		i -= len(m.AssetAppId)
+		copy(dAtA[i:], m.AssetAppId)
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(len(m.AssetAppId)))
+		i--
+		dAtA[i] = 0x2a
+	}
 	if len(m.LastMessageId) > 0 {
 		i -= len(m.LastMessageId)
 		copy(dAtA[i:], m.LastMessageId)
@@ -355,6 +682,92 @@ func (m *ReceiptState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *RateLimitState) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *RateLimitState) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RateLimitState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	{
+		size := m.UsedLarge.Size()
+		i -= size
+		if _, err := m.UsedLarge.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x1a
+	{
+		size := m.Used.Size()
+		i -= size
+		if _, err := m.Used.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x12
+	if m.Day != 0 {
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(m.Day))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *AddressUsage) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *AddressUsage) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *AddressUsage) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	{
+		size := m.Used.Size()
+		i -= size
+		if _, err := m.Used.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x12
+	if m.Day != 0 {
+		i = encodeVarintBridgeadapter(dAtA, i, uint64(m.Day))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintBridgeadapter(dAtA []byte, offset int, v uint64) int {
 	offset -= sovBridgeadapter(v)
 	base := offset
@@ -389,6 +802,35 @@ func (m *Params) Size() (n int) {
 	if l > 0 {
 		n += 1 + l + sovBridgeadapter(uint64(l))
 	}
+	if m.BridgeEnabled {
+		n += 2
+	}
+	l = len(m.MailboxId)
+	if l > 0 {
+		n += 1 + l + sovBridgeadapter(uint64(l))
+	}
+	l = len(m.RemoteBridgeVault)
+	if l > 0 {
+		n += 1 + l + sovBridgeadapter(uint64(l))
+	}
+	l = m.GlobalDailyCap.Size()
+	n += 1 + l + sovBridgeadapter(uint64(l))
+	if m.GlobalDailyCapBpsOfPool != 0 {
+		n += 1 + sovBridgeadapter(uint64(m.GlobalDailyCapBpsOfPool))
+	}
+	if m.PerAddressDailyBps != 0 {
+		n += 1 + sovBridgeadapter(uint64(m.PerAddressDailyBps))
+	}
+	l = m.MinTransferOut.Size()
+	n += 1 + l + sovBridgeadapter(uint64(l))
+	l = m.SmallTransferThreshold.Size()
+	n += 1 + l + sovBridgeadapter(uint64(l))
+	if m.SmallQuotaBps != 0 {
+		n += 1 + sovBridgeadapter(uint64(m.SmallQuotaBps))
+	}
+	if m.CrisisPoolBps != 0 {
+		n += 1 + sovBridgeadapter(uint64(m.CrisisPoolBps))
+	}
 	return n
 }
 
@@ -410,6 +852,44 @@ func (m *ReceiptState) Size() (n int) {
 	if l > 0 {
 		n += 1 + l + sovBridgeadapter(uint64(l))
 	}
+	l = len(m.AssetAppId)
+	if l > 0 {
+		n += 1 + l + sovBridgeadapter(uint64(l))
+	}
+	l = m.TotalBridgedOut.Size()
+	n += 1 + l + sovBridgeadapter(uint64(l))
+	l = m.TotalBridgedIn.Size()
+	n += 1 + l + sovBridgeadapter(uint64(l))
+	return n
+}
+
+func (m *RateLimitState) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Day != 0 {
+		n += 1 + sovBridgeadapter(uint64(m.Day))
+	}
+	l = m.Used.Size()
+	n += 1 + l + sovBridgeadapter(uint64(l))
+	l = m.UsedLarge.Size()
+	n += 1 + l + sovBridgeadapter(uint64(l))
+	return n
+}
+
+func (m *AddressUsage) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Day != 0 {
+		n += 1 + sovBridgeadapter(uint64(m.Day))
+	}
+	l = m.Used.Size()
+	n += 1 + l + sovBridgeadapter(uint64(l))
 	return n
 }
 
@@ -574,6 +1054,272 @@ func (m *Params) Unmarshal(dAtA []byte) error {
 				m.IsmId = []byte{}
 			}
 			iNdEx = postIndex
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BridgeEnabled", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.BridgeEnabled = bool(v != 0)
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MailboxId", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.MailboxId = append(m.MailboxId[:0], dAtA[iNdEx:postIndex]...)
+			if m.MailboxId == nil {
+				m.MailboxId = []byte{}
+			}
+			iNdEx = postIndex
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RemoteBridgeVault", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RemoteBridgeVault = append(m.RemoteBridgeVault[:0], dAtA[iNdEx:postIndex]...)
+			if m.RemoteBridgeVault == nil {
+				m.RemoteBridgeVault = []byte{}
+			}
+			iNdEx = postIndex
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GlobalDailyCap", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.GlobalDailyCap.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field GlobalDailyCapBpsOfPool", wireType)
+			}
+			m.GlobalDailyCapBpsOfPool = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.GlobalDailyCapBpsOfPool |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PerAddressDailyBps", wireType)
+			}
+			m.PerAddressDailyBps = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.PerAddressDailyBps |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 12:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MinTransferOut", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.MinTransferOut.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 13:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SmallTransferThreshold", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.SmallTransferThreshold.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 14:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SmallQuotaBps", wireType)
+			}
+			m.SmallQuotaBps = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SmallQuotaBps |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 15:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CrisisPoolBps", wireType)
+			}
+			m.CrisisPoolBps = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.CrisisPoolBps |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipBridgeadapter(dAtA[iNdEx:])
@@ -758,6 +1504,348 @@ func (m *ReceiptState) Unmarshal(dAtA []byte) error {
 			m.LastMessageId = append(m.LastMessageId[:0], dAtA[iNdEx:postIndex]...)
 			if m.LastMessageId == nil {
 				m.LastMessageId = []byte{}
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AssetAppId", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AssetAppId = append(m.AssetAppId[:0], dAtA[iNdEx:postIndex]...)
+			if m.AssetAppId == nil {
+				m.AssetAppId = []byte{}
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TotalBridgedOut", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.TotalBridgedOut.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TotalBridgedIn", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.TotalBridgedIn.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipBridgeadapter(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *RateLimitState) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowBridgeadapter
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: RateLimitState: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: RateLimitState: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Day", wireType)
+			}
+			m.Day = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Day |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Used", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.Used.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UsedLarge", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.UsedLarge.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipBridgeadapter(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *AddressUsage) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowBridgeadapter
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: AddressUsage: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: AddressUsage: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Day", wireType)
+			}
+			m.Day = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Day |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Used", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowBridgeadapter
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthBridgeadapter
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.Used.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		default:

@@ -20,6 +20,7 @@ type Keeper struct {
 	atoxKeeper       types.AtoxKeeper
 	tokenomicsKeeper types.TokenomicsKeeper
 	coreKeeper       types.CoreKeeper
+	bankKeeper       types.BankKeeper
 }
 
 func NewKeeper(
@@ -29,6 +30,7 @@ func NewKeeper(
 	xk types.AtoxKeeper,
 	tk types.TokenomicsKeeper,
 	ck types.CoreKeeper,
+	bk types.BankKeeper,
 ) Keeper {
 	return Keeper{
 		cdc:              cdc,
@@ -37,6 +39,7 @@ func NewKeeper(
 		atoxKeeper:       xk,
 		tokenomicsKeeper: tk,
 		coreKeeper:       ck,
+		bankKeeper:       bk,
 	}
 }
 

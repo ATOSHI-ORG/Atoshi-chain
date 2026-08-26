@@ -5,6 +5,7 @@ import "amino/amino.proto";
 import "cosmos/msg/v1/msg.proto";
 import "cosmos_proto/cosmos.proto";
 import "gogoproto/gogo.proto";
+import "cosmos/base/v1beta1/coin.proto";
 import "atoshi/bridgeadapter/v1/bridgeadapter.proto";
 
 option go_package = "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types";
@@ -17,6 +18,9 @@ option go_package = "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types";
 // which is the single thing this module exists to prevent.
 service Msg {
   option (cosmos.msg.v1.service) = true;
+
+  // BridgeOut locks ATOS and requests the matching ERC20 on Ethereum.
+  rpc BridgeOut(MsgBridgeOut) returns (MsgBridgeOutResponse);
 
   rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
 }
@@ -33,3 +37,45 @@ message MsgUpdateParams {
 }
 
 message MsgUpdateParamsResponse {}
+
+// MsgBridgeOut locks ATOS and dispatches a Hyperlane message so the matching
+// ERC20 is released on Ethereum.
+//
+// The ATOS moves into the migration pool rather than being burned: neither ATOS
+// nor the ERC20 can be minted, so the bridge is lock-and-unlock on both sides
+// and the pool IS the counterparty for inbound transfers.
+message MsgBridgeOut {
+  option (cosmos.msg.v1.signer) = "sender";
+
+  string sender = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // recipient is the 32-byte Hyperlane-encoded Ethereum address to credit.
+  bytes recipient = 2;
+
+  // amount of ATOS to bridge out. It must be an exact multiple of the peg, since
+  // a remainder could not be represented in the ERC20 amount and would be
+  // silently confiscated.
+  string amount = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // max_fee bounds what the interchain gas payment may cost the sender.
+  repeated cosmos.base.v1beta1.Coin max_fee = 4 [
+    (gogoproto.nullable) = false,
+    (gogoproto.castrepeated) = "github.com/cosmos/cosmos-sdk/types.Coins"
+  ];
+}
+
+message MsgBridgeOutResponse {
+  // message_id is the Hyperlane message id, for tracking delivery.
+  bytes message_id = 1;
+
+  // erc20_amount actually requested on Ethereum, in ERC20 units.
+  string erc20_amount = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

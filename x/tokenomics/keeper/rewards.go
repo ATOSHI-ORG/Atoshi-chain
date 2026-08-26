@@ -330,3 +330,24 @@ func (k Keeper) GetCirculatingSupply(ctx sdk.Context) math.Int {
 		Add(state.TotalMinerReleased).
 		Add(state.TotalProjectReleased)
 }
+
+// MigrationPoolName is the module account the asset bridge locks ATOS into and
+// releases from. It is the bridge's counterparty: neither ATOS nor the ERC20 can
+// be minted, so outbound locks here and inbound pays out of the same balance.
+func (k Keeper) MigrationPoolName() string { return tokenomicstypes.MigrationPoolName }
+
+// MigrationPoolBalance is the pool's live balance, which bounds both the daily
+// outbound cap and what an inbound transfer can be paid from.
+func (k Keeper) MigrationPoolBalance(ctx sdk.Context) math.Int {
+	addr := k.accountKeeper.GetModuleAddress(tokenomicstypes.MigrationPoolName)
+	return k.bankKeeper.GetBalance(ctx, addr, k.baseDenom()).Amount
+}
+
+// MigrationPoolTotal is the pool's configured size, the denominator for the
+// bridge's crisis-mode floor.
+func (k Keeper) MigrationPoolTotal(ctx sdk.Context) math.Int {
+	return k.GetParams(ctx).MigrationPoolTotal
+}
+
+// BaseDenom is the ATOS denom.
+func (k Keeper) BaseDenom() string { return k.baseDenom() }

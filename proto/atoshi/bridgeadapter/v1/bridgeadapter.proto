@@ -37,6 +37,68 @@ message Params {
   // nothing behind it, lowering it would strand ATOS that is already backed.
   uint64 atos_per_erc20 = 4;
 
+  // ----- asset bridge -----
+
+  // bridge_enabled gates the ATOS <-> ERC20 asset bridge independently of the
+  // tier-release channel, so one can be paused without stopping the other.
+  bool bridge_enabled = 6;
+
+  // mailbox_id is the Hyperlane mailbox outbound transfers dispatch through.
+  bytes mailbox_id = 7;
+
+  // remote_bridge_vault is the Ethereum contract that receives outbound
+  // transfers and originates inbound ones.
+  bytes remote_bridge_vault = 8;
+
+  // ----- rate limiting -----
+  //
+  // Outbound only. Inbound cannot be rate limited by rejection: the ERC20 is
+  // already locked on Ethereum by the time the message arrives, so refusing it
+  // would strand the user's funds rather than delay them. Inbound volume is
+  // limited at the source instead, in the Ethereum contract.
+
+  // global_daily_cap and global_daily_cap_bps_of_pool bound outbound volume per
+  // day. The effective cap is the SMALLER of the two, so a shrinking migration
+  // pool tightens the limit automatically instead of waiting for a proposal.
+  string global_daily_cap = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint32 global_daily_cap_bps_of_pool = 10;
+
+  // per_address_daily_bps caps one address at this fraction of the global daily
+  // cap, so a single actor cannot consume the day's whole allowance.
+  uint32 per_address_daily_bps = 11;
+
+  // min_transfer_out keeps dust out of the bridge, where each transfer costs a
+  // cross-chain message regardless of size.
+  string min_transfer_out = 12 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // small_transfer_threshold and small_quota_bps reserve part of the daily cap
+  // for transfers at or below the threshold.
+  //
+  // This is the layer that matters most for users. Without it a few large exits
+  // consume the whole daily allowance in the first minutes and ordinary holders
+  // are locked out for the rest of the day — which is precisely when they are
+  // most likely to want out. Large transfers may only use
+  // (global - reserved); small ones may use the whole cap.
+  string small_transfer_threshold = 13 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint32 small_quota_bps = 14;
+
+  // crisis_pool_bps puts the bridge into small-transfers-only mode once the
+  // migration pool falls below this fraction of its configured total, so the
+  // remaining liquidity serves many small holders rather than one large exit.
+  uint32 crisis_pool_bps = 15;
+
   // ism_id optionally pins a specific interchain security module for messages
   // addressed to this app. Empty falls back to the mailbox default ISM, which is
   // acceptable only if that default is already the 5-of-7 multisig; pinning it
@@ -79,4 +141,61 @@ message ReceiptState {
   // last_message_id is the id of the most recently applied receipt, for
   // operators correlating chain state with Hyperlane's message log.
   bytes last_message_id = 4;
+
+  // asset_app_id is the recipient address inbound asset transfers are sent to.
+  //
+  // Separate from app_id so the two channels cannot be confused: a message
+  // addressed to one is never parsed as the other, which means a malformed or
+  // hostile asset transfer can never be read as a tier release.
+  bytes asset_app_id = 5;
+
+  // total_bridged_out / total_bridged_in are lifetime ATOS volumes, for
+  // reconciling against the Ethereum vault.
+  string total_bridged_out = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string total_bridged_in = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// RateLimitState is the global outbound usage for one day.
+//
+// Counters reset lazily: a stored day that is not today reads as zero, so no
+// EndBlocker sweep is needed to roll them over.
+message RateLimitState {
+  // day is the UTC day number the counters belong to (unix seconds / 86400).
+  int64 day = 1;
+
+  // used is total outbound ATOS today, from transfers of every size.
+  string used = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // used_large counts only transfers above small_transfer_threshold.
+  //
+  // Tracking large usage separately is what makes the small-transfer reserve
+  // real: large transfers are bounded by (global - reserved) while small ones
+  // are bounded by the global cap, so the reserve cannot be eaten by whales.
+  string used_large = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// AddressUsage is one address's outbound usage for one day.
+message AddressUsage {
+  int64 day = 1;
+  string used = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
 }

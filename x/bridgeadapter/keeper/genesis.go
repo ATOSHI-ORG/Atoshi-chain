@@ -27,6 +27,18 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) {
 		state.AppId = appID[:]
 	}
 
+	// The asset bridge gets its own recipient address from the same sequence.
+	// Separate addresses are what keep the two channels from being confused: both
+	// payloads are 64 bytes, so nothing else would distinguish a hostile asset
+	// transfer from a tier release.
+	if len(state.AssetAppId) != types.HexAddressLen {
+		assetID, err := k.coreKeeper.AppRouter().GetNextSequence(ctx, types.AppModuleID)
+		if err != nil {
+			panic(fmt.Errorf("failed to assign bridgeadapter asset app id: %w", err))
+		}
+		state.AssetAppId = assetID[:]
+	}
+
 	if err := k.SetReceiptState(ctx, state); err != nil {
 		panic(err)
 	}

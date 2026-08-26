@@ -82,6 +82,34 @@ func DefaultParams() Params {
 		TierReleaseVault: nil,
 		AtosPerErc20:     DefaultAtosPerErc20,
 		IsmId:            nil,
+
+		// Also off at genesis: the mailbox and the Ethereum vault do not exist yet.
+		BridgeEnabled:     false,
+		MailboxId:         nil,
+		RemoteBridgeVault: nil,
+
+		// 5 billion ATOS a day, or 5% of the migration pool, whichever is smaller.
+		// Against a 300-billion pool the percentage binds first, so the cap tracks
+		// the pool down as it drains instead of holding a stale figure.
+		GlobalDailyCap:          math.NewIntWithDecimal(5, 27),
+		GlobalDailyCapBpsOfPool: 500,
+
+		// 2% of the daily cap per address, so no single actor can take the day.
+		PerAddressDailyBps: 200,
+
+		// 1,000 ATOS floor: each transfer costs a cross-chain message regardless
+		// of size.
+		MinTransferOut: math.NewIntWithDecimal(1, 21),
+
+		// 100,000 ATOS or less counts as small, and 20% of the daily cap is
+		// reserved for those. Without the reserve a few large exits take the whole
+		// allowance in the first minutes of the day.
+		SmallTransferThreshold: math.NewIntWithDecimal(1, 23),
+		SmallQuotaBps:          2000,
+
+		// Below 10% of the pool, large exits stop entirely so the remaining
+		// liquidity serves many small holders.
+		CrisisPoolBps: 1000,
 	}
 }
 
@@ -104,6 +132,53 @@ func (p Params) Validate() error {
 	if p.Enabled && len(p.TierReleaseVault) != HexAddressLen {
 		return fmt.Errorf("tier_release_vault must be set before enabling the adapter")
 	}
+
+	for _, c := range []struct {
+		name string
+		v    []byte
+	}{{"mailbox_id", p.MailboxId}, {"remote_bridge_vault", p.RemoteBridgeVault}} {
+		if len(c.v) != 0 && len(c.v) != HexAddressLen {
+			return fmt.Errorf("%s must be %d bytes, got %d", c.name, HexAddressLen, len(c.v))
+		}
+	}
+	// Same reasoning as the tier vault: with no configured counterparty the
+	// inbound sender check has nothing to compare against, and an outbound
+	// dispatch has nowhere to go.
+	if p.BridgeEnabled &&
+		(len(p.MailboxId) != HexAddressLen || len(p.RemoteBridgeVault) != HexAddressLen) {
+		return fmt.Errorf("mailbox_id and remote_bridge_vault must be set before enabling the bridge")
+	}
+
+	for _, c := range []struct {
+		name string
+		v    math.Int
+	}{
+		{"global_daily_cap", p.GlobalDailyCap},
+		{"min_transfer_out", p.MinTransferOut},
+		{"small_transfer_threshold", p.SmallTransferThreshold},
+	} {
+		if c.v.IsNil() || c.v.IsNegative() {
+			return fmt.Errorf("%s must not be negative", c.name)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		v    uint32
+	}{
+		{"global_daily_cap_bps_of_pool", p.GlobalDailyCapBpsOfPool},
+		{"per_address_daily_bps", p.PerAddressDailyBps},
+		{"small_quota_bps", p.SmallQuotaBps},
+		{"crisis_pool_bps", p.CrisisPoolBps},
+	} {
+		if c.v > BpsDenominator {
+			return fmt.Errorf("%s must be <= %d, got %d", c.name, BpsDenominator, c.v)
+		}
+	}
+	// A full small-transfer reserve would leave large transfers no budget at all,
+	// which is a silent ban rather than a limit.
+	if p.SmallQuotaBps == BpsDenominator {
+		return fmt.Errorf("small_quota_bps must be below %d, or large transfers are banned outright", BpsDenominator)
+	}
 	return nil
 }
 
@@ -123,6 +198,9 @@ func DefaultReceiptState() ReceiptState {
 		AppliedToProject: math.ZeroInt(),
 		AppId:            nil,
 		LastMessageId:    nil,
+		AssetAppId:       nil,
+		TotalBridgedOut:  math.ZeroInt(),
+		TotalBridgedIn:   math.ZeroInt(),
 	}
 }
 
@@ -133,6 +211,8 @@ func (s ReceiptState) Validate() error {
 	}{
 		{"applied_to_bridge", s.AppliedToBridge},
 		{"applied_to_project", s.AppliedToProject},
+		{"total_bridged_out", s.TotalBridgedOut},
+		{"total_bridged_in", s.TotalBridgedIn},
 	} {
 		if c.v.IsNil() {
 			return fmt.Errorf("%s: nil", c.name)
@@ -141,8 +221,13 @@ func (s ReceiptState) Validate() error {
 			return fmt.Errorf("%s: must not be negative, got %s", c.name, c.v)
 		}
 	}
-	if len(s.AppId) != 0 && len(s.AppId) != HexAddressLen {
-		return fmt.Errorf("app_id must be %d bytes, got %d", HexAddressLen, len(s.AppId))
+	for _, c := range []struct {
+		name string
+		v    []byte
+	}{{"app_id", s.AppId}, {"asset_app_id", s.AssetAppId}} {
+		if len(c.v) != 0 && len(c.v) != HexAddressLen {
+			return fmt.Errorf("%s must be %d bytes, got %d", c.name, HexAddressLen, len(c.v))
+		}
 	}
 	return nil
 }

@@ -19,6 +19,28 @@ func NewMsgServerImpl(k Keeper) types.MsgServer {
 
 var _ types.MsgServer = msgServer{}
 
+// BridgeOut is the only way ATOS leaves for Ethereum. Everything the rate
+// limiter and the peg require is enforced in the keeper, so this handler just
+// decodes and delegates.
+func (k msgServer) BridgeOut(goCtx context.Context, msg *types.MsgBridgeOut) (*types.MsgBridgeOutResponse, error) {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+
+	sender, err := sdk.AccAddressFromBech32(msg.Sender)
+	if err != nil {
+		return nil, err
+	}
+
+	msgID, erc20Amount, err := k.ExecuteBridgeOut(ctx, sender, msg.Recipient, msg.Amount, msg.MaxFee)
+	if err != nil {
+		return nil, err
+	}
+
+	return &types.MsgBridgeOutResponse{
+		MessageId:   msgID.Bytes(),
+		Erc20Amount: erc20Amount,
+	}, nil
+}
+
 func (k msgServer) UpdateParams(goCtx context.Context, msg *types.MsgUpdateParams) (*types.MsgUpdateParamsResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	if k.GetAuthority() != msg.Authority {

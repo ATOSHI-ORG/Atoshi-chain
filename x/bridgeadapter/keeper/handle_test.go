@@ -1,6 +1,7 @@
 package keeper_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -65,13 +66,53 @@ func (t *fakeTokenomics) AuthorizedReleases(_ sdk.Context) (math.Int, math.Int) 
 func (t *fakeTokenomics) GetProjectClaimable(_ sdk.Context) math.Int    { return t.claimable }
 func (t *fakeTokenomics) SetProjectClaimable(_ sdk.Context, a math.Int) { t.claimable = a }
 func (t *fakeTokenomics) MinerPoolName() string                         { return minerPool }
+func (t *fakeTokenomics) MigrationPoolName() string                     { return "migration_pool" }
+func (t *fakeTokenomics) MigrationPoolBalance(_ sdk.Context) math.Int {
+	return math.NewIntWithDecimal(3, 29)
+}
+func (t *fakeTokenomics) MigrationPoolTotal(_ sdk.Context) math.Int {
+	return math.NewIntWithDecimal(3, 29)
+}
+func (t *fakeTokenomics) BaseDenom() string { return "liao" }
+
+// fakeBank records ATOS movement for the asset-bridge paths.
+type fakeBank struct{}
+
+func (fakeBank) SendCoinsFromAccountToModule(_ context.Context, _ sdk.AccAddress, _ string, _ sdk.Coins) error {
+	return nil
+}
+func (fakeBank) SendCoinsFromModuleToAccount(_ context.Context, _ string, _ sdk.AccAddress, _ sdk.Coins) error {
+	return nil
+}
 
 // fakeCore stands in for the app router. Genesis only needs an address back.
 type fakeCore struct {
-	router *util.Router[util.HyperlaneApp]
+	router      *util.Router[util.HyperlaneApp]
+	dispatched  [][]byte
+	dispatchErr error
 }
 
 func (c *fakeCore) AppRouter() *util.Router[util.HyperlaneApp] { return c.router }
+
+func (c *fakeCore) DispatchMessage(
+	_ sdk.Context,
+	_ util.HexAddress,
+	_ util.HexAddress,
+	_ sdk.Coins,
+	_ uint32,
+	_ util.HexAddress,
+	body []byte,
+	_ util.StandardHookMetadata,
+	_ *util.HexAddress,
+) (util.HexAddress, error) {
+	if c.dispatchErr != nil {
+		return util.HexAddress{}, c.dispatchErr
+	}
+	c.dispatched = append(c.dispatched, body)
+	var id util.HexAddress
+	copy(id[:], []byte("dispatched-message-id----------"))
+	return id, nil
+}
 
 // ---------- fixtures ----------
 
@@ -110,7 +151,7 @@ func setup(t *testing.T, authMiner, authProject math.Int) (keeper.Keeper, sdk.Co
 		codec.NewProtoCodec(codectypes.NewInterfaceRegistry()),
 		storeKey,
 		sdk.AccAddress([]byte("authority-----------")).String(),
-		xk, tk, &fakeCore{},
+		xk, tk, &fakeCore{}, &fakeBank{},
 	)
 
 	ctx := sdk.NewContext(cms, tmproto.Header{Time: time.Unix(1_700_000_000, 0)}, false, log.NewNopLogger())
@@ -132,6 +173,14 @@ func setup(t *testing.T, authMiner, authProject math.Int) (keeper.Keeper, sdk.Co
 	return k, ctx, xk, tk
 }
 
+// tierAppID is the recipient the tier-release channel listens on. Must match
+// what setup writes into state.
+func tierAppID() util.HexAddress {
+	var a util.HexAddress
+	copy(a[:], []byte("atoshi-bridge-adapter-app------"))
+	return a
+}
+
 // receipt builds a message as the Ethereum vault would send it.
 func receipt(t *testing.T, origin uint32, sender util.HexAddress, toBridge, toProject math.Int) util.HyperlaneMessage {
 	t.Helper()
@@ -143,7 +192,7 @@ func receipt(t *testing.T, origin uint32, sender util.HexAddress, toBridge, toPr
 		Origin:      origin,
 		Sender:      sender,
 		Destination: 88388,
-		Recipient:   util.HexAddress{},
+		Recipient:   tierAppID(),
 		Body:        body,
 	}
 }

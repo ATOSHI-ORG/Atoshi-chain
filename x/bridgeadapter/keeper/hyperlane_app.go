@@ -20,11 +20,13 @@ var _ util.HyperlaneApp = (*Keeper)(nil)
 // rather than reaching Handle.
 func (k Keeper) Exists(ctx context.Context, recipient util.HexAddress) (bool, error) {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	appID := k.GetReceiptState(sdkCtx).AppId
-	if len(appID) != types.HexAddressLen {
-		return false, nil
+	st := k.GetReceiptState(sdkCtx)
+	for _, id := range [][]byte{st.AppId, st.AssetAppId} {
+		if len(id) == types.HexAddressLen && bytes.Equal(id, recipient[:]) {
+			return true, nil
+		}
 	}
-	return bytes.Equal(appID, recipient[:]), nil
+	return false, nil
 }
 
 // ReceiverIsmId pins the interchain security module used to verify messages
@@ -96,6 +98,24 @@ func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*
 // nothing backs.
 func (k Keeper) Handle(ctx context.Context, mailboxID util.HexAddress, message util.HyperlaneMessage) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
+
+	// Route by which recipient the message was addressed to. Keeping the two
+	// channels on separate addresses means a message for one is never parsed as
+	// the other, so a malformed or hostile asset transfer cannot be read as a
+	// tier release — the two payloads are the same length, so nothing else would
+	// distinguish them.
+	st := k.GetReceiptState(sdkCtx)
+	switch {
+	case len(st.AssetAppId) == types.HexAddressLen &&
+		bytes.Equal(st.AssetAppId, message.Recipient[:]):
+		return k.handleAssetTransfer(sdkCtx, message)
+	case len(st.AppId) == types.HexAddressLen &&
+		bytes.Equal(st.AppId, message.Recipient[:]):
+		// fall through to the tier-release path below
+	default:
+		return types.ErrUnknownRecipient
+	}
+
 	params := k.GetParams(sdkCtx)
 
 	// Reject rather than drop. Hyperlane keeps an undelivered message

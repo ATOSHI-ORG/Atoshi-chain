@@ -16,14 +16,34 @@ const (
 
 	// HexAddressLen is the width of a Hyperlane address.
 	HexAddressLen = 32
+
+	// BpsDenominator is the basis-point scale.
+	BpsDenominator = 10000
+
+	// AssetPayloadLen is the fixed size of an asset-transfer body, matching
+	// Hyperlane's own warp layout so third-party tooling can read it.
+	AssetPayloadLen = 64
 )
 
 const (
 	prefixParams = iota + 1
 	prefixReceiptState
+	prefixRateLimit
+	prefixAddressUsage
 )
 
 var (
 	KeyParams       = []byte{prefixParams}
 	KeyReceiptState = []byte{prefixReceiptState}
+	KeyRateLimit    = []byte{prefixRateLimit}
+
+	KeyPrefixAddressUsage = []byte{prefixAddressUsage}
 )
+
+// AddressUsageKey indexes one address's daily outbound usage.
+func AddressUsageKey(addr string) []byte {
+	out := make([]byte, 0, len(KeyPrefixAddressUsage)+len(addr))
+	out = append(out, KeyPrefixAddressUsage...)
+	out = append(out, addr...)
+	return out
+}
