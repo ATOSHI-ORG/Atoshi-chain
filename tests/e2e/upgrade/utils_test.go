@@ -100,8 +100,21 @@ func TestRetrieveUpgradesList(t *testing.T) {
 	require.NoError(t, err, "expected no error while retrieving upgrade list")
 	require.NotEmpty(t, upgradeList, "expected upgrade list to be non-empty")
 
-	// check if all entries in the list match a semantic versioning pattern
+	// Check that every entry parses as a version. The patch component is
+	// optional: the inherited upgrades use three components (v19.2.0) but this
+	// chain's own use two (v20.1, v20.2, v20.3).
+	//
+	// The two-component names are NOT normalized to three here on purpose. An
+	// upgrade name is the on-chain plan name -- it is what the governance
+	// proposal carries and what upgradekeeper looks the handler up by when a
+	// node replays the upgrade height. v20.1 through v20.3 have already run on
+	// a live chain, so renaming the constants would make any node syncing from
+	// genesis halt at that height with "UPGRADE NEEDED" and no matching
+	// handler. The test is what adapts.
+	//
+	// Sorting is unaffected: EvmosVersions.Less uses hashicorp/go-version,
+	// which reads v20.1 as 20.1.0.
 	for _, upgrade := range upgradeList {
-		require.Regexp(t, `^v\d+\.\d+\.\d+(-rc\d+)*$`, upgrade, "expected upgrade version to be in semantic versioning format")
+		require.Regexp(t, `^v\d+\.\d+(\.\d+)?(-rc\d+)*$`, upgrade, "expected upgrade version to be in semantic versioning format")
 	}
 }

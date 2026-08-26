@@ -313,8 +313,16 @@ func TestDeriveDecimalsFromDenom(t *testing.T) {
 			expErrMsg: "",
 		},
 		{
+			// Deliberately NOT the native denom. "liao" carries no SI prefix, so
+			// it cannot be a fixture here -- the aatos->liao rename swept this
+			// case and left it contradicting its own name. aatox is a real
+			// atto-prefixed denom in this chain, which keeps the fixture honest.
+			//
+			// The native denom never reaches this function: it is only called on
+			// a counterparty chain's denom trace base denom (see
+			// precompiles/erc20/query.go), and only when bank metadata is absent.
 			name:      "success: atto 'a' prefix",
-			baseDenom: "liao",
+			baseDenom: "aatox",
 			expDec:    18,
 			expFail:   false,
 			expErrMsg: "",
