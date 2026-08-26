@@ -616,7 +616,18 @@ func NewAtoshi(
 		// module decoupled from feemarket internals.
 		feemarketKeeperShim{k: app.FeeMarketKeeper},
 		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
-		atoshitypes.BaseDenom,
+		// Take the denom from the same source the EVM uses, not the compile-time
+		// constant. Energy decides fee eligibility and charges the ATOS shortfall
+		// in this denom, so if it ever diverged from the chain's actual fee denom
+		// the module would bill users in a coin they do not hold — which is
+		// exactly what happens on the inherited six-decimal chain configs, where
+		// the fee denom is asatos. Reading it here makes the two agree by
+		// construction for every registered chain id.
+		//
+		// Safe at this point: atoshiAppOptions sets the coin info at line ~400,
+		// well before this. Unit tests that build the keeper directly keep passing
+		// a literal, so they are unaffected by the global being unset.
+		evmtypes.GetEVMCoinDenom(),
 	)
 
 	// Wire the energy snapshot updater into bank's send restriction chain.
