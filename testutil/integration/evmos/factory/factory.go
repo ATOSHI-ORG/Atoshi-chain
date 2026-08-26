@@ -8,6 +8,11 @@ import (
 	"math/big"
 
 	errorsmod "cosmossdk.io/errors"
+	"github.com/atoshi-chain/atoshi/v20/precompiles/testutil"
+	commonfactory "github.com/atoshi-chain/atoshi/v20/testutil/integration/common/factory"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/grpc"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/network"
+	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdktypes "github.com/cosmos/cosmos-sdk/types"
@@ -16,11 +21,6 @@ import (
 	"github.com/cosmos/gogoproto/proto"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/atoshi-chain/atoshi/v20/precompiles/testutil"
-	commonfactory "github.com/atoshi-chain/atoshi/v20/testutil/integration/common/factory"
-	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/grpc"
-	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/network"
-	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 )
 
 // TxFactory defines a struct that can build and broadcast transactions for the Evmos
@@ -117,6 +117,35 @@ func (tf *IntegrationTxFactory) GetEvmTransactionResponseFromTxResult(
 	return &evmRes, nil
 }
 
+// estimateShortfallDivisor is the reciprocal of the headroom added on top of an
+// estimated gas limit: 4 means +25%.
+//
+// KNOWN ISSUE, not a test artefact. eth_estimateGas under-reports the gas an EVM
+// extension (precompile) call actually needs. Measured on the staking precompile
+// Delegate path: the estimate is a stable 127,589 while execution needs between
+// 129,001 and 130,000 -- short by ~1.9%. Without headroom the tx aborts with
+// "out of gas".
+//
+// This is inherited from evmos and predates this fork's work: it reproduces
+// identically on main and is unaffected by disabling x/energy's bank
+// SendRestriction, and the estimator is already taking the branch whose own
+// comment claims to exist "to have an accurate gas estimation on EVM extensions
+// transactions" (x/evm/keeper/grpc_query.go, fromType == types.RPC).
+//
+// It is a real integration bug, not just a test problem: eth_estimateGas is
+// contractually the lowest sufficient limit, and ethers/viem/web3.py/Hardhat all
+// use its result verbatim as the gasLimit. Blast radius is limited to callers
+// reaching the Cosmos extensions from EVM tooling -- ordinary transfers and
+// ordinary contract calls estimate correctly, this chain's own wallet and SDK
+// stake over the Cosmos tx path rather than the precompile, and a shortfall
+// reverts without touching state. Flagged for audit rather than fixed here,
+// because the fix lives in consensus-relevant gas accounting.
+//
+// Consequence to keep in mind: this headroom will also absorb a future genuine
+// regression in estimation accuracy of up to 25%. Raise it only alongside a
+// note here of the newly measured shortfall.
+const estimateShortfallDivisor = 4
+
 // populateEvmTxArgsWithDefault populates the missing fields in the provided EvmTxArgs with default values.
 // If no GasLimit is present it will estimate the gas needed for the transaction.
 func (tf *IntegrationTxFactory) populateEvmTxArgsWithDefault(
@@ -157,7 +186,7 @@ func (tf *IntegrationTxFactory) populateEvmTxArgsWithDefault(
 		if err != nil {
 			return evmtypes.EvmTxArgs{}, errorsmod.Wrap(err, "failed to estimate gas limit")
 		}
-		txArgs.GasLimit = gasLimit
+		txArgs.GasLimit = gasLimit + gasLimit/estimateShortfallDivisor
 	}
 
 	return txArgs, nil

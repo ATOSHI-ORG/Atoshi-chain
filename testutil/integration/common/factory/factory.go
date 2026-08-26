@@ -9,7 +9,22 @@ import (
 )
 
 const (
-	GasAdjustment = float64(1.7)
+	// GasAdjustment multiplies the simulated gas to get the limit the harness
+	// submits. Raised from 1.7, which sat directly on top of a real ratio and so
+	// failed intermittently.
+	//
+	// Measured: a MsgSend funding a ClawbackVestingAccount simulates at 107,316
+	// but executes at 182,670 -- a ratio of 1.702. At 1.7 the tx was submitted
+	// with gasWanted 182,437 and aborted "out of gas in location: ReadPerByte"
+	// 233 gas short, i.e. by 0.13%. Every test that funds a vesting account
+	// inherited that coin flip.
+	//
+	// Simulation genuinely under-reporting a plain send by ~70% is its own
+	// question and predates this fork (it reproduces on main), but it is not
+	// exposed by this repo's own tooling: the ops scripts pass an explicit
+	// --gas 500000 rather than --gas auto. Flagged for audit; the number here
+	// only needs enough margin that tests stop depending on the exact ratio.
+	GasAdjustment = float64(2.5)
 )
 
 // CoreTxFactory is the interface that wraps the methods

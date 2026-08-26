@@ -44,7 +44,14 @@ func (tf *fundTxFactory) FundAccount(sender keyring.Key, receiver sdktypes.AccAd
 	}
 
 	if txRes.Code != 0 {
-		return fmt.Errorf("transaction returned non-zero code %d", txRes.Code)
+		// Include the log and the gas figures. Reporting the bare code sends the
+		// reader hunting for what "code 11" means and hides the numbers that
+		// actually explain it -- an out-of-gas here is only diagnosable from
+		// gasWanted vs gasUsed.
+		return fmt.Errorf(
+			"transaction returned non-zero code %d: %s (gasWanted %d, gasUsed %d)",
+			txRes.Code, txRes.Log, txRes.GasWanted, txRes.GasUsed,
+		)
 	}
 
 	return nil
