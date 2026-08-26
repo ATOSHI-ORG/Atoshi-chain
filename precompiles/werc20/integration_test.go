@@ -564,7 +564,13 @@ var _ = When("a user interact with the WEVMOS precompiled contract", func() {
 				var name string
 				err = is.precompile.UnpackIntoInterface(&name, erc20.NameMethod, ethRes.Ret)
 				Expect(err).ToNot(HaveOccurred(), "failed to unpack result")
-				Expect(name).To(ContainSubstring("Evmos"), "expected different name")
+				// Taken from bank denom metadata rather than a literal. This
+				// asserted ContainSubstring("Evmos") and only ever held before the
+				// rebrand -- the precompile derives name and symbol from metadata,
+				// so reading the same source keeps it correct across renames.
+				meta, found := is.network.App.BankKeeper.GetDenomMetaData(is.network.GetContext(), evmtypes.GetEVMCoinDenom())
+				Expect(found).To(BeTrue(), "expected denom metadata to be registered")
+				Expect(name).To(Equal(meta.Name), "expected different name")
 			})
 
 			It("should return the correct symbol", func() {
@@ -576,7 +582,9 @@ var _ = When("a user interact with the WEVMOS precompiled contract", func() {
 				var symbol string
 				err = is.precompile.UnpackIntoInterface(&symbol, erc20.SymbolMethod, ethRes.Ret)
 				Expect(err).ToNot(HaveOccurred(), "failed to unpack result")
-				Expect(symbol).To(ContainSubstring("EVMOS"), "expected different symbol")
+				meta, found := is.network.App.BankKeeper.GetDenomMetaData(is.network.GetContext(), evmtypes.GetEVMCoinDenom())
+				Expect(found).To(BeTrue(), "expected denom metadata to be registered")
+				Expect(symbol).To(Equal(meta.Symbol), "expected different symbol")
 			})
 
 			It("should return the decimals", func() {

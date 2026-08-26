@@ -27,7 +27,16 @@ var (
 	// validTraceDenom is a denomination trace with a valid IBC voucher name
 	validTraceDenom = types.DenomTrace{Path: "channel-0", BaseDenom: "uosmo"}
 	// validAttoTraceDenom is a denomination trace with a valid IBC voucher name and 18 decimals
-	validAttoTraceDenom = types.DenomTrace{Path: "channel-0", BaseDenom: "liao"}
+	//
+	// The base denom must actually carry the atto prefix this case exists to
+	// exercise. The aatos->liao rename swept it to "liao", which has no SI
+	// prefix, so the decimals lookup reverted.
+	//
+	// aphoton is a foreign atto-prefixed denom, deliberately not one of ours.
+	// These fixtures stand for another chain's token arriving over IBC; putting
+	// liao or aatox here invites the misreading that our own units are involved.
+	// They are not -- liao is the native denom and never reaches this code path.
+	validAttoTraceDenom = types.DenomTrace{Path: "channel-0", BaseDenom: "aphoton"}
 	// validTraceDenomNoMicroAtto is a denomination trace with a valid IBC voucher name but no micro or atto prefix
 	validTraceDenomNoMicroAtto = types.DenomTrace{Path: "channel-0", BaseDenom: "matos"}
 
@@ -152,9 +161,15 @@ func (s *PrecompileTestSuite) TestNameSymbol() {
 			malleate: func(ctx sdk.Context, app *app.Atoshi) {
 				app.TransferKeeper.SetDenomTrace(ctx, validTraceDenomNoMicroAtto)
 			},
+			// validTraceDenomNoMicroAtto's base denom is "matos", renamed from
+			// "mevmos" without updating these. The precompile drops the leading
+			// unit character and title-cases the rest, so "matos" yields Atos /
+			// ATOS. Deliberately spelled out rather than derived from the fixture:
+			// that derivation is the behaviour under test here, and computing the
+			// expectation the same way would make the assertion vacuous.
 			expPass:   true,
-			expName:   "Evmos",
-			expSymbol: "EVMOS",
+			expName:   "Atos",
+			expSymbol: "ATOS",
 		},
 		{
 			name:  "pass - valid denom with metadata",
