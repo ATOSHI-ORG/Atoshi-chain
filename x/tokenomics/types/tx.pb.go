@@ -32,86 +32,6 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
-type MsgClaimMinerLockedReward struct {
-	ValidatorAddress string `protobuf:"bytes,1,opt,name=validator_address,json=validatorAddress,proto3" json:"validator_address,omitempty"`
-}
-
-func (m *MsgClaimMinerLockedReward) Reset()         { *m = MsgClaimMinerLockedReward{} }
-func (m *MsgClaimMinerLockedReward) String() string { return proto.CompactTextString(m) }
-func (*MsgClaimMinerLockedReward) ProtoMessage()    {}
-func (*MsgClaimMinerLockedReward) Descriptor() ([]byte, []int) {
-	return fileDescriptor_b68954b02b82a837, []int{0}
-}
-func (m *MsgClaimMinerLockedReward) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *MsgClaimMinerLockedReward) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_MsgClaimMinerLockedReward.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *MsgClaimMinerLockedReward) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_MsgClaimMinerLockedReward.Merge(m, src)
-}
-func (m *MsgClaimMinerLockedReward) XXX_Size() int {
-	return m.Size()
-}
-func (m *MsgClaimMinerLockedReward) XXX_DiscardUnknown() {
-	xxx_messageInfo_MsgClaimMinerLockedReward.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_MsgClaimMinerLockedReward proto.InternalMessageInfo
-
-func (m *MsgClaimMinerLockedReward) GetValidatorAddress() string {
-	if m != nil {
-		return m.ValidatorAddress
-	}
-	return ""
-}
-
-type MsgClaimMinerLockedRewardResponse struct {
-}
-
-func (m *MsgClaimMinerLockedRewardResponse) Reset()         { *m = MsgClaimMinerLockedRewardResponse{} }
-func (m *MsgClaimMinerLockedRewardResponse) String() string { return proto.CompactTextString(m) }
-func (*MsgClaimMinerLockedRewardResponse) ProtoMessage()    {}
-func (*MsgClaimMinerLockedRewardResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_b68954b02b82a837, []int{1}
-}
-func (m *MsgClaimMinerLockedRewardResponse) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *MsgClaimMinerLockedRewardResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_MsgClaimMinerLockedRewardResponse.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *MsgClaimMinerLockedRewardResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_MsgClaimMinerLockedRewardResponse.Merge(m, src)
-}
-func (m *MsgClaimMinerLockedRewardResponse) XXX_Size() int {
-	return m.Size()
-}
-func (m *MsgClaimMinerLockedRewardResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_MsgClaimMinerLockedRewardResponse.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_MsgClaimMinerLockedRewardResponse proto.InternalMessageInfo
-
 type MsgClaimProjectTreasuryReward struct {
 	Authority string `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
 }
@@ -120,7 +40,7 @@ func (m *MsgClaimProjectTreasuryReward) Reset()         { *m = MsgClaimProjectTr
 func (m *MsgClaimProjectTreasuryReward) String() string { return proto.CompactTextString(m) }
 func (*MsgClaimProjectTreasuryReward) ProtoMessage()    {}
 func (*MsgClaimProjectTreasuryReward) Descriptor() ([]byte, []int) {
-	return fileDescriptor_b68954b02b82a837, []int{2}
+	return fileDescriptor_b68954b02b82a837, []int{0}
 }
 func (m *MsgClaimProjectTreasuryReward) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -163,7 +83,7 @@ func (m *MsgClaimProjectTreasuryRewardResponse) Reset()         { *m = MsgClaimP
 func (m *MsgClaimProjectTreasuryRewardResponse) String() string { return proto.CompactTextString(m) }
 func (*MsgClaimProjectTreasuryRewardResponse) ProtoMessage()    {}
 func (*MsgClaimProjectTreasuryRewardResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_b68954b02b82a837, []int{3}
+	return fileDescriptor_b68954b02b82a837, []int{1}
 }
 func (m *MsgClaimProjectTreasuryRewardResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -203,7 +123,7 @@ func (m *MsgClaimMigrationTokens) Reset()         { *m = MsgClaimMigrationTokens
 func (m *MsgClaimMigrationTokens) String() string { return proto.CompactTextString(m) }
 func (*MsgClaimMigrationTokens) ProtoMessage()    {}
 func (*MsgClaimMigrationTokens) Descriptor() ([]byte, []int) {
-	return fileDescriptor_b68954b02b82a837, []int{4}
+	return fileDescriptor_b68954b02b82a837, []int{2}
 }
 func (m *MsgClaimMigrationTokens) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -253,7 +173,7 @@ func (m *MsgClaimMigrationTokensResponse) Reset()         { *m = MsgClaimMigrati
 func (m *MsgClaimMigrationTokensResponse) String() string { return proto.CompactTextString(m) }
 func (*MsgClaimMigrationTokensResponse) ProtoMessage()    {}
 func (*MsgClaimMigrationTokensResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_b68954b02b82a837, []int{5}
+	return fileDescriptor_b68954b02b82a837, []int{3}
 }
 func (m *MsgClaimMigrationTokensResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -291,7 +211,7 @@ func (m *MsgUpdateParams) Reset()         { *m = MsgUpdateParams{} }
 func (m *MsgUpdateParams) String() string { return proto.CompactTextString(m) }
 func (*MsgUpdateParams) ProtoMessage()    {}
 func (*MsgUpdateParams) Descriptor() ([]byte, []int) {
-	return fileDescriptor_b68954b02b82a837, []int{6}
+	return fileDescriptor_b68954b02b82a837, []int{4}
 }
 func (m *MsgUpdateParams) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -341,7 +261,7 @@ func (m *MsgUpdateParamsResponse) Reset()         { *m = MsgUpdateParamsResponse
 func (m *MsgUpdateParamsResponse) String() string { return proto.CompactTextString(m) }
 func (*MsgUpdateParamsResponse) ProtoMessage()    {}
 func (*MsgUpdateParamsResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_b68954b02b82a837, []int{7}
+	return fileDescriptor_b68954b02b82a837, []int{5}
 }
 func (m *MsgUpdateParamsResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -371,8 +291,6 @@ func (m *MsgUpdateParamsResponse) XXX_DiscardUnknown() {
 var xxx_messageInfo_MsgUpdateParamsResponse proto.InternalMessageInfo
 
 func init() {
-	proto.RegisterType((*MsgClaimMinerLockedReward)(nil), "atoshi.tokenomics.v1.MsgClaimMinerLockedReward")
-	proto.RegisterType((*MsgClaimMinerLockedRewardResponse)(nil), "atoshi.tokenomics.v1.MsgClaimMinerLockedRewardResponse")
 	proto.RegisterType((*MsgClaimProjectTreasuryReward)(nil), "atoshi.tokenomics.v1.MsgClaimProjectTreasuryReward")
 	proto.RegisterType((*MsgClaimProjectTreasuryRewardResponse)(nil), "atoshi.tokenomics.v1.MsgClaimProjectTreasuryRewardResponse")
 	proto.RegisterType((*MsgClaimMigrationTokens)(nil), "atoshi.tokenomics.v1.MsgClaimMigrationTokens")
@@ -384,47 +302,42 @@ func init() {
 func init() { proto.RegisterFile("atoshi/tokenomics/v1/tx.proto", fileDescriptor_b68954b02b82a837) }
 
 var fileDescriptor_b68954b02b82a837 = []byte{
-	// 634 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x94, 0x3f, 0x6f, 0xd3, 0x4e,
-	0x18, 0xc7, 0xe3, 0x5f, 0x7f, 0x14, 0xe5, 0x1a, 0x01, 0xb5, 0x42, 0x9b, 0x58, 0xc4, 0x69, 0x5c,
-	0x45, 0x54, 0x91, 0x62, 0xd3, 0x54, 0x2d, 0x52, 0x18, 0x10, 0x61, 0x42, 0x22, 0x10, 0x85, 0xc2,
-	0xc0, 0x52, 0x5d, 0xed, 0xc3, 0x39, 0x12, 0xfb, 0xa2, 0xbb, 0x4b, 0x68, 0x24, 0x06, 0x54, 0x24,
-	0x06, 0x06, 0xc4, 0xcb, 0x60, 0xcc, 0xd0, 0x89, 0x91, 0xa9, 0x63, 0xd5, 0x09, 0x31, 0x54, 0x28,
-	0x19, 0xf2, 0x36, 0x90, 0xed, 0x73, 0xfe, 0x94, 0x24, 0xa5, 0x5d, 0xa2, 0xdc, 0xf3, 0x7c, 0x9f,
-	0xe7, 0xf9, 0x3c, 0xf6, 0xf7, 0x0c, 0x52, 0x90, 0x13, 0x56, 0xc3, 0x06, 0x27, 0x75, 0xe4, 0x12,
-	0x07, 0x9b, 0xcc, 0x68, 0x6f, 0x1a, 0xfc, 0x40, 0x6f, 0x52, 0xc2, 0x89, 0x1c, 0x0f, 0xd2, 0xfa,
-	0x28, 0xad, 0xb7, 0x37, 0x95, 0x65, 0xe8, 0x60, 0x97, 0x18, 0xfe, 0x6f, 0x20, 0x54, 0x56, 0x4d,
-	0xc2, 0x1c, 0xc2, 0x0c, 0x87, 0xd9, 0x5e, 0x03, 0x87, 0xd9, 0x22, 0x91, 0x0c, 0x12, 0x7b, 0xfe,
-	0xc9, 0x08, 0x0e, 0x22, 0x15, 0xb7, 0x89, 0x4d, 0x82, 0xb8, 0xf7, 0x4f, 0x44, 0xb3, 0xd3, 0x89,
-	0x46, 0x00, 0xbe, 0x4c, 0xfb, 0x28, 0x81, 0x64, 0x99, 0xd9, 0x8f, 0x1b, 0x10, 0x3b, 0x65, 0xec,
-	0x22, 0xfa, 0x94, 0x98, 0x75, 0x64, 0x55, 0xd1, 0x3b, 0x48, 0x2d, 0xf9, 0x19, 0x58, 0x6e, 0xc3,
-	0x06, 0xb6, 0x20, 0x27, 0x74, 0x0f, 0x5a, 0x16, 0x45, 0x8c, 0x25, 0xa4, 0x35, 0x69, 0x23, 0x5a,
-	0xca, 0x9c, 0x1e, 0xe5, 0x53, 0x82, 0xe3, 0x55, 0xa8, 0x79, 0x14, 0x48, 0x5e, 0x70, 0x8a, 0x5d,
-	0xbb, 0x7a, 0xab, 0x7d, 0x2e, 0x5e, 0x5c, 0x39, 0x1c, 0x74, 0x73, 0x7f, 0xb7, 0xd4, 0xd6, 0x41,
-	0x66, 0x26, 0x44, 0x15, 0xb1, 0x26, 0x71, 0x19, 0xd2, 0x6c, 0x90, 0x0a, 0x45, 0x15, 0x4a, 0xde,
-	0x22, 0x93, 0xef, 0x52, 0x04, 0x59, 0x8b, 0x76, 0x04, 0xed, 0x0e, 0x88, 0xc2, 0x16, 0xaf, 0x11,
-	0x8a, 0x79, 0x47, 0x50, 0x26, 0x4e, 0x8f, 0xf2, 0x71, 0x41, 0x39, 0x09, 0x37, 0x92, 0x16, 0x6f,
-	0x78, 0x54, 0xa3, 0xb3, 0x76, 0x17, 0x64, 0xe7, 0x0e, 0x1a, 0x12, 0x7d, 0x97, 0xc0, 0xea, 0x88,
-	0xdb, 0xa6, 0x90, 0x63, 0xe2, 0xee, 0x7a, 0x8f, 0x98, 0xc9, 0x05, 0x70, 0xdd, 0xf4, 0xe2, 0x88,
-	0x5e, 0x88, 0x12, 0x0a, 0xe5, 0x22, 0x58, 0x84, 0x0e, 0x69, 0xb9, 0x3c, 0xf1, 0x9f, 0x5f, 0xa2,
-	0x1d, 0x9f, 0xa5, 0x23, 0xbf, 0xce, 0xd2, 0xb7, 0x83, 0x32, 0x66, 0xd5, 0x75, 0x4c, 0x0c, 0x07,
-	0xf2, 0x9a, 0xfe, 0xc4, 0xe5, 0xdf, 0x06, 0xdd, 0x9c, 0x54, 0x15, 0x15, 0x72, 0x06, 0xc4, 0x1c,
-	0x44, 0xeb, 0x0d, 0xe4, 0x59, 0x84, 0xbc, 0x49, 0x2c, 0xac, 0x2d, 0x6c, 0xc4, 0xaa, 0x4b, 0x41,
-	0xac, 0xe2, 0x85, 0x8a, 0x31, 0x6f, 0xcf, 0x70, 0x98, 0x96, 0x01, 0xe9, 0x19, 0xec, 0xc3, 0xfd,
-	0x7e, 0x48, 0xe0, 0x66, 0x99, 0xd9, 0x2f, 0x9b, 0x16, 0xe4, 0xa8, 0x02, 0x29, 0x74, 0xd8, 0x55,
-	0x1f, 0xb2, 0xfc, 0x10, 0x2c, 0x36, 0xfd, 0x0e, 0xfe, 0x6e, 0x4b, 0x85, 0x3b, 0xfa, 0xb4, 0x3b,
-	0xa1, 0x07, 0x53, 0x4a, 0x51, 0x6f, 0x73, 0xb1, 0x60, 0x50, 0x56, 0xdc, 0x99, 0x7c, 0x4b, 0x9f,
-	0x07, 0xdd, 0xdc, 0xba, 0xf0, 0xf8, 0xc1, 0xb8, 0xcb, 0xcf, 0x01, 0x6b, 0x49, 0xff, 0x1d, 0x8d,
-	0x87, 0xc2, 0xfd, 0x0a, 0x9f, 0xfe, 0x07, 0x0b, 0x65, 0x66, 0xcb, 0x87, 0x12, 0x58, 0x99, 0x71,
-	0x03, 0x8c, 0xe9, 0x98, 0x33, 0xdd, 0xaa, 0xdc, 0xbf, 0x64, 0x41, 0x08, 0x23, 0x7f, 0x91, 0x80,
-	0x32, 0xc7, 0xdc, 0x5b, 0xf3, 0xfb, 0x4e, 0x2d, 0x52, 0x1e, 0x5c, 0xa1, 0x68, 0x08, 0xf4, 0x1e,
-	0xc4, 0xa7, 0x3a, 0x3b, 0x7f, 0xd1, 0x86, 0x13, 0x72, 0x65, 0xfb, 0x52, 0xf2, 0xe1, 0x74, 0x0b,
-	0xc4, 0x26, 0x7c, 0x97, 0x9d, 0xd9, 0x66, 0x5c, 0xa6, 0xe4, 0xff, 0x49, 0x16, 0x4e, 0x51, 0xae,
-	0x7d, 0xf0, 0x3c, 0x56, 0x7a, 0x7e, 0xdc, 0x53, 0xa5, 0x93, 0x9e, 0x2a, 0xfd, 0xee, 0xa9, 0xd2,
-	0xd7, 0xbe, 0x1a, 0x39, 0xe9, 0xab, 0x91, 0x9f, 0x7d, 0x35, 0xf2, 0x7a, 0xdb, 0xc6, 0xbc, 0xd6,
-	0xda, 0xd7, 0x4d, 0xe2, 0x18, 0x41, 0xe7, 0xbc, 0x59, 0x83, 0xd8, 0x15, 0x07, 0xa3, 0x5d, 0xb8,
-	0x37, 0x69, 0x3f, 0xde, 0x69, 0x22, 0xb6, 0xbf, 0xe8, 0x7f, 0x5d, 0xb7, 0xfe, 0x04, 0x00, 0x00,
-	0xff, 0xff, 0xc8, 0xfe, 0xd4, 0x07, 0x18, 0x06, 0x00, 0x00,
+	// 551 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x54, 0x31, 0x6f, 0xd3, 0x40,
+	0x14, 0x8e, 0x89, 0x08, 0xca, 0x35, 0x02, 0x61, 0x05, 0x35, 0xb5, 0xa8, 0xd3, 0x1a, 0x45, 0x54,
+	0x91, 0x62, 0xd3, 0x54, 0xed, 0x10, 0x06, 0x44, 0x98, 0x18, 0x22, 0xa2, 0x50, 0x16, 0x16, 0x74,
+	0xb5, 0x8f, 0xf3, 0x91, 0x9e, 0xcf, 0xba, 0xbb, 0x84, 0x46, 0x62, 0x00, 0x46, 0x06, 0xc4, 0xcf,
+	0x60, 0xcc, 0xc0, 0xc4, 0xc8, 0xd4, 0xb1, 0x62, 0x42, 0x0c, 0x15, 0x4a, 0x86, 0xfc, 0x0d, 0x64,
+	0x9f, 0xdd, 0x24, 0x55, 0x1a, 0x68, 0x97, 0x28, 0xef, 0xbd, 0xef, 0xbd, 0xf7, 0x7d, 0xf7, 0x3e,
+	0x19, 0xac, 0x43, 0xc9, 0x84, 0x4f, 0x1c, 0xc9, 0xba, 0x28, 0x60, 0x94, 0xb8, 0xc2, 0xe9, 0x6f,
+	0x3b, 0xf2, 0xc8, 0x0e, 0x39, 0x93, 0x4c, 0x2f, 0xaa, 0xb2, 0x3d, 0x2d, 0xdb, 0xfd, 0x6d, 0xe3,
+	0x36, 0xa4, 0x24, 0x60, 0x4e, 0xfc, 0xab, 0x80, 0xc6, 0xaa, 0xcb, 0x04, 0x65, 0xc2, 0xa1, 0x02,
+	0x47, 0x03, 0xa8, 0xc0, 0x49, 0x61, 0x4d, 0x15, 0x5e, 0xc5, 0x91, 0xa3, 0x82, 0xa4, 0x54, 0xc4,
+	0x0c, 0x33, 0x95, 0x8f, 0xfe, 0x25, 0xd9, 0xca, 0x62, 0x46, 0x53, 0x02, 0x31, 0xcc, 0xc2, 0x60,
+	0xbd, 0x25, 0xf0, 0x93, 0x43, 0x48, 0x68, 0x9b, 0xb3, 0x37, 0xc8, 0x95, 0xfb, 0x1c, 0x41, 0xd1,
+	0xe3, 0x83, 0x0e, 0x7a, 0x0b, 0xb9, 0xa7, 0xef, 0x81, 0x3c, 0xec, 0x49, 0x9f, 0x71, 0x22, 0x07,
+	0x25, 0x6d, 0x43, 0xdb, 0xca, 0x37, 0x4b, 0x3f, 0xbf, 0xd5, 0x8a, 0x09, 0x85, 0xc7, 0x9e, 0xc7,
+	0x91, 0x10, 0xcf, 0x25, 0x27, 0x01, 0xee, 0x4c, 0xa1, 0x8d, 0x9b, 0x1f, 0x27, 0xc3, 0xea, 0x34,
+	0xb6, 0xee, 0x83, 0xca, 0xd2, 0x45, 0x1d, 0x24, 0x42, 0x16, 0x08, 0x64, 0x7d, 0xd7, 0xc0, 0x6a,
+	0x8a, 0x6c, 0x11, 0xcc, 0xa1, 0x24, 0x2c, 0xd8, 0x8f, 0x78, 0x0b, 0xbd, 0x0e, 0x6e, 0xb8, 0x51,
+	0x1e, 0xf1, 0x7f, 0x52, 0x49, 0x81, 0x7a, 0x03, 0xe4, 0x20, 0x65, 0xbd, 0x40, 0x96, 0xae, 0xc5,
+	0x2d, 0xd6, 0xf1, 0x69, 0x39, 0xf3, 0xfb, 0xb4, 0x7c, 0x47, 0xb5, 0x09, 0xaf, 0x6b, 0x13, 0xe6,
+	0x50, 0x28, 0x7d, 0xfb, 0x69, 0x20, 0xbf, 0x4e, 0x86, 0x55, 0xad, 0x93, 0x74, 0xe8, 0x9b, 0xa0,
+	0x40, 0x11, 0xef, 0x1e, 0xa2, 0xe8, 0xdd, 0xd9, 0xeb, 0x52, 0x76, 0x23, 0xbb, 0x55, 0xe8, 0xac,
+	0xa8, 0x5c, 0x3b, 0x4a, 0x35, 0x0a, 0x91, 0xce, 0x74, 0x99, 0xb5, 0x09, 0xca, 0x17, 0x70, 0x3f,
+	0xd3, 0xf7, 0x43, 0x03, 0xb7, 0x5a, 0x02, 0xbf, 0x08, 0x3d, 0x28, 0x51, 0x1b, 0x72, 0x48, 0xc5,
+	0x55, 0x1f, 0x59, 0x7f, 0x04, 0x72, 0x61, 0x3c, 0x21, 0xd6, 0xb6, 0x52, 0xbf, 0x6b, 0x2f, 0x32,
+	0x9a, 0xad, 0xb6, 0x34, 0xf3, 0x91, 0xf2, 0x44, 0xa0, 0x6a, 0x6b, 0xec, 0xcd, 0x5f, 0xe9, 0xd3,
+	0x64, 0x58, 0xbd, 0x97, 0x18, 0xe7, 0x68, 0xd6, 0x3a, 0xe7, 0x08, 0x5b, 0x6b, 0xf1, 0x8d, 0x66,
+	0x53, 0xa9, 0xbe, 0xfa, 0x87, 0x2c, 0xc8, 0xb6, 0x04, 0xd6, 0x3f, 0x6b, 0xc0, 0x58, 0xe2, 0xab,
+	0x9d, 0xc5, 0x54, 0x97, 0x7a, 0xc4, 0x78, 0x78, 0x85, 0xa6, 0x94, 0x98, 0xfe, 0x0e, 0x14, 0x17,
+	0x9a, 0xaa, 0xb6, 0x7c, 0xe8, 0x39, 0xb8, 0xb1, 0x7b, 0x29, 0xf8, 0xd9, 0x76, 0x0f, 0x14, 0xe6,
+	0x4e, 0x5e, 0xb9, 0x70, 0xcc, 0x2c, 0xcc, 0xa8, 0xfd, 0x17, 0x2c, 0xdd, 0x62, 0x5c, 0x7f, 0x1f,
+	0x9d, 0xb7, 0xf9, 0xec, 0x78, 0x64, 0x6a, 0x27, 0x23, 0x53, 0xfb, 0x33, 0x32, 0xb5, 0x2f, 0x63,
+	0x33, 0x73, 0x32, 0x36, 0x33, 0xbf, 0xc6, 0x66, 0xe6, 0xe5, 0x2e, 0x26, 0xd2, 0xef, 0x1d, 0xd8,
+	0x2e, 0xa3, 0x8e, 0x9a, 0x5c, 0x73, 0x7d, 0x48, 0x82, 0x24, 0x70, 0xfa, 0xf5, 0x07, 0xf3, 0x97,
+	0x97, 0x83, 0x10, 0x89, 0x83, 0x5c, 0xfc, 0xb5, 0xd8, 0xf9, 0x1b, 0x00, 0x00, 0xff, 0xff, 0x5f,
+	0x00, 0xc5, 0xe3, 0xe8, 0x04, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -439,8 +352,6 @@ const _ = grpc.SupportPackageIsVersion4
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type MsgClient interface {
-	// ClaimMinerLockedReward lets a validator withdraw its unlocked mining share.
-	ClaimMinerLockedReward(ctx context.Context, in *MsgClaimMinerLockedReward, opts ...grpc.CallOption) (*MsgClaimMinerLockedRewardResponse, error)
 	// ClaimProjectTreasuryReward lets the project treasury withdraw unlocked funds.
 	ClaimProjectTreasuryReward(ctx context.Context, in *MsgClaimProjectTreasuryReward, opts ...grpc.CallOption) (*MsgClaimProjectTreasuryRewardResponse, error)
 	// ClaimMigrationTokens lets a user redeem the pre-mine migration airdrop via Merkle proof.
@@ -456,15 +367,6 @@ type msgClient struct {
 
 func NewMsgClient(cc grpc1.ClientConn) MsgClient {
 	return &msgClient{cc}
-}
-
-func (c *msgClient) ClaimMinerLockedReward(ctx context.Context, in *MsgClaimMinerLockedReward, opts ...grpc.CallOption) (*MsgClaimMinerLockedRewardResponse, error) {
-	out := new(MsgClaimMinerLockedRewardResponse)
-	err := c.cc.Invoke(ctx, "/atoshi.tokenomics.v1.Msg/ClaimMinerLockedReward", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *msgClient) ClaimProjectTreasuryReward(ctx context.Context, in *MsgClaimProjectTreasuryReward, opts ...grpc.CallOption) (*MsgClaimProjectTreasuryRewardResponse, error) {
@@ -496,8 +398,6 @@ func (c *msgClient) UpdateParams(ctx context.Context, in *MsgUpdateParams, opts 
 
 // MsgServer is the server API for Msg service.
 type MsgServer interface {
-	// ClaimMinerLockedReward lets a validator withdraw its unlocked mining share.
-	ClaimMinerLockedReward(context.Context, *MsgClaimMinerLockedReward) (*MsgClaimMinerLockedRewardResponse, error)
 	// ClaimProjectTreasuryReward lets the project treasury withdraw unlocked funds.
 	ClaimProjectTreasuryReward(context.Context, *MsgClaimProjectTreasuryReward) (*MsgClaimProjectTreasuryRewardResponse, error)
 	// ClaimMigrationTokens lets a user redeem the pre-mine migration airdrop via Merkle proof.
@@ -511,9 +411,6 @@ type MsgServer interface {
 type UnimplementedMsgServer struct {
 }
 
-func (*UnimplementedMsgServer) ClaimMinerLockedReward(ctx context.Context, req *MsgClaimMinerLockedReward) (*MsgClaimMinerLockedRewardResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ClaimMinerLockedReward not implemented")
-}
 func (*UnimplementedMsgServer) ClaimProjectTreasuryReward(ctx context.Context, req *MsgClaimProjectTreasuryReward) (*MsgClaimProjectTreasuryRewardResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClaimProjectTreasuryReward not implemented")
 }
@@ -526,24 +423,6 @@ func (*UnimplementedMsgServer) UpdateParams(ctx context.Context, req *MsgUpdateP
 
 func RegisterMsgServer(s grpc1.Server, srv MsgServer) {
 	s.RegisterService(&_Msg_serviceDesc, srv)
-}
-
-func _Msg_ClaimMinerLockedReward_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MsgClaimMinerLockedReward)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(MsgServer).ClaimMinerLockedReward(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/atoshi.tokenomics.v1.Msg/ClaimMinerLockedReward",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MsgServer).ClaimMinerLockedReward(ctx, req.(*MsgClaimMinerLockedReward))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _Msg_ClaimProjectTreasuryReward_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -606,10 +485,6 @@ var _Msg_serviceDesc = grpc.ServiceDesc{
 	HandlerType: (*MsgServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "ClaimMinerLockedReward",
-			Handler:    _Msg_ClaimMinerLockedReward_Handler,
-		},
-		{
 			MethodName: "ClaimProjectTreasuryReward",
 			Handler:    _Msg_ClaimProjectTreasuryReward_Handler,
 		},
@@ -624,59 +499,6 @@ var _Msg_serviceDesc = grpc.ServiceDesc{
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "atoshi/tokenomics/v1/tx.proto",
-}
-
-func (m *MsgClaimMinerLockedReward) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *MsgClaimMinerLockedReward) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *MsgClaimMinerLockedReward) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if len(m.ValidatorAddress) > 0 {
-		i -= len(m.ValidatorAddress)
-		copy(dAtA[i:], m.ValidatorAddress)
-		i = encodeVarintTx(dAtA, i, uint64(len(m.ValidatorAddress)))
-		i--
-		dAtA[i] = 0xa
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *MsgClaimMinerLockedRewardResponse) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *MsgClaimMinerLockedRewardResponse) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *MsgClaimMinerLockedRewardResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	return len(dAtA) - i, nil
 }
 
 func (m *MsgClaimProjectTreasuryReward) Marshal() (dAtA []byte, err error) {
@@ -878,28 +700,6 @@ func encodeVarintTx(dAtA []byte, offset int, v uint64) int {
 	dAtA[offset] = uint8(v)
 	return base
 }
-func (m *MsgClaimMinerLockedReward) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	l = len(m.ValidatorAddress)
-	if l > 0 {
-		n += 1 + l + sovTx(uint64(l))
-	}
-	return n
-}
-
-func (m *MsgClaimMinerLockedRewardResponse) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	return n
-}
-
 func (m *MsgClaimProjectTreasuryReward) Size() (n int) {
 	if m == nil {
 		return 0
@@ -981,138 +781,6 @@ func sovTx(x uint64) (n int) {
 }
 func sozTx(x uint64) (n int) {
 	return sovTx(uint64((x << 1) ^ uint64((int64(x) >> 63))))
-}
-func (m *MsgClaimMinerLockedReward) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowTx
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: MsgClaimMinerLockedReward: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: MsgClaimMinerLockedReward: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ValidatorAddress", wireType)
-			}
-			var stringLen uint64
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTx
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthTx
-			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthTx
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.ValidatorAddress = string(dAtA[iNdEx:postIndex])
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipTx(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthTx
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *MsgClaimMinerLockedRewardResponse) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowTx
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: MsgClaimMinerLockedRewardResponse: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: MsgClaimMinerLockedRewardResponse: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		default:
-			iNdEx = preIndex
-			skippy, err := skipTx(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthTx
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
 }
 func (m *MsgClaimProjectTreasuryReward) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)

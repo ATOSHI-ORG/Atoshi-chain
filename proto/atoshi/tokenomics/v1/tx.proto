@@ -13,9 +13,6 @@ option go_package = "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types";
 service Msg {
   option (cosmos.msg.v1.service) = true;
 
-  // ClaimMinerLockedReward lets a validator withdraw its unlocked mining share.
-  rpc ClaimMinerLockedReward(MsgClaimMinerLockedReward) returns (MsgClaimMinerLockedRewardResponse);
-
   // ClaimProjectTreasuryReward lets the project treasury withdraw unlocked funds.
   rpc ClaimProjectTreasuryReward(MsgClaimProjectTreasuryReward) returns (MsgClaimProjectTreasuryRewardResponse);
 
@@ -26,13 +23,6 @@ service Msg {
   // project treasury address and migration Merkle root).
   rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
 }
-
-message MsgClaimMinerLockedReward {
-  option (cosmos.msg.v1.signer) = "validator_address";
-
-  string validator_address = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
-}
-message MsgClaimMinerLockedRewardResponse {}
 
 message MsgClaimProjectTreasuryReward {
   option (cosmos.msg.v1.signer) = "authority";

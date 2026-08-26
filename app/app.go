@@ -228,7 +228,6 @@ var (
 		tokenomicstypes.MinerPoolName:       {authtypes.Minter},
 		tokenomicstypes.ProjectPoolName:     {authtypes.Minter},
 		tokenomicstypes.MigrationPoolName:   {authtypes.Minter},
-		tokenomicstypes.MinerLockedPoolName: {authtypes.Minter},
 		// Minter to emit ATOX as block rewards; Burner because the ATOX transfer
 		// fee is burned, which is what recycles it back into the mining pool.
 		atoxtypes.ModuleName:       {authtypes.Minter, authtypes.Burner},

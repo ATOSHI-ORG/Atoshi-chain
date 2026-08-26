@@ -41,14 +41,14 @@ const (
 )
 
 var (
-	KeyPrefixParams                = []byte{prefixParams}
-	KeyPrefixAccount               = []byte{prefixAccount}
-	KeyPrefixDelegation            = []byte{prefixDelegation}
-	KeyPrefixDelegationByExpiry    = []byte{prefixDelegationByExpiry}
-	KeyPrefixDelegationsByDeleg    = []byte{prefixDelegationsByDelegator}
-	KeyPrefixDelegationsByDelegee  = []byte{prefixDelegationsByDelegatee}
-	KeyNextDelegationID            = []byte{prefixNextDelegationID}
-	KeyPrefixPendingReservation    = []byte{prefixPendingReservation}
+	KeyPrefixParams               = []byte{prefixParams}
+	KeyPrefixAccount              = []byte{prefixAccount}
+	KeyPrefixDelegation           = []byte{prefixDelegation}
+	KeyPrefixDelegationByExpiry   = []byte{prefixDelegationByExpiry}
+	KeyPrefixDelegationsByDeleg   = []byte{prefixDelegationsByDelegator}
+	KeyPrefixDelegationsByDelegee = []byte{prefixDelegationsByDelegatee}
+	KeyNextDelegationID           = []byte{prefixNextDelegationID}
+	KeyPrefixPendingReservation   = []byte{prefixPendingReservation}
 )
 
 // PendingReservationKey indexes a pending reservation by the tx hash.

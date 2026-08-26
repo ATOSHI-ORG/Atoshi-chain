@@ -138,45 +138,6 @@ func (k Keeper) SetBlockRewardState(ctx sdk.Context, state tokenomicstypes.Block
 	return nil
 }
 
-func (k Keeper) GetMinerLockedBalance(ctx sdk.Context, valAddr string) tokenomicstypes.MinerLockedBalance {
-	store := ctx.KVStore(k.storeKey)
-	bz := store.Get(tokenomicstypes.MinerLockedKey(valAddr))
-	if bz == nil {
-		return tokenomicstypes.NewMinerLockedBalance(valAddr)
-	}
-	var bal tokenomicstypes.MinerLockedBalance
-	if err := k.cdc.Unmarshal(bz, &bal); err != nil {
-		panic(fmt.Errorf("failed to unmarshal miner locked balance: %w", err))
-	}
-	return bal
-}
-
-func (k Keeper) SetMinerLockedBalance(ctx sdk.Context, bal tokenomicstypes.MinerLockedBalance) error {
-	store := ctx.KVStore(k.storeKey)
-	bz, err := k.cdc.Marshal(&bal)
-	if err != nil {
-		return err
-	}
-	store.Set(tokenomicstypes.MinerLockedKey(bal.ValidatorAddress), bz)
-	return nil
-}
-
-func (k Keeper) IterateMinerLockedBalances(ctx sdk.Context, fn func(balance tokenomicstypes.MinerLockedBalance) bool) {
-	store := ctx.KVStore(k.storeKey)
-	iter := storetypes.KVStorePrefixIterator(store, tokenomicstypes.KeyPrefixMinerLocked)
-	defer iter.Close()
-
-	for ; iter.Valid(); iter.Next() {
-		var bal tokenomicstypes.MinerLockedBalance
-		if err := k.cdc.Unmarshal(iter.Value(), &bal); err != nil {
-			continue
-		}
-		if fn(bal) {
-			return
-		}
-	}
-}
-
 func (k Keeper) GetProjectClaimable(ctx sdk.Context) math.Int {
 	store := ctx.KVStore(k.storeKey)
 	bz := store.Get(tokenomicstypes.KeyPrefixProjectClaimable)

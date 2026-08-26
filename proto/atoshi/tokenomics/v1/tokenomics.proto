@@ -29,13 +29,13 @@ message Params {
     (amino.dont_omitempty) = true
   ];
 
-  // immediate_reward_bps is the share of each block reward paid out immediately
-  // through x/distribution (basis points, default 2000 = 20%).
-  uint32 immediate_reward_bps = 4;
-
-  // locked_reward_bps is the share of each block reward locked per validator
-  // (basis points, default 8000 = 80%). immediate + locked must equal 10000.
-  uint32 locked_reward_bps = 5;
+  // 4 and 5 held immediate_reward_bps and locked_reward_bps, which split each
+  // block reward into an immediate share and a per-validator lockup. Block
+  // rewards are ATOX now and entirely immediate — ATOX's value is gated by the
+  // conversion index rather than by a lockup — so the split has no meaning and
+  // both are gone. Reserved so a future field cannot reuse the numbers and
+  // misread an old value as something else.
+  reserved 4, 5;
 
   // halving_interval_blocks is the number of blocks between block-reward halvings.
   int64 halving_interval_blocks = 6;
@@ -97,31 +97,6 @@ message Params {
   int64 migration_claim_end_time_unix = 18;
 }
 
-// MinerLockedBalance tracks a validator's locked mining rewards.
-message MinerLockedBalance {
-  string validator_address = 1;
-  string locked_accrued = 2 [
-    (gogoproto.customtype) = "cosmossdk.io/math.Int",
-    (gogoproto.nullable) = false,
-    (amino.dont_omitempty) = true
-  ];
-  string locked_claimable = 3 [
-    (gogoproto.customtype) = "cosmossdk.io/math.Int",
-    (gogoproto.nullable) = false,
-    (amino.dont_omitempty) = true
-  ];
-  string locked_claimed = 4 [
-    (gogoproto.customtype) = "cosmossdk.io/math.Int",
-    (gogoproto.nullable) = false,
-    (amino.dont_omitempty) = true
-  ];
-  string immediate_received = 5 [
-    (gogoproto.customtype) = "cosmossdk.io/math.Int",
-    (gogoproto.nullable) = false,
-    (amino.dont_omitempty) = true
-  ];
-}
-
 // ReleaseState tracks the global price-unlock state machine.
 message ReleaseState {
   uint32 current_tier = 1;
@@ -138,16 +113,11 @@ message ReleaseState {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
-  string total_immediate_distributed = 7 [
-    (gogoproto.customtype) = "cosmossdk.io/math.Int",
-    (gogoproto.nullable) = false,
-    (amino.dont_omitempty) = true
-  ];
-  string total_miner_locked = 8 [
-    (gogoproto.customtype) = "cosmossdk.io/math.Int",
-    (gogoproto.nullable) = false,
-    (amino.dont_omitempty) = true
-  ];
+  // 7 and 8 held total_immediate_distributed and total_miner_locked. Both
+  // belonged to the ATOS block-reward model: nothing writes either any more, so
+  // both would read zero forever, and a permanently-zero term in the circulating
+  // supply formula is dead weight that has to be explained to every reader.
+  reserved 7, 8;
 }
 
 // BlockRewardState tracks how much of the miner pool has already been distributed.

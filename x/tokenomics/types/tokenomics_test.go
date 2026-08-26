@@ -14,8 +14,8 @@ func TestParamsValidate(t *testing.T) {
 
 	t.Run("reward bps must sum to 10000", func(t *testing.T) {
 		params := DefaultParams()
-		params.ImmediateRewardBps = 3000
-		params.LockedRewardBps = 6000
+		params.MinerReleaseShareBps = 3000
+		params.ProjectReleaseShareBps = 6000
 		require.Error(t, params.Validate())
 	})
 

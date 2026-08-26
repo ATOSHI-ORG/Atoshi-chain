@@ -23,11 +23,6 @@ func (q queryServer) Params(goCtx context.Context, _ *tokenomicstypes.QueryParam
 	return &tokenomicstypes.QueryParamsResponse{Params: q.GetParams(ctx)}, nil
 }
 
-func (q queryServer) MinerLockedBalance(goCtx context.Context, req *tokenomicstypes.QueryMinerLockedBalanceRequest) (*tokenomicstypes.QueryMinerLockedBalanceResponse, error) {
-	ctx := sdk.UnwrapSDKContext(goCtx)
-	return &tokenomicstypes.QueryMinerLockedBalanceResponse{Balance: q.GetMinerLockedBalance(ctx, req.ValidatorAddress)}, nil
-}
-
 func (q queryServer) ReleaseStatus(goCtx context.Context, _ *tokenomicstypes.QueryReleaseStatusRequest) (*tokenomicstypes.QueryReleaseStatusResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	return &tokenomicstypes.QueryReleaseStatusResponse{State: q.GetReleaseState(ctx)}, nil

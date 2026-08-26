@@ -66,10 +66,10 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 		return err
 	}
 
-	// TotalDistributed counts ATOX emitted. ReleaseState.TotalImmediateDistributed
-	// is deliberately NOT touched: it feeds GetCirculatingSupply, which is an ATOS
-	// figure and the basis for tier release quotas. Adding ATOX amounts to it
-	// would inflate circulating supply and so inflate every future release.
+	// TotalDistributed counts ATOX emitted, and nothing else. It must never feed
+	// GetCirculatingSupply, which is an ATOS figure and the basis for tier release
+	// quotas: adding ATOX amounts there would inflate circulating supply and so
+	// inflate every future release.
 	blockRewardState.TotalDistributed = blockRewardState.TotalDistributed.Add(currentReward)
 	blockRewardState.CurrentPeriod = uint64(ctx.BlockHeight() / params.HalvingIntervalBlocks)
 	if err := k.SetBlockRewardState(ctx, blockRewardState); err != nil {
@@ -262,71 +262,15 @@ func (k Keeper) AuthorizedReleases(ctx sdk.Context) (miner, project math.Int) {
 // MinerPoolName is the module account holding the ATOS that backs ATOX.
 func (k Keeper) MinerPoolName() string { return tokenomicstypes.MinerPoolName }
 
-// ReleaseMinerLockedRewards distributes newly unlocked miner rewards
-// proportionally to existing locked balances.
+// GetCirculatingSupply is the ATOS actually in circulation: the migration pool
+// plus everything tier releases have authorised.
 //
-// Deprecated: unused since block rewards became ATOX. The locked-balance table is
-// no longer fed by BeginBlocker, so this always finds nothing to release. Kept
-// only until the MinerLockedBalance machinery is removed wholesale.
-//
-// Audit Recommendation-2 (round2): return any SetMinerLockedBalance
-// error to the caller instead of panicking. The caller (TriggerRelease
-// → EndBlocker) already propagates errors up the FinalizeBlock chain,
-// so a failure here becomes a regular block error rather than a chain
-// halt.
-func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) (math.Int, error) {
-	if !target.IsPositive() {
-		return math.ZeroInt(), nil
-	}
-
-	totalLockedRemaining := math.ZeroInt()
-	var balances []tokenomicstypes.MinerLockedBalance
-	k.IterateMinerLockedBalances(ctx, func(balance tokenomicstypes.MinerLockedBalance) bool {
-		remaining := balance.LockedAccrued.Sub(balance.LockedClaimed).Sub(balance.LockedClaimable)
-		if remaining.IsPositive() {
-			totalLockedRemaining = totalLockedRemaining.Add(remaining)
-			balances = append(balances, balance)
-		}
-		return false
-	})
-
-	if !totalLockedRemaining.IsPositive() {
-		return math.ZeroInt(), nil
-	}
-
-	actual := target
-	if target.GT(totalLockedRemaining) {
-		actual = totalLockedRemaining
-	}
-
-	remainingToAssign := actual
-	for i, bal := range balances {
-		remaining := bal.LockedAccrued.Sub(bal.LockedClaimed).Sub(bal.LockedClaimable)
-		share := actual.Mul(remaining).Quo(totalLockedRemaining)
-		if i == len(balances)-1 {
-			share = remainingToAssign
-		}
-		if share.GT(remaining) {
-			share = remaining
-		}
-		if share.IsPositive() {
-			bal.LockedClaimable = bal.LockedClaimable.Add(share)
-			if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-				return math.ZeroInt(), fmt.Errorf("set miner locked balance %q: %w", bal.ValidatorAddress, err)
-			}
-			remainingToAssign = remainingToAssign.Sub(share)
-		}
-	}
-
-	return actual.Sub(remainingToAssign), nil
-}
-
-// GetCirculatingSupply = migration pool total + immediate miner rewards + unlocked miner rewards + unlocked project rewards.
+// Block rewards contribute nothing — they are ATOX, and ATOX is not ATOS. The
+// old immediate-reward term is gone with the field it read.
 func (k Keeper) GetCirculatingSupply(ctx sdk.Context) math.Int {
 	params := k.GetParams(ctx)
 	state := k.GetReleaseState(ctx)
 	return params.MigrationPoolTotal.
-		Add(state.TotalImmediateDistributed).
 		Add(state.TotalMinerReleased).
 		Add(state.TotalProjectReleased)
 }

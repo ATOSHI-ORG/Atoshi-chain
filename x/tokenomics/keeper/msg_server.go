@@ -24,46 +24,6 @@ func NewMsgServerImpl(keeper Keeper) tokenomicstypes.MsgServer {
 
 var _ tokenomicstypes.MsgServer = msgServer{}
 
-func (k msgServer) ClaimMinerLockedReward(goCtx context.Context, msg *tokenomicstypes.MsgClaimMinerLockedReward) (*tokenomicstypes.MsgClaimMinerLockedRewardResponse, error) {
-	ctx := sdk.UnwrapSDKContext(goCtx)
-	bal := k.GetMinerLockedBalance(ctx, msg.ValidatorAddress)
-	if !bal.LockedClaimable.IsPositive() {
-		return nil, tokenomicstypes.ErrNothingToClaim
-	}
-
-	recipient, err := k.validatorToAccAddress(msg.ValidatorAddress)
-	if err != nil {
-		return nil, err
-	}
-
-	coin := sdk.NewCoin(k.baseDenom(), bal.LockedClaimable)
-	poolAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.MinerLockedPoolName)
-	available := k.bankKeeper.GetBalance(ctx, poolAddr, k.baseDenom()).Amount
-	if available.LT(bal.LockedClaimable) {
-		return nil, tokenomicstypes.ErrInsufficientClaimable
-	}
-	if err := k.bankKeeper.SendCoinsFromModuleToAccount(ctx, tokenomicstypes.MinerLockedPoolName, recipient, sdk.NewCoins(coin)); err != nil {
-		return nil, err
-	}
-
-	claimed := bal.LockedClaimable
-	bal.LockedClaimed = bal.LockedClaimed.Add(claimed)
-	bal.LockedClaimable = math.ZeroInt()
-	if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-		return nil, err
-	}
-
-	ctx.EventManager().EmitEvent(
-		sdk.NewEvent(
-			tokenomicstypes.EventTypeClaimMinerReward,
-			sdk.NewAttribute(tokenomicstypes.AttributeKeyValidator, msg.ValidatorAddress),
-			sdk.NewAttribute(tokenomicstypes.AttributeKeyAmount, claimed.String()),
-		),
-	)
-
-	return &tokenomicstypes.MsgClaimMinerLockedRewardResponse{}, nil
-}
-
 func (k msgServer) ClaimProjectTreasuryReward(goCtx context.Context, msg *tokenomicstypes.MsgClaimProjectTreasuryReward) (*tokenomicstypes.MsgClaimProjectTreasuryRewardResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	params := k.GetParams(ctx)

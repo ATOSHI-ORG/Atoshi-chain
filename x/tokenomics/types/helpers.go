@@ -36,14 +36,6 @@ func DefaultParams() Params {
 		ProjectPoolTotal:   projectPool,
 		MigrationPoolTotal: migrationPool,
 
-		// ATOX block rewards are entirely immediate. The old 20/80 immediate/
-		// locked split existed because rewards were ATOS and the locked share was
-		// released to validators over time; ATOX replaces that mechanism — its
-		// value is gated by the conversion index instead of by a lockup, so there
-		// is nothing left to lock.
-		ImmediateRewardBps: 10000,
-		LockedRewardBps:    0,
-
 		HalvingIntervalBlocks: 25_228_800,
 		InitialBlockReward:    blockReward,
 
@@ -73,9 +65,6 @@ func (p Params) Validate() error {
 	}
 	if p.MigrationPoolTotal.IsNil() || p.MigrationPoolTotal.IsNegative() {
 		return fmt.Errorf("migration pool total cannot be negative")
-	}
-	if p.ImmediateRewardBps+p.LockedRewardBps != 10000 {
-		return fmt.Errorf("immediate + locked reward bps must equal 10000, got %d", p.ImmediateRewardBps+p.LockedRewardBps)
 	}
 	if p.HalvingIntervalBlocks <= 0 {
 		return fmt.Errorf("halving interval must be positive")
@@ -117,28 +106,15 @@ func (p Params) Validate() error {
 
 // ----- State constructors -----
 
-// NewMinerLockedBalance returns a zeroed miner locked balance.
-func NewMinerLockedBalance(valAddr string) MinerLockedBalance {
-	return MinerLockedBalance{
-		ValidatorAddress:  valAddr,
-		LockedAccrued:     math.ZeroInt(),
-		LockedClaimable:   math.ZeroInt(),
-		LockedClaimed:     math.ZeroInt(),
-		ImmediateReceived: math.ZeroInt(),
-	}
-}
-
 // DefaultReleaseState returns the genesis release state machine.
 func DefaultReleaseState() ReleaseState {
 	return ReleaseState{
-		CurrentTier:               0,
-		ConsecutiveDays:           0,
-		LastCheckBlock:            0,
-		LastCheckTimeUnix:         0,
-		TotalMinerReleased:        math.ZeroInt(),
-		TotalProjectReleased:      math.ZeroInt(),
-		TotalImmediateDistributed: math.ZeroInt(),
-		TotalMinerLocked:          math.ZeroInt(),
+		CurrentTier:          0,
+		ConsecutiveDays:      0,
+		LastCheckBlock:       0,
+		LastCheckTimeUnix:    0,
+		TotalMinerReleased:   math.ZeroInt(),
+		TotalProjectReleased: math.ZeroInt(),
 	}
 }
 
@@ -155,24 +131,19 @@ func DefaultBlockRewardState() BlockRewardState {
 // DefaultGenesisState returns a fresh tokenomics GenesisState.
 func DefaultGenesisState() *GenesisState {
 	return &GenesisState{
-		Params:              DefaultParams(),
-		ReleaseState:        DefaultReleaseState(),
-		BlockRewardState:    DefaultBlockRewardState(),
-		MinerLockedBalances: []MinerLockedBalance{},
-		ProjectClaimable:    math.ZeroInt(),
+		Params:           DefaultParams(),
+		ReleaseState:     DefaultReleaseState(),
+		BlockRewardState: DefaultBlockRewardState(),
+		ProjectClaimable: math.ZeroInt(),
 	}
 }
 
 // Validate enforces invariants on the tokenomics genesis state.
 //
-// Audit Recommendation-1 (round2): the pre-fix version only validated
-// Params and accepted any value for the four remaining fields
-// (ReleaseState, BlockRewardState, MinerLockedBalances,
-// ProjectClaimable). A malformed or hostile genesis file could ship
-// negative running totals, nil math.Int fields (which then panic on
-// arithmetic), or duplicate / malformed validator addresses in the
-// locked-balance table — all of which would corrupt the on-chain
-// tokenomics state before the chain produced its first block.
+// Audit Recommendation-1 (round2): the pre-fix version validated only Params and
+// accepted anything for the rest, so a malformed or hostile genesis could ship
+// negative running totals or nil math.Int fields that then panic on arithmetic —
+// corrupting tokenomics state before the chain produced its first block.
 func (gs GenesisState) Validate() error {
 	if err := gs.Params.Validate(); err != nil {
 		return fmt.Errorf("invalid tokenomics params: %w", err)
@@ -182,16 +153,6 @@ func (gs GenesisState) Validate() error {
 	}
 	if err := validateBlockRewardState(gs.BlockRewardState); err != nil {
 		return fmt.Errorf("invalid block_reward_state: %w", err)
-	}
-	seen := make(map[string]struct{}, len(gs.MinerLockedBalances))
-	for i, bal := range gs.MinerLockedBalances {
-		if err := validateMinerLockedBalance(bal); err != nil {
-			return fmt.Errorf("invalid miner_locked_balances[%d]: %w", i, err)
-		}
-		if _, dup := seen[bal.ValidatorAddress]; dup {
-			return fmt.Errorf("invalid miner_locked_balances[%d]: duplicate validator %q", i, bal.ValidatorAddress)
-		}
-		seen[bal.ValidatorAddress] = struct{}{}
 	}
 	if gs.ProjectClaimable.IsNil() {
 		return fmt.Errorf("invalid project_claimable: nil")
@@ -212,8 +173,6 @@ func validateReleaseState(s ReleaseState) error {
 	}{
 		{"total_miner_released", s.TotalMinerReleased},
 		{"total_project_released", s.TotalProjectReleased},
-		{"total_immediate_distributed", s.TotalImmediateDistributed},
-		{"total_miner_locked", s.TotalMinerLocked},
 	}
 	for _, c := range checks {
 		if c.v.IsNil() {
@@ -242,43 +201,7 @@ func validateBlockRewardState(s BlockRewardState) error {
 	return nil
 }
 
-func validateMinerLockedBalance(bal MinerLockedBalance) error {
-	if _, err := sdk.ValAddressFromBech32(bal.ValidatorAddress); err != nil {
-		return fmt.Errorf("validator_address %q: %w", bal.ValidatorAddress, err)
-	}
-	checks := []struct {
-		name string
-		v    math.Int
-	}{
-		{"locked_accrued", bal.LockedAccrued},
-		{"locked_claimable", bal.LockedClaimable},
-		{"locked_claimed", bal.LockedClaimed},
-		{"immediate_received", bal.ImmediateReceived},
-	}
-	for _, c := range checks {
-		if c.v.IsNil() {
-			return fmt.Errorf("%s: nil", c.name)
-		}
-		if c.v.IsNegative() {
-			return fmt.Errorf("%s: must not be negative, got %s", c.name, c.v)
-		}
-	}
-	// Invariant: claimed + claimable ≤ accrued. Otherwise the genesis
-	// is claiming more than was ever distributed to this validator.
-	used := bal.LockedClaimed.Add(bal.LockedClaimable)
-	if used.GT(bal.LockedAccrued) {
-		return fmt.Errorf("locked_claimed + locked_claimable (%s) exceeds locked_accrued (%s)",
-			used, bal.LockedAccrued)
-	}
-	return nil
-}
-
 // ----- Msg ValidateBasic -----
-
-func (msg MsgClaimMinerLockedReward) ValidateBasic() error {
-	_, err := sdk.ValAddressFromBech32(msg.ValidatorAddress)
-	return err
-}
 
 func (msg MsgClaimProjectTreasuryReward) ValidateBasic() error {
 	_, err := sdk.AccAddressFromBech32(msg.Authority)

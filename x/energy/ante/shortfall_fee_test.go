@@ -70,13 +70,16 @@ func newKeeperForShortfallTest(t *testing.T) (keeper.Keeper, sdk.Context) {
 // when there is genuine shortfall gas to bill.
 //
 // Pre-fix:
-//   num = 1 × shortfallGas
-//   amt = num / 200_000 → 0 (integer truncation when shortfallGas < gasLimit)
-//   chargeAtos.IsZero() → ante early-returns to next() — full evasion.
+//
+//	num = 1 × shortfallGas
+//	amt = num / 200_000 → 0 (integer truncation when shortfallGas < gasLimit)
+//	chargeAtos.IsZero() → ante early-returns to next() — full evasion.
 //
 // Post-fix: the InsufficientGasPrice floor kicks in. With default
 // params (InsufficientGasPrice = 0.0021), and shortfallGas = 1000:
-//   floor amount = ceil(0.0021 × 1000) = ceil(2.1) = 3 liao
+//
+//	floor amount = ceil(0.0021 × 1000) = ceil(2.1) = 3 liao
+//
 // So chargeAtos must be at least 3 liao — never zero.
 func TestComputeShortfallFee_FloorsAtInsufficientGasPriceOnDustOffer(t *testing.T) {
 	k, ctx := newKeeperForShortfallTest(t)

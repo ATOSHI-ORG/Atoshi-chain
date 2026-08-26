@@ -56,7 +56,7 @@ func TestGetTxPriority_OnlyBaseDenomCounts(t *testing.T) {
 	normalAmt, ok := sdkmath.NewIntFromString("100000000000000")
 	require.True(t, ok)
 	fee := sdk.NewCoins(
-		sdk.NewCoin("liao", normalAmt),                // gasPrice 10^9
+		sdk.NewCoin("liao", normalAmt),                 // gasPrice 10^9
 		sdk.NewCoin("ibc/abc123", sdkmath.NewInt(1)),   // would give priority=0 pre-fix
 		sdk.NewCoin("usdc", sdkmath.NewInt(999_999_9)), // arbitrary noise
 	)
@@ -94,20 +94,24 @@ func TestMaxInt64PriorityConstant(t *testing.T) {
 // with no economic stake. The fix passes (chargeAtos, shortfallGas).
 //
 // Numerical check:
-//   gasLimit = 200_000,  stdFee = 200_000 liao (declared 1 liao/gas)
-//   shortfallGas = 10_000 (energy covered 190k)
-//   chargeAtos (pro-rated) = stdFee × shortfall / gasLimit
-//                          = 200_000 × 10_000 / 200_000
-//                          = 10_000 liao
-//   Pre-fix priority = stdFee / gasLimit = 200_000 / 200_000 = 1
-//   Post-fix priority = chargeAtos / shortfallGas = 10_000 / 10_000 = 1
+//
+//	gasLimit = 200_000,  stdFee = 200_000 liao (declared 1 liao/gas)
+//	shortfallGas = 10_000 (energy covered 190k)
+//	chargeAtos (pro-rated) = stdFee × shortfall / gasLimit
+//	                       = 200_000 × 10_000 / 200_000
+//	                       = 10_000 liao
+//	Pre-fix priority = stdFee / gasLimit = 200_000 / 200_000 = 1
+//	Post-fix priority = chargeAtos / shortfallGas = 10_000 / 10_000 = 1
+//
 // Same numerical answer here BUT for the right reason. The behavioral
 // difference shows up when chargeAtos and stdFee diverge in ratio —
 // e.g. a user inflates stdFee without inflating shortfall coverage:
-//   stdFee = 2_000_000 (10x inflation), gasLimit = 200_000, shortfallGas = 10_000
-//   chargeAtos = 2_000_000 × 10_000 / 200_000 = 100_000
-//   Pre-fix priority = stdFee/gasLimit = 10
-//   Post-fix priority = chargeAtos/shortfallGas = 10 (same — pro-rated)
+//
+//	stdFee = 2_000_000 (10x inflation), gasLimit = 200_000, shortfallGas = 10_000
+//	chargeAtos = 2_000_000 × 10_000 / 200_000 = 100_000
+//	Pre-fix priority = stdFee/gasLimit = 10
+//	Post-fix priority = chargeAtos/shortfallGas = 10 (same — pro-rated)
+//
 // Actually because chargeAtos is computed AS a pro-rated share of
 // stdFee, the per-gas rate is identical by construction. The audit's
 // concern manifests when computeShortfallFee diverges (e.g.

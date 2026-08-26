@@ -439,12 +439,12 @@ func TestUndelegate_PreventsConsumedEnergyReuseAcrossLoops(t *testing.T) {
 // EligibleBalance count bank + LockedAtos, the per-tx accounting
 // must satisfy:
 //
-//   1. After Delegate, the snapshot equals (post-send bank balance)
-//      + (new LockedAtos counter) — the user's TOTAL stake, not
-//      just liquid bank.
-//   2. The hook's cap-down on TxEnergyAccrued sees the SUM, not the
-//      bank-only value. With balance preservation, cap-down only
-//      shaves above the natural ceiling for the user's full stake.
+//  1. After Delegate, the snapshot equals (post-send bank balance)
+//     + (new LockedAtos counter) — the user's TOTAL stake, not
+//     just liquid bank.
+//  2. The hook's cap-down on TxEnergyAccrued sees the SUM, not the
+//     bank-only value. With balance preservation, cap-down only
+//     shaves above the natural ceiling for the user's full stake.
 //
 // Setup: bank = 60k ATOS, TxEnergyAccrued inflated to 200k. Delegate
 // 50k energy locks 30k ATOS. After the bank send:
@@ -536,6 +536,7 @@ func TestDelegate_TwoBackToBackKeepsLockedAtosConsistent(t *testing.T) {
 //   - LockedAtos correctly rose to 60k (sum of both locks)
 //   - BUT EligibleBalance (= LastBalanceSnapshot via Q2 path) ended
 //     up at 270k, not the expected 300k
+//
 // The user observed this as "5万能量凭空消失" — capacity dropped one
 // threshold (50k) due to the snapshot being off by exactly
 // `lockedATOS` (= 30k = one delegation's lock).
@@ -655,7 +656,7 @@ func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
 //   - 1st delegate 30k energy (locks 30k ATOS) → expect snapshot 308999.999754806
 //   - 2nd delegate 30k energy (locks 30k more) → expect snapshot 308999.999754806
 //   - MsgSend 30k ATOS to another account     → expect snapshot 278999.999754806
-//                                                 (= bank_post_after_msgsend + 60k locked)
+//     (= bank_post_after_msgsend + 60k locked)
 //
 // Chain shows snapshot = 248999.999754806 (= bank_post + only_30k_locked).
 // 30,000 ATOS of EligibleBalance is missing from snapshot.
@@ -669,11 +670,11 @@ func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
 	k, ctx, bank := newKeeperForTest(t)
 	delegator := addr("delegator_______________")
 	delegatee := addr("delegatee_______________")
-	recipient := addr("recipient_______________")  // for the final MsgSend
+	recipient := addr("recipient_______________") // for the final MsgSend
 
 	// Match production initial state: bank ≈ 309000 ATOS (with .999754806
 	// fractional from a prior EVM tx).
-	priorEVMFee := math.NewInt(245_194_000_000_000)  // 0.000245194 ATOS net loss
+	priorEVMFee := math.NewInt(245_194_000_000_000) // 0.000245194 ATOS net loss
 	initialBank := math.NewIntWithDecimal(309_000, 18).Sub(priorEVMFee)
 	bank.balances[delegator.String()] = initialBank
 	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
@@ -684,7 +685,7 @@ func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
 
 	// Initial snapshot via Settle (first touch)
 	a := k.Settle(ctx, delegator)
-	a.TxEnergyAccrued = 500_000   // full cap
+	a.TxEnergyAccrued = 500_000 // full cap
 	k.SetEnergyAccount(ctx, a)
 	// snapshot at this point: 308999.999754806 ATOS, capacity = 500k
 
@@ -692,7 +693,7 @@ func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
 	_, _, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
 	require.NoError(t, err)
 	mid := k.GetEnergyAccount(ctx, delegator)
-	mid.TxEnergyAccrued = 500_000  // refill to full (simulating natural accrual)
+	mid.TxEnergyAccrued = 500_000 // refill to full (simulating natural accrual)
 	k.SetEnergyAccount(ctx, mid)
 
 	// === 2nd delegate (matches h=218269) ===

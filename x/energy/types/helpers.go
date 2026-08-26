@@ -16,17 +16,16 @@ import (
 func DefaultParams() Params {
 	atosUnit := math.NewIntWithDecimal(1, 18) // 1 ATOS in liao
 	return Params{
-		EnergyEnabled:              true,
-		TxEnergyHoldingThreshold:   atosUnit.Mul(math.NewInt(30_000)),
-		TxEnergyPerThreshold:       50_000,
-		TxEnergyMaxAccrueWindow:    86_400, // 24h
-		DeployHoldingThreshold:     atosUnit.Mul(math.NewInt(1_000_000)),
-		DeployEnergyCapacity:       800_000,
-		DeployRecoverDays:          10,
-		InsufficientGasPrice:       math.LegacyNewDecWithPrec(21, 4), // 0.0021
+		EnergyEnabled:            true,
+		TxEnergyHoldingThreshold: atosUnit.Mul(math.NewInt(30_000)),
+		TxEnergyPerThreshold:     50_000,
+		TxEnergyMaxAccrueWindow:  86_400, // 24h
+		DeployHoldingThreshold:   atosUnit.Mul(math.NewInt(1_000_000)),
+		DeployEnergyCapacity:     800_000,
+		DeployRecoverDays:        10,
+		InsufficientGasPrice:     math.LegacyNewDecWithPrec(21, 4), // 0.0021
 		SubsidizedMsgTypeUrls: []string{
 			"/atoshi.tokenomics.v1.MsgClaimMigrationTokens",
-			"/atoshi.tokenomics.v1.MsgClaimMinerLockedReward",
 			"/atoshi.tokenomics.v1.MsgClaimProjectTreasuryReward",
 			"/atoshi.oracle.v1.MsgReportPrice",
 			// Delegate / undelegate of energy itself MUST be subsidized:

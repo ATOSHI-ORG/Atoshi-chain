@@ -265,7 +265,6 @@ func TestBeginBlocker_DoesNotInflateCirculatingSupply(t *testing.T) {
 	}
 	require.Equal(t, before.String(), k.GetCirculatingSupply(ctx).String(),
 		"ATOX emission must leave the ATOS circulating figure untouched")
-	require.True(t, k.GetReleaseState(ctx).TotalImmediateDistributed.IsZero())
 }
 
 // TestBeginBlocker_StopsAtAtoxCapWithoutErroring — an error here propagates into
@@ -360,23 +359,6 @@ func TestTriggerRelease_AuthorizationCappedByPoolBalance(t *testing.T) {
 		"cannot authorise more ATOS than the miner pool holds")
 }
 
-func TestReleaseMinerLockedRewards(t *testing.T) {
-	bk := newTestBankKeeper()
-	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{}, testOracleKeeper{})
-
-	require.NoError(t, k.SetMinerLockedBalance(ctx, tokenomicstypes.MinerLockedBalance{ValidatorAddress: "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", LockedAccrued: math.NewInt(100)}))
-	require.NoError(t, k.SetMinerLockedBalance(ctx, tokenomicstypes.MinerLockedBalance{ValidatorAddress: "atoshivaloper1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", LockedAccrued: math.NewInt(300)}))
-
-	released, err := k.ReleaseMinerLockedRewards(ctx, math.NewInt(200))
-	require.NoError(t, err)
-	require.Equal(t, math.NewInt(200), released)
-
-	balA := k.GetMinerLockedBalance(ctx, "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	balB := k.GetMinerLockedBalance(ctx, "atoshivaloper1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	require.Equal(t, math.NewInt(50), balA.LockedClaimable)
-	require.Equal(t, math.NewInt(150), balB.LockedClaimable)
-}
-
 func TestTriggerReleaseCapsProjectClaimableToPoolBalance(t *testing.T) {
 	bk := newTestBankKeeper()
 	projectAddr := authtypes.NewModuleAddress(tokenomicstypes.ProjectPoolName)
@@ -384,7 +366,6 @@ func TestTriggerReleaseCapsProjectClaimableToPoolBalance(t *testing.T) {
 
 	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{}, testOracleKeeper{})
 	state := tokenomicstypes.DefaultReleaseState()
-	state.TotalImmediateDistributed = math.NewInt(1000)
 	params := tokenomicstypes.DefaultParams()
 	params.ReleasePercentageBps = 1000
 	params.MinerReleaseShareBps = 0
@@ -392,24 +373,6 @@ func TestTriggerReleaseCapsProjectClaimableToPoolBalance(t *testing.T) {
 
 	require.NoError(t, k.TriggerRelease(ctx, &state, params))
 	require.Equal(t, math.NewInt(10), k.GetProjectClaimable(ctx))
-}
-
-func TestClaimMinerLockedReward(t *testing.T) {
-	bk := newTestBankKeeper()
-	poolAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerLockedPoolName)
-	bk.balances[poolAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewInt(50)))
-
-	k, ctx := newKeeperForTest(t, bk, testStakingKeeper{}, testOracleKeeper{})
-	msgSrv := NewMsgServerImpl(k)
-	valAddr := sdk.ValAddress([]byte("validator_addr_test__")).String()
-	require.NoError(t, k.SetMinerLockedBalance(ctx, tokenomicstypes.MinerLockedBalance{ValidatorAddress: valAddr, LockedClaimable: math.NewInt(50)}))
-
-	_, err := msgSrv.ClaimMinerLockedReward(sdk.WrapSDKContext(ctx), &tokenomicstypes.MsgClaimMinerLockedReward{ValidatorAddress: valAddr})
-	require.NoError(t, err)
-
-	bal := k.GetMinerLockedBalance(ctx, valAddr)
-	require.True(t, bal.LockedClaimable.IsZero())
-	require.Equal(t, math.NewInt(50), bal.LockedClaimed)
 }
 
 func TestClaimMigrationTokensWithValidMerkleProof(t *testing.T) {
@@ -566,7 +529,6 @@ func TestEndBlocker_ZeroTimestampIsTreatedAsStale(t *testing.T) {
 // updated releaseState IN MEMORY before checking totalBonded, then
 // returned early without persisting the in-memory updates. Result:
 //   - bank state: FeeCollector got the liao (committed),
-//   - releaseState.TotalImmediateDistributed: not persisted,
 //   - blockRewardState.TotalDistributed: not persisted.
 //
 // On the next block, the same currentReward would be computed again
@@ -614,8 +576,6 @@ func TestBeginBlocker_NoStateChangeWhenNoBondedValidators(t *testing.T) {
 	// Tokenomics accounting: counters must NOT advance.
 	require.True(t, preBlockRewardState.TotalDistributed.Equal(postBlockRewardState.TotalDistributed),
 		"audit Issue-18: TotalDistributed must not move")
-	require.True(t, preReleaseState.TotalImmediateDistributed.Equal(postReleaseState.TotalImmediateDistributed),
-		"audit Issue-18: TotalImmediateDistributed must not move")
-	require.True(t, preReleaseState.TotalMinerLocked.Equal(postReleaseState.TotalMinerLocked),
-		"audit Issue-18: TotalMinerLocked must not move")
+	require.True(t, preReleaseState.TotalMinerReleased.Equal(postReleaseState.TotalMinerReleased),
+		"audit Issue-18: release state must not move when nothing is bonded")
 }

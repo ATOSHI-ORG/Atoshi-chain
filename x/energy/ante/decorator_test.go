@@ -73,7 +73,9 @@ type fakeAccountKeeper struct {
 func (f fakeAccountKeeper) GetModuleAddress(name string) sdk.AccAddress {
 	return sdk.AccAddress([]byte("module/" + name))
 }
-func (f fakeAccountKeeper) GetModuleAccount(_ context.Context, _ string) sdk.ModuleAccountI { return nil }
+func (f fakeAccountKeeper) GetModuleAccount(_ context.Context, _ string) sdk.ModuleAccountI {
+	return nil
+}
 func (f fakeAccountKeeper) GetAccount(_ context.Context, addr sdk.AccAddress) sdk.AccountI {
 	if f.exists[addr.String()] {
 		// return a non-nil minimal account; the decorator only checks != nil
@@ -91,13 +93,13 @@ type fakeFeeTx struct {
 	msgs       []sdk.Msg
 }
 
-func (t fakeFeeTx) GetMsgs() []sdk.Msg                       { return t.msgs }
-func (t fakeFeeTx) GetMsgsV2() ([]protov2.Message, error)    { return nil, nil }
-func (t fakeFeeTx) ValidateBasic() error                     { return nil }
-func (t fakeFeeTx) GetGas() uint64                           { return t.gas }
-func (t fakeFeeTx) GetFee() sdk.Coins                        { return t.fee }
-func (t fakeFeeTx) FeePayer() []byte                         { return t.feePayer }
-func (t fakeFeeTx) FeeGranter() []byte                       { return t.feeGranter }
+func (t fakeFeeTx) GetMsgs() []sdk.Msg                    { return t.msgs }
+func (t fakeFeeTx) GetMsgsV2() ([]protov2.Message, error) { return nil, nil }
+func (t fakeFeeTx) ValidateBasic() error                  { return nil }
+func (t fakeFeeTx) GetGas() uint64                        { return t.gas }
+func (t fakeFeeTx) GetFee() sdk.Coins                     { return t.fee }
+func (t fakeFeeTx) FeePayer() []byte                      { return t.feePayer }
+func (t fakeFeeTx) FeeGranter() []byte                    { return t.feeGranter }
 
 // ----- harness -----
 

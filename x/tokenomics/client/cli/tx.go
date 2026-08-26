@@ -9,7 +9,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/client/tx"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/spf13/cobra"
 
 	"github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
@@ -25,35 +24,10 @@ func NewTxCmd() *cobra.Command {
 		RunE:                       client.ValidateCmd,
 	}
 	txCmd.AddCommand(
-		NewClaimMinerLockedRewardCmd(),
 		NewClaimProjectTreasuryRewardCmd(),
 		NewClaimMigrationTokensCmd(),
 	)
 	return txCmd
-}
-
-// NewClaimMinerLockedRewardCmd lets a validator claim its unlocked locked-pool share.
-func NewClaimMinerLockedRewardCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "claim-miner-locked-reward",
-		Short: "Claim unlocked locked-pool mining rewards (signer must be the validator's account key)",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cliCtx, err := client.GetClientTxContext(cmd)
-			if err != nil {
-				return err
-			}
-			from := cliCtx.GetFromAddress()
-			msg := &types.MsgClaimMinerLockedReward{
-				// Validators sign from their operator account key; the val-bech32
-				// address shares the same bytes.
-				ValidatorAddress: sdk.ValAddress(from).String(),
-			}
-			return tx.GenerateOrBroadcastTxCLI(cliCtx, cmd.Flags(), msg)
-		},
-	}
-	flags.AddTxFlagsToCmd(cmd)
-	return cmd
 }
 
 // NewClaimProjectTreasuryRewardCmd lets the configured project treasury claim

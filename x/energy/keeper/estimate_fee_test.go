@@ -77,7 +77,7 @@ func newEstFeeKeeper(t *testing.T, fk types.FeemarketKeeper) (keeper.Keeper, sdk
 // (10^9 liao/gas). A typical 300k-gas MsgSend with zero accrued energy
 // has shortfall_gas = 300_000, so estimate_fee should return
 //
-//   atos_fee = 1e9 × 300_000 = 3e14 liao = 0.0003 ATOS
+//	atos_fee = 1e9 × 300_000 = 3e14 liao = 0.0003 ATOS
 //
 // Pre-fix (round-3 only) this returned 0.0021 × 300_000 = 630 liao
 // (≈6.3e-16 ATOS) — off by 10^12, wallet UI displayed "0.000000..." and

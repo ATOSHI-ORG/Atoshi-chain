@@ -57,7 +57,7 @@ func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.Ac
 	if cur.IsNil() {
 		cur = math.ZeroInt()
 	}
-	b.balances[sender.String()] = cur.Sub(amt.AmountOf(b.denom))    // 1. sub first
+	b.balances[sender.String()] = cur.Sub(amt.AmountOf(b.denom)) // 1. sub first
 	if b.onSend != nil {
 		b.onSend(sender, sdk.AccAddress([]byte("module/"+recipientModule)), amt) // 2. hook
 	}
@@ -273,18 +273,18 @@ func TestApplyBalanceChange_CapDownAboveDelegatedOutCutsNormally(t *testing.T) {
 //
 // This test mirrors that exact scenario through the real SendRestriction
 // hook path:
-//   1. Alice holds 60k ATOS (cap = 100k), accrued = 100k, DelegatedOut
-//      = 70k (committed to a delegatee already). ownAvail = 30k.
-//   2. Alice transfers half her ATOS to Bob. Post-send balance = 30k
-//      ATOS → new cap = 50k.
-//   3. SendRestriction hook fires ApplyBalanceChange(alice, 30k_eligible)
-//      → newTxCap=50k < DelegatedOut=70k → with the fix, TxEnergyAccrued
-//      is floored at DelegatedOut=70k (NOT slammed to 50k).
-//   4. Consume(alice, 20k, ...) succeeds: ownAvail = 70k - 70k = 0,
-//      delegated-in-usable is unused here, shortfall = 20k. No
-//      invariant violation, no DoS — the user lost own-energy ceiling
-//      (correct, they sold half their ATOS) but did NOT lose the
-//      delegated commitment.
+//  1. Alice holds 60k ATOS (cap = 100k), accrued = 100k, DelegatedOut
+//     = 70k (committed to a delegatee already). ownAvail = 30k.
+//  2. Alice transfers half her ATOS to Bob. Post-send balance = 30k
+//     ATOS → new cap = 50k.
+//  3. SendRestriction hook fires ApplyBalanceChange(alice, 30k_eligible)
+//     → newTxCap=50k < DelegatedOut=70k → with the fix, TxEnergyAccrued
+//     is floored at DelegatedOut=70k (NOT slammed to 50k).
+//  4. Consume(alice, 20k, ...) succeeds: ownAvail = 70k - 70k = 0,
+//     delegated-in-usable is unused here, shortfall = 20k. No
+//     invariant violation, no DoS — the user lost own-energy ceiling
+//     (correct, they sold half their ATOS) but did NOT lose the
+//     delegated commitment.
 //
 // Pre-fix (round1 audit state): step 3 would have set TxEnergyAccrued
 // = 50k. Step 4's ownAvail = max(0, 50k - 70k) = 0 (clamped), AND
@@ -324,7 +324,7 @@ func TestConsume_AfterBalanceDrop_PreservesDelegatedCommitment(t *testing.T) {
 	bank.balances[alice.String()] = math.NewIntWithDecimal(30_000, 18) // 1. sub from alice
 	_, err := k.SendRestriction(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin("liao", sold)))
 	require.NoError(t, err)
-	bank.balances[bob.String()] = sold                                  // 3. add to bob (post-hook)
+	bank.balances[bob.String()] = sold // 3. add to bob (post-hook)
 
 	post := k.GetEnergyAccount(ctx, alice)
 	require.EqualValues(t, 70_000, post.TxEnergyAccrued,

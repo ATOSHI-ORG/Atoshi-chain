@@ -25,12 +25,12 @@ import (
 // instead of effectively converting it into permanent own-energy on
 // the delegatee's account.
 type ConsumeResult struct {
-	EnergyDeducted   uint64 // tx_energy + delegated drawn down (kept as sum for events / RPC compat)
-	OwnDeducted      uint64 // portion drawn from the signer's own TxEnergyAccrued
+	EnergyDeducted    uint64 // tx_energy + delegated drawn down (kept as sum for events / RPC compat)
+	OwnDeducted       uint64 // portion drawn from the signer's own TxEnergyAccrued
 	DelegatedDeducted uint64 // portion drawn from the inbound-delegation pool
-	DeployEnergyUsed uint64 // deploy_energy drawn down (only when isDeploy)
-	ShortfallGas     uint64 // gas the standard fee path must cover
-	Free             bool   // msg type was on the subsidized whitelist
+	DeployEnergyUsed  uint64 // deploy_energy drawn down (only when isDeploy)
+	ShortfallGas      uint64 // gas the standard fee path must cover
+	Free              bool   // msg type was on the subsidized whitelist
 	// DelegationConsumptions records the in-order attribution made by
 	// attributeDelegatedConsumption — one entry per active inbound
 	// delegation that contributed. LIFO refund walks this slice

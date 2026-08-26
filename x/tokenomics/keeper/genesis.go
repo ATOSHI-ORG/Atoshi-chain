@@ -17,11 +17,6 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs tokenomicstypes.GenesisState) {
 	if err := k.SetBlockRewardState(ctx, gs.BlockRewardState); err != nil {
 		panic(err)
 	}
-	for _, bal := range gs.MinerLockedBalances {
-		if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-			panic(err)
-		}
-	}
 	if !gs.ProjectClaimable.IsNil() {
 		k.SetProjectClaimable(ctx, gs.ProjectClaimable)
 	}
@@ -41,26 +36,19 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs tokenomicstypes.GenesisState) {
 		}
 	}
 
-	minerImmediate := params.MinerPoolTotal.MulRaw(int64(params.ImmediateRewardBps)).QuoRaw(10000)
-	minerLocked := params.MinerPoolTotal.Sub(minerImmediate)
-
-	mintToModule(tokenomicstypes.MinerPoolName, minerImmediate)
-	mintToModule(tokenomicstypes.MinerLockedPoolName, minerLocked)
+	// One miner pool, no split. It no longer pays block rewards — those are ATOX
+	// now — it holds the ATOS that backs ATOX one-for-one until tier releases move
+	// it into the conversion pool.
+	mintToModule(tokenomicstypes.MinerPoolName, params.MinerPoolTotal)
 	mintToModule(tokenomicstypes.ProjectPoolName, params.ProjectPoolTotal)
 	mintToModule(tokenomicstypes.MigrationPoolName, params.MigrationPoolTotal)
 }
 
 func (k Keeper) ExportGenesis(ctx sdk.Context) *tokenomicstypes.GenesisState {
-	var balances []tokenomicstypes.MinerLockedBalance
-	k.IterateMinerLockedBalances(ctx, func(balance tokenomicstypes.MinerLockedBalance) bool {
-		balances = append(balances, balance)
-		return false
-	})
 	return &tokenomicstypes.GenesisState{
-		Params:              k.GetParams(ctx),
-		ReleaseState:        k.GetReleaseState(ctx),
-		BlockRewardState:    k.GetBlockRewardState(ctx),
-		MinerLockedBalances: balances,
-		ProjectClaimable:    k.GetProjectClaimable(ctx),
+		Params:           k.GetParams(ctx),
+		ReleaseState:     k.GetReleaseState(ctx),
+		BlockRewardState: k.GetBlockRewardState(ctx),
+		ProjectClaimable: k.GetProjectClaimable(ctx),
 	}
 }

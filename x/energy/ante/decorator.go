@@ -251,8 +251,10 @@ func (d EnergyDeductDecorator) AnteHandle(
 // Audit Question 6 (round2): the prior implementation used integer
 // arithmetic without the floor on the non-zero-offered branch. A user
 // could submit fee = 1 liao against gasLimit = 200_000:
-//   num = 1 × shortfallGas
-//   amt = num / 200_000 = 0   (integer division truncation)
+//
+//	num = 1 × shortfallGas
+//	amt = num / 200_000 = 0   (integer division truncation)
+//
 // chargeAtos.IsZero() then short-circuited the ante to next(), letting
 // the user pay literally one liao in fee while consuming the chain's
 // gas for an arbitrary tx — a complete shortfall fee evasion.
@@ -261,10 +263,10 @@ func (d EnergyDeductDecorator) AnteHandle(
 // a 1-liao offer dodged that branch. The fix unifies both paths
 // through a single gas-price floor:
 //
-//   offeredPerGas := offered / gasLimit  (Dec to avoid truncation)
-//   if offeredPerGas < InsufficientGasPrice:
-//       offeredPerGas = InsufficientGasPrice
-//   amt := ceil(offeredPerGas × shortfallGas)
+//	offeredPerGas := offered / gasLimit  (Dec to avoid truncation)
+//	if offeredPerGas < InsufficientGasPrice:
+//	    offeredPerGas = InsufficientGasPrice
+//	amt := ceil(offeredPerGas × shortfallGas)
 //
 // Properties:
 //   - A user offering >= InsufficientGasPrice * gasLimit pays the
