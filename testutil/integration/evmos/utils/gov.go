@@ -151,21 +151,14 @@ func getProposalIDFromEvents(events []abcitypes.Event) (uint64, error) {
 	return proposalID, nil
 }
 
-// govTxGas is an explicit gas limit for governance transactions, used instead of
-// simulation.
+// govTxGas is an explicit gas limit for governance transactions.
 //
-// Simulation under-reports gas badly for any transaction that touches x/energy.
-// A simulated tx carries gas 0, so the decorator's Consume(ctx, addr, 0, ...)
-// does almost no work, while delivery runs the full accounting — energy
-// settlement, the store writes, the shortfall fee transfer. A MsgVote simulated
-// at 63,088 gas actually used 110,284, so even the factory's generous 1.7x
-// adjustment could not cover it and every governance vote died with out-of-gas
-// in signature verification.
-//
-// Tests reach params through governance rather than testing gas estimation, so a
-// fixed limit is the right call here. The estimation gap itself is a production
-// concern — `--gas auto` under-reports the same way for real users — and is
-// tracked separately; it must not be hidden behind this constant.
+// Estimation is no longer the problem it was: the energy decorator now performs
+// its accounting during simulation too, which took a simulated MsgVote from
+// 63,088 gas to 132,708 against an observed delivery cost of 110,284. A fixed
+// limit is still used here so these tests do not depend on the precision of gas
+// estimation — they reach module params through governance, they do not test the
+// estimator.
 var govTxGas uint64 = 1_000_000
 
 func submitProposal(tf factory.TxFactory, network network.Network, proposerPriv cryptotypes.PrivKey, txArgs commonfactory.CosmosTxArgs) (uint64, error) {

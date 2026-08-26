@@ -155,7 +155,26 @@ func (d EnergyDeductDecorator) AnteHandle(
 
 	// Probe energy first.
 	isDeploy := isContractDeployMsg(msgs)
-	consumed, err := d.energyKeeper.Consume(ctx, deductFrom, gasLimit, isDeploy, msgUrls)
+
+	// A simulated tx carries gas 0, and Consume returns immediately on zero —
+	// skipping the settle, the account write and the event, all of which cost gas
+	// during delivery. Simulation therefore reported far less gas than delivery
+	// used, and `--gas auto` produced a limit the tx then died on. Measured on a
+	// MsgVote: 63,088 simulated against 110,284 delivered, which even a 1.7x
+	// adjustment could not absorb.
+	//
+	// Passing a nominal 1 makes simulation do the same work. The cost of Consume
+	// is essentially independent of the amount asked for — the same settle, the
+	// same single account write, the same event, whatever the figure — so the
+	// nominal value does not have to resemble the real gas limit to produce a
+	// representative measurement. Energy is "deducted" in the simulated context,
+	// which is discarded.
+	probeGas := gasLimit
+	if simulate && probeGas == 0 {
+		probeGas = 1
+	}
+
+	consumed, err := d.energyKeeper.Consume(ctx, deductFrom, probeGas, isDeploy, msgUrls)
 	if err != nil {
 		return ctx, err
 	}

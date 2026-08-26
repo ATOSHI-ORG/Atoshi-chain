@@ -2,6 +2,7 @@ package ante_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -248,3 +249,80 @@ func (m mockMsg) ProtoMessage()  {}
 // proto.MessageName() to format type URLs as "/<name>", so we make our
 // mock report whatever URL the test wants.
 func (m mockMsg) XXX_MessageName() string { return m.typeURL[1:] }
+
+// ----- simulation parity -----
+//
+// These two guard the gas-estimation fixes. Both failures they cover were
+// production bugs that broke `--gas auto`, and both are the kind of thing a
+// later refactor would silently undo.
+
+// rejectingFeeChecker stands in for the real dynamic fee checker, which rejects
+// gas 0 outright (app/ante/evm/fee_checker.go).
+func rejectingFeeChecker(_ sdk.Context, tx sdk.Tx) (sdk.Coins, int64, error) {
+	feeTx, ok := tx.(sdk.FeeTx)
+	if !ok {
+		return nil, 0, fmt.Errorf("not a fee tx")
+	}
+	if feeTx.GetGas() == 0 {
+		return nil, 0, fmt.Errorf("gas cannot be zero")
+	}
+	return feeTx.GetFee(), 0, nil
+}
+
+// TestDecorator_SimulateSkipsFeeChecker — a simulated tx carries gas 0 by
+// definition, since simulation is how a client discovers the gas it needs. The
+// dynamic fee checker rejects gas 0, so calling it during simulation made
+// estimation fail outright for every tx energy fully covers.
+func TestDecorator_SimulateSkipsFeeChecker(t *testing.T) {
+	k, bank, ak, ctx := newTestEnv(t)
+	signer := sdk.AccAddress([]byte("alice___________________"))
+	ak.exists[signer.String()] = true
+
+	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, rejectingFeeChecker)
+	tx := fakeFeeTx{gas: 0, fee: sdk.NewCoins(), feePayer: signer, msgs: []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}}}
+
+	_, err := d.AnteHandle(ctx, tx, true, terminalAnte)
+	require.NoError(t, err, "simulation must not run the fee checker; the SDK guards the same call with !simulate")
+
+	// Delivery still runs it, so a genuinely bad fee is still caught.
+	_, err = d.AnteHandle(ctx, tx, false, terminalAnte)
+	require.Error(t, err, "delivery must still validate the fee")
+}
+
+// TestDecorator_SimulateDoesTheEnergyWork is the parity check behind the gas
+// estimate. Consume returns immediately when asked for zero gas, skipping the
+// settle, the account write and the event — all of which cost gas in delivery.
+// Simulation therefore reported a fraction of the real cost and `--gas auto`
+// handed back a limit the tx then died on.
+func TestDecorator_SimulateDoesTheEnergyWork(t *testing.T) {
+	measure := func(simulate bool, gas uint64) storetypes.Gas {
+		k, bank, ak, ctx := newTestEnv(t)
+		signer := sdk.AccAddress([]byte("alice___________________"))
+		ak.exists[signer.String()] = true
+		ctx = ctx.WithGasMeter(storetypes.NewInfiniteGasMeter())
+
+		d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
+		tx := fakeFeeTx{
+			gas:      gas,
+			fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1_000))),
+			feePayer: signer,
+			msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
+		}
+		before := ctx.GasMeter().GasConsumed()
+		_, err := d.AnteHandle(ctx, tx, simulate, terminalAnte)
+		require.NoError(t, err)
+		return ctx.GasMeter().GasConsumed() - before
+	}
+
+	simulated := measure(true, 0) // as a client submits it
+	delivered := measure(false, 21_000)
+
+	require.Positive(t, simulated,
+		"simulation must perform the energy accounting, or its gas figure means nothing")
+
+	// The cost of Consume barely depends on the amount asked for — same settle,
+	// same single account write, same event — so the two should be close. Before
+	// the fix `simulated` was zero here.
+	require.InDelta(t, float64(delivered), float64(simulated), float64(delivered)*0.5,
+		"simulated gas (%d) must be in the same range as delivered (%d)", simulated, delivered)
+}
