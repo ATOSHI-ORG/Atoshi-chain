@@ -229,6 +229,28 @@ func (d EnergyDeductDecorator) AnteHandle(
 		return next(ctx, tx, simulate)
 	}
 
+	// Validate the declared fee before charging anything. This path used to skip
+	// txFeeChecker entirely, which left the EIP-1559 base fee unenforced for
+	// every Cosmos tx whose payer had any energy shortfall -- i.e. the common
+	// case. NewMinGasPriceDecorator, earlier in the chain, still applied the
+	// governance min gas price, so a tx below the *floor* was rejected; but the
+	// dynamic base fee that rises with congestion was not checked at all, so
+	// Cosmos txs could keep paying the floor no matter how congested the chain
+	// got. That defeats the fee market's only congestion control for this path.
+	//
+	// Guarded with !simulate for the same reason as the zero-shortfall branch
+	// above: simulation submits gas 0, and the dynamic fee checker rejects gas 0
+	// outright. The SDK's DeductFeeDecorator guards its call the same way.
+	//
+	// The returned fee and priority are deliberately discarded. Priority on this
+	// path is computed from chargeAtos further down, not from the declared fee --
+	// see the audit note there.
+	if !simulate {
+		if _, _, err := d.txFeeChecker(ctx, tx); err != nil {
+			return ctx, err
+		}
+	}
+
 	// Partial / full ATOS payment: derive the actual amount to charge.
 	chargeAtos := computeShortfallFee(d.energyKeeper, ctx, consumed.ShortfallGas, stdFee, gasLimit)
 	if chargeAtos.IsZero() {

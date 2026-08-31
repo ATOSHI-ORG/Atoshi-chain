@@ -2,6 +2,7 @@ package ante_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -325,4 +326,76 @@ func TestDecorator_SimulateDoesTheEnergyWork(t *testing.T) {
 	// the fix `simulated` was zero here.
 	require.InDelta(t, float64(delivered), float64(simulated), float64(delivered)*0.5,
 		"simulated gas (%d) must be in the same range as delivered (%d)", simulated, delivered)
+}
+
+// TestDecorator_ShortfallPathRunsFeeChecker locks in that a tx which pays ATOS
+// for an energy shortfall still has its declared fee validated.
+//
+// This path used to skip txFeeChecker outright. Because the base fee check
+// lives in that checker (app/ante/evm.NewDynamicFeeChecker), the EIP-1559 base
+// fee went unenforced for every Cosmos tx whose payer had any shortfall -- the
+// common case. The governance min gas price was still applied by
+// NewMinGasPriceDecorator earlier in the chain, so this was invisible to any
+// test that only probed below the floor; it took a gas price sitting between
+// the floor and the base fee to expose it.
+func TestDecorator_ShortfallPathRunsFeeChecker(t *testing.T) {
+	k, bank, ak, ctx := newTestEnv(t)
+	signer := sdk.AccAddress([]byte("alice___________________"))
+	ak.exists[signer.String()] = true
+	bank.balances[signer.String()] = math.NewIntWithDecimal(30_000, 18) // capacity 50k
+	k.Settle(ctx, signer)
+	ctx = ctx.WithBlockTime(ctx.BlockTime().Add(24 * time.Hour))
+
+	sentinel := errors.New("fee checker rejected the declared fee")
+	called := false
+	rejectingChecker := func(_ sdk.Context, _ sdk.Tx) (sdk.Coins, int64, error) {
+		called = true
+		return nil, 0, sentinel
+	}
+
+	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, rejectingChecker)
+	// gas_limit 100k against a 50k energy capacity, so ShortfallGas is 50k and
+	// the decorator takes the ATOS-charging path rather than the zero-fee one.
+	tx := fakeFeeTx{
+		gas:      100_000,
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(100_000))),
+		feePayer: signer,
+		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
+	}
+
+	_, err := d.AnteHandle(ctx, tx, false, terminalAnte)
+	require.True(t, called, "txFeeChecker must run on the shortfall path")
+	require.ErrorIs(t, err, sentinel, "the checker's rejection must abort the tx")
+	require.Nil(t, bank.lastAmt, "no ATOS may be moved once the fee is rejected")
+}
+
+// TestDecorator_ShortfallPathSkipsFeeCheckerDuringSimulate mirrors the
+// zero-shortfall branch: simulation submits gas 0, which the dynamic fee
+// checker rejects outright, so running it there would break --gas auto for
+// every tx with a shortfall.
+func TestDecorator_ShortfallPathSkipsFeeCheckerDuringSimulate(t *testing.T) {
+	k, bank, ak, ctx := newTestEnv(t)
+	signer := sdk.AccAddress([]byte("alice___________________"))
+	ak.exists[signer.String()] = true
+	bank.balances[signer.String()] = math.NewIntWithDecimal(30_000, 18)
+	k.Settle(ctx, signer)
+	ctx = ctx.WithBlockTime(ctx.BlockTime().Add(24 * time.Hour))
+
+	called := false
+	rejectingChecker := func(_ sdk.Context, _ sdk.Tx) (sdk.Coins, int64, error) {
+		called = true
+		return nil, 0, errors.New("must not be reached during simulation")
+	}
+
+	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, rejectingChecker)
+	tx := fakeFeeTx{
+		gas:      100_000,
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(100_000))),
+		feePayer: signer,
+		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
+	}
+
+	_, err := d.AnteHandle(ctx, tx, true /* simulate */, terminalAnte)
+	require.NoError(t, err)
+	require.False(t, called, "txFeeChecker must not run during simulation")
 }

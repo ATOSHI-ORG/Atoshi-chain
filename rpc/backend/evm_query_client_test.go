@@ -9,14 +9,15 @@ import (
 
 	"cosmossdk.io/math"
 
+	"github.com/atoshi-chain/atoshi/v20/rpc/backend/mocks"
+	rpc "github.com/atoshi-chain/atoshi/v20/rpc/types"
+	utiltx "github.com/atoshi-chain/atoshi/v20/testutil/tx"
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
+	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	errortypes "github.com/cosmos/cosmos-sdk/types/errors"
 	grpctypes "github.com/cosmos/cosmos-sdk/types/grpc"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/atoshi-chain/atoshi/v20/rpc/backend/mocks"
-	rpc "github.com/atoshi-chain/atoshi/v20/rpc/types"
-	utiltx "github.com/atoshi-chain/atoshi/v20/testutil/tx"
-	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	mock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -32,22 +33,36 @@ import (
 // To use a mock method it has to be registered in a given test.
 var _ evmtypes.QueryClient = &mocks.EVMQueryClient{}
 
+// mockChainID is the EIP-155 chain id the backend actually puts on trace
+// requests. It parses it out of clientCtx.ChainID, which the suite sets to
+// utils.TestnetChainID, so the literal 9000 these mocks used to carry only ever
+// matched evmos. A mismatch here does not fail as a wrong value -- testify
+// reports it as "Unexpected Method Call", which reads like a missing
+// registration rather than a stale constant.
+var mockChainID = func() int64 {
+	id, err := atoshitypes.ParseChainID(ChainID)
+	if err != nil {
+		panic(err)
+	}
+	return id.Int64()
+}()
+
 // TraceTransaction
 func RegisterTraceTransactionWithPredecessors(queryClient *mocks.EVMQueryClient, msgEthTx *evmtypes.MsgEthereumTx, predecessors []*evmtypes.MsgEthereumTx) {
 	data := []byte{0x7b, 0x22, 0x74, 0x65, 0x73, 0x74, 0x22, 0x3a, 0x20, 0x22, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x22, 0x7d}
 	queryClient.On("TraceTx", rpc.ContextWithHeight(1),
-		&evmtypes.QueryTraceTxRequest{Msg: msgEthTx, BlockNumber: 1, Predecessors: predecessors, ChainId: 9000, BlockMaxGas: -1}).
+		&evmtypes.QueryTraceTxRequest{Msg: msgEthTx, BlockNumber: 1, Predecessors: predecessors, ChainId: mockChainID, BlockMaxGas: -1}).
 		Return(&evmtypes.QueryTraceTxResponse{Data: data}, nil)
 }
 
 func RegisterTraceTransaction(queryClient *mocks.EVMQueryClient, msgEthTx *evmtypes.MsgEthereumTx) {
 	data := []byte{0x7b, 0x22, 0x74, 0x65, 0x73, 0x74, 0x22, 0x3a, 0x20, 0x22, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x22, 0x7d}
-	queryClient.On("TraceTx", rpc.ContextWithHeight(1), &evmtypes.QueryTraceTxRequest{Msg: msgEthTx, BlockNumber: 1, ChainId: 9000, BlockMaxGas: -1}).
+	queryClient.On("TraceTx", rpc.ContextWithHeight(1), &evmtypes.QueryTraceTxRequest{Msg: msgEthTx, BlockNumber: 1, ChainId: mockChainID, BlockMaxGas: -1}).
 		Return(&evmtypes.QueryTraceTxResponse{Data: data}, nil)
 }
 
 func RegisterTraceTransactionError(queryClient *mocks.EVMQueryClient, msgEthTx *evmtypes.MsgEthereumTx) {
-	queryClient.On("TraceTx", rpc.ContextWithHeight(1), &evmtypes.QueryTraceTxRequest{Msg: msgEthTx, BlockNumber: 1, ChainId: 9000}).
+	queryClient.On("TraceTx", rpc.ContextWithHeight(1), &evmtypes.QueryTraceTxRequest{Msg: msgEthTx, BlockNumber: 1, ChainId: mockChainID}).
 		Return(nil, errortypes.ErrInvalidRequest)
 }
 
@@ -55,7 +70,7 @@ func RegisterTraceTransactionError(queryClient *mocks.EVMQueryClient, msgEthTx *
 func RegisterTraceBlock(queryClient *mocks.EVMQueryClient, txs []*evmtypes.MsgEthereumTx) {
 	data := []byte{0x7b, 0x22, 0x74, 0x65, 0x73, 0x74, 0x22, 0x3a, 0x20, 0x22, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x22, 0x7d}
 	queryClient.On("TraceBlock", rpc.ContextWithHeight(1),
-		&evmtypes.QueryTraceBlockRequest{Txs: txs, BlockNumber: 1, TraceConfig: &evmtypes.TraceConfig{}, ChainId: 9000, BlockMaxGas: -1}).
+		&evmtypes.QueryTraceBlockRequest{Txs: txs, BlockNumber: 1, TraceConfig: &evmtypes.TraceConfig{}, ChainId: mockChainID, BlockMaxGas: -1}).
 		Return(&evmtypes.QueryTraceBlockResponse{Data: data}, nil)
 }
 
