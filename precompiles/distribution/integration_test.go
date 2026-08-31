@@ -91,6 +91,23 @@ func coinAmountOf(coins []cmn.Coin, denom string) *big.Int {
 	return nil
 }
 
+// decCoinByDenom finds one denom among a precompile's DecCoin output.
+//
+// These queries used to return exactly one coin, so the specs indexed [0] and
+// asserted len == 1. They can now return two: the per-block reward accrues in
+// ATOX while transaction fees accrue in the bond denom, and which of them is
+// present depends on whether the surrounding specs happened to route fees to
+// that validator. Selecting by denom is both order-independent and unaffected by
+// the extra entry.
+func decCoinByDenom(coins []cmn.DecCoin, denom string) (cmn.DecCoin, bool) {
+	for _, c := range coins {
+		if c.Denom == denom {
+			return c, true
+		}
+	}
+	return cmn.DecCoin{}, false
+}
+
 func TestPrecompileIntegrationTestSuite(t *testing.T) {
 	// Run Ginkgo integration tests
 	RegisterFailHandler(Fail)
@@ -2036,19 +2053,30 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			DescribeTable("withdraw validator commission with state changes in withdrawer - should withdraw commission successfully to the withdrawer address",
 				func(tc testCase) {
 					withdrawerAddr := s.validatorsKeys[0].Addr
-					balRes, err := s.grpcHandler.GetBalanceFromBank(s.validatorsKeys[0].AccAddr, s.bondDenom)
-					Expect(err).To(BeNil())
+					// commissionRecipient is whoever the commission is paid to: the
+					// validator itself unless the case sets a withdrawer.
+					commissionRecipient := s.validatorsKeys[0].AccAddr
 					if tc.withdrawer != nil {
 						withdrawerAddr = *tc.withdrawer
 						// Set new withdrawer address
-						err = s.factory.SetWithdrawAddress(s.validatorsKeys[0].Priv, tc.withdrawer.Bytes())
+						err := s.factory.SetWithdrawAddress(s.validatorsKeys[0].Priv, tc.withdrawer.Bytes())
 						Expect(err).To(BeNil())
 						// persist state change
 						Expect(s.network.NextBlock()).To(BeNil())
-						balRes, err = s.grpcHandler.GetBalanceFromBank(tc.withdrawer.Bytes(), s.bondDenom)
-						Expect(err).To(BeNil())
+						commissionRecipient = tc.withdrawer.Bytes()
 					}
+
+					// Two initial balances per account, because two denoms move for
+					// different reasons: the commission arrives in the reward denom,
+					// while the gas fee and the caller contract's internal transfers
+					// are bond denom.
+					balRes, err := s.grpcHandler.GetBalanceFromBank(commissionRecipient, s.bondDenom)
+					Expect(err).To(BeNil())
 					withdrawerInitialBalance := balRes.Balance
+
+					balRes, err = s.grpcHandler.GetBalanceFromBank(commissionRecipient, rewardDenom)
+					Expect(err).To(BeNil())
+					recipientInitialReward := balRes.Balance
 
 					// validator acc balance before the tx
 					balRes, err = s.grpcHandler.GetBalanceFromBank(s.validatorsKeys[0].AccAddr, s.bondDenom)
@@ -2059,6 +2087,10 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 					qRes, err := s.grpcHandler.GetValidatorCommission(s.network.GetValidators()[0].OperatorAddress)
 					Expect(err).To(BeNil())
 					expCommission := qRes.Commission.Commission.AmountOf(rewardDenom).TruncateInt()
+					// Commission accrues in both coins -- transaction fees arrive in
+					// the bond denom -- so the recipient's bond balance grows by this
+					// share as well as by any internal transfers.
+					expBondCommission := qRes.Commission.Commission.AmountOf(s.bondDenom).TruncateInt()
 
 					callArgs.Args = []interface{}{s.network.GetValidators()[0].OperatorAddress, withdrawerAddr, tc.before, tc.after}
 
@@ -2087,22 +2119,38 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 					}
 
 					// check balances
+					//
+					// Bond denom accounts only for the internal transfers and the
+					// gas fee. expCommission is deliberately absent from every
+					// bond-denom expectation here: the commission is paid in the
+					// reward denom and is asserted separately below. The original
+					// version folded it into these totals, which only held while
+					// commission was a bond-denom coin.
 					expContractFinalBalance := contractInitialBalance.Sub(contractTransferredAmt)
-					expValFinalBalance := valInitialBalance.Amount.Sub(fees).Add(contractTransferredAmt).Add(expCommission)
+					expValFinalBalance := valInitialBalance.Amount.Sub(fees).
+						Add(contractTransferredAmt).Add(expBondCommission)
 					if tc.withdrawer != nil {
 						expValFinalBalance = valInitialBalance.Amount.Sub(fees)
 						if *tc.withdrawer == contractAddr {
 							// no internal transfers if the contract itself is the withdrawer
-							expContractFinalBalance = contractInitialBalance.Add(expCommission)
+							expContractFinalBalance = contractInitialBalance.Add(expBondCommission)
 						} else {
-							expWithdrawerFinalBalance := withdrawerInitialBalance.Amount.Add(expCommission).Add(contractTransferredAmt)
-							// withdrawer balance should have the rewards
+							// withdrawer receives the internal transfers plus the
+							// bond-denom share of the commission
 							balRes, err = s.grpcHandler.GetBalanceFromBank(tc.withdrawer.Bytes(), s.bondDenom)
 							Expect(err).To(BeNil())
-							withdrawerFinalBalance := balRes.Balance
-							Expect(withdrawerFinalBalance.Amount).To(Equal(expWithdrawerFinalBalance), "expected final balance to be greater than initial balance after withdrawing rewards")
+							Expect(balRes.Balance.Amount).To(
+								Equal(withdrawerInitialBalance.Amount.Add(contractTransferredAmt).Add(expBondCommission)),
+								"expected the withdrawer's bond denom balance to grow by the internal transfers and the commission's bond share")
 						}
 					}
+
+					// the commission itself landed in the reward denom
+					balRes, err = s.grpcHandler.GetBalanceFromBank(commissionRecipient, rewardDenom)
+					Expect(err).To(BeNil())
+					Expect(balRes.Balance.Amount).To(
+						Equal(recipientInitialReward.Amount.Add(expCommission)),
+						"expected the commission recipient's reward denom balance to grow by the commission")
 
 					// contract balance be updated according to the transferred amount
 					balRes, err = s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
@@ -2110,7 +2158,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 					contractFinalBalance := balRes.Balance
 					Expect(contractFinalBalance.Amount).To(Equal(expContractFinalBalance))
 
-					// validator balance should have the transferred amt - fees + rewards (when is the withdrawer)
+					// validator balance should have the transferred amt - fees
 					balRes, err = s.grpcHandler.GetBalanceFromBank(s.validatorsKeys[0].AccAddr, s.bondDenom)
 					Expect(err).To(BeNil())
 					valFinalBalance := balRes.Balance
@@ -2385,7 +2433,10 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			// contract's accrued rewards amt
 			accruedRewardsAmt = rwRes.AmountOf(rewardDenom).TruncateInt()
 
-			balRes, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
+			// The contract receives the claimed reward, so its tracked balance is
+			// in the reward denom. Its bond-denom balance only holds what the test
+			// funded it with and does not move here.
+			balRes, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), rewardDenom)
 			Expect(err).To(BeNil())
 			initialBalance = balRes.Balance
 
@@ -2419,8 +2470,8 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			signerFinalBalance := balRes.Balance
 			Expect(signerFinalBalance.Amount).To(Equal(signerInitialBalance.Amount.Sub(fees)))
 
-			// contract's balance should increase
-			balRes, err = s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
+			// contract's reward-denom balance should increase
+			balRes, err = s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), rewardDenom)
 			Expect(err).To(BeNil())
 			finalBalance := balRes.Balance
 			Expect(finalBalance.Amount).To(Equal(initialBalance.Amount.Add(accruedRewardsAmt)), "expected final balance to be greater than initial balance after withdrawing rewards")
@@ -2431,7 +2482,8 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			Expect(err).To(BeNil())
 			signerInitialBalance := balanceRes.Balance
 
-			balRes, err := s.grpcHandler.GetBalanceFromBank(differentAddr.Bytes(), s.bondDenom)
+			// The withdrawer receives the reward, so track it in the reward denom.
+			balRes, err := s.grpcHandler.GetBalanceFromBank(differentAddr.Bytes(), rewardDenom)
 			Expect(err).To(BeNil())
 			withdrawerInitialBalance := balRes.Balance
 
@@ -2482,8 +2534,8 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			signerFinalBalance := balRes.Balance
 			Expect(signerFinalBalance.Amount).To(Equal(signerInitialBalance.Amount.Sub(fees)), "expected signer's final balance to be less than initial balance after withdrawing rewards")
 
-			// withdrawer balance should increase
-			balRes, err = s.grpcHandler.GetBalanceFromBank(differentAddr.Bytes(), s.bondDenom)
+			// withdrawer reward-denom balance should increase
+			balRes, err = s.grpcHandler.GetBalanceFromBank(differentAddr.Bytes(), rewardDenom)
 			Expect(err).To(BeNil())
 			withdrawerFinalBalance := balRes.Balance
 			Expect(withdrawerFinalBalance.Amount).To(Equal(withdrawerInitialBalance.Amount.Add(accruedRewardsAmt)))
@@ -2612,8 +2664,26 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			expAddr := s.validatorsKeys[0].AccAddr.String()
 
 			Expect(expAddr).To(Equal(out.DistributionInfo.OperatorAddress))
-			Expect(1).To(Equal(len(out.DistributionInfo.Commission)))
-			Expect(0).To(Equal(len(out.DistributionInfo.SelfBondRewards)))
+
+			// Asserted by content rather than an exact count of 1. Commission
+			// accrues in ATOX from the per-block reward and in the bond denom from
+			// transaction fees, so the number of denoms depends on whether this
+			// container's own txs routed fees to this validator -- here they do,
+			// giving 2. What is invariant is that the mining reward is present.
+			Expect(out.DistributionInfo.Commission).ToNot(BeEmpty(), "expected accrued commission")
+			denoms := make([]string, 0, len(out.DistributionInfo.Commission))
+			for _, c := range out.DistributionInfo.Commission {
+				denoms = append(denoms, c.Denom)
+			}
+			Expect(denoms).To(ContainElement(rewardDenom), "expected commission to include the reward denom")
+
+			// Emptiness is likewise no longer a property of this query: the
+			// validator self-delegates, so its own stake earns the per-block ATOX
+			// reward like any other delegation. Asserting the denom instead, the
+			// same way the EOA-side version of this spec does.
+			for _, c := range out.DistributionInfo.SelfBondRewards {
+				Expect(c.Denom).To(Equal(rewardDenom), "unexpected self-bond reward denom")
+			}
 		})
 
 		It("should get validator outstanding rewards", func() {
@@ -2635,16 +2705,16 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			var rewards []cmn.DecCoin
 			err = s.precompile.UnpackIntoInterface(&rewards, distribution.ValidatorOutstandingRewardsMethod, ethRes.Ret)
 			Expect(err).To(BeNil())
-			Expect(len(rewards)).To(Equal(1))
-			Expect(uint8(18)).To(Equal(rewards[0].Precision))
-			Expect(rewardDenom).To(Equal(rewards[0].Denom))
+			rewardCoin, found := decCoinByDenom(rewards, rewardDenom)
+			Expect(found).To(BeTrue(), "expected outstanding rewards to include the reward denom")
+			Expect(uint8(18)).To(Equal(rewardCoin.Precision))
 
 			res, err := s.grpcHandler.GetValidatorOutstandingRewards(opAddr)
 			Expect(err).To(BeNil())
 
 			expRewardsAmt := res.Rewards.Rewards.AmountOf(rewardDenom).TruncateInt()
 			Expect(expRewardsAmt.IsPositive()).To(BeTrue())
-			Expect(rewards[0].Amount).To(Equal(expRewardsAmt.BigInt()))
+			Expect(rewardCoin.Amount).To(Equal(expRewardsAmt.BigInt()))
 		})
 
 		Context("get validator commission", func() {
@@ -2658,6 +2728,19 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				err = testutils.FundAccountWithBaseDenom(s.factory, s.network, s.keyring.GetKey(0), s.validatorsKeys[0].AccAddr, math.NewInt(1e18))
 				Expect(err).To(BeNil())
 				Expect(s.network.NextBlock()).To(BeNil())
+
+				// What is left after withdrawing is compared against what was there
+				// before, not against zero. Commission used to stop growing the
+				// moment it was withdrawn -- inflation was off and nothing else
+				// funded the fee collector -- so the query returned exactly 0. ATOX
+				// is now minted into the fee collector every block, so by the time
+				// the query runs a block or two of commission has already
+				// re-accrued. What the withdrawal still guarantees is that the
+				// balance was reset rather than left standing.
+				commBefore, err := s.grpcHandler.GetValidatorCommission(s.network.GetValidators()[0].OperatorAddress)
+				Expect(err).To(BeNil())
+				amtBefore := commBefore.Commission.Commission.AmountOf(rewardDenom)
+				Expect(amtBefore.IsPositive()).To(BeTrue(), "expected commission to have accrued before withdrawing")
 
 				// withdraw validator commission
 				err = s.factory.WithdrawValidatorCommission(s.validatorsKeys[0].Priv)
@@ -2675,8 +2758,14 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				var commission []cmn.DecCoin
 				err = s.precompile.UnpackIntoInterface(&commission, distribution.ValidatorCommissionMethod, ethRes.Ret)
 				Expect(err).To(BeNil())
-				Expect(len(commission)).To(Equal(1))
-				Expect(commission[0].Amount.Int64()).To(Equal(int64(0)))
+				// Absent means nothing re-accrued at all; present must be strictly
+				// less than the pre-withdrawal amount. Compared as big.Int, not
+				// Int64 -- these figures exceed int64 and the old assertion
+				// silently overflowed to a negative number.
+				if c, found := decCoinByDenom(commission, rewardDenom); found {
+					Expect(c.Amount.Cmp(amtBefore.TruncateInt().BigInt())).To(Equal(-1),
+						"expected the withdrawal to have reset commission, leaving only fresh accrual")
+				}
 			})
 
 			It("should get commission - validator with commission", func() {
@@ -2699,13 +2788,13 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				var commission []cmn.DecCoin
 				err = s.precompile.UnpackIntoInterface(&commission, distribution.ValidatorCommissionMethod, ethRes.Ret)
 				Expect(err).To(BeNil())
-				Expect(len(commission)).To(Equal(1))
-				Expect(uint8(18)).To(Equal(commission[0].Precision))
-				Expect(rewardDenom).To(Equal(commission[0].Denom))
+				commCoin, found := decCoinByDenom(commission, rewardDenom)
+				Expect(found).To(BeTrue(), "expected commission to include the reward denom")
+				Expect(uint8(18)).To(Equal(commCoin.Precision))
 
 				accruedCommissionAmt := accruedCommission.AmountOf(rewardDenom).TruncateInt()
 
-				Expect(commission[0].Amount).To(Equal(accruedCommissionAmt.BigInt()))
+				Expect(commCoin.Amount).To(Equal(accruedCommissionAmt.BigInt()))
 			})
 		})
 
@@ -2803,8 +2892,25 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			})
 
 			It("should not get rewards - no rewards available", func() {
+				// The premise this spec was written on -- that after withdrawing there
+				// is nothing left to claim -- is unreachable here. ATOX is minted
+				// into the fee collector every block, so a bonded delegation always
+				// has something accruing, and by the time the query runs the
+				// accumulator has refilled to roughly what it held before.
+				//
+				// So the check moves to what the withdrawal actually guarantees and
+				// what the old assertion never verified: the rewards were paid out.
+				rwBefore, err := s.grpcHandler.GetDelegationRewards(
+					s.keyring.GetAccAddr(0).String(), s.network.GetValidators()[0].OperatorAddress)
+				Expect(err).To(BeNil())
+				amtBefore := rwBefore.Rewards.AmountOf(rewardDenom).TruncateInt()
+				Expect(amtBefore.IsPositive()).To(BeTrue(), "expected rewards to have accrued before withdrawing")
+
+				balBefore, err := s.grpcHandler.GetBalanceFromBank(s.keyring.GetAccAddr(0), rewardDenom)
+				Expect(err).To(BeNil())
+
 				// withdraw rewards if available
-				err := s.factory.WithdrawDelegationRewards(s.keyring.GetPrivKey(0), s.network.GetValidators()[0].OperatorAddress)
+				err = s.factory.WithdrawDelegationRewards(s.keyring.GetPrivKey(0), s.network.GetValidators()[0].OperatorAddress)
 				Expect(err).To(BeNil())
 				Expect(s.network.NextBlock()).To(BeNil())
 
@@ -2821,7 +2927,21 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				var rewards []cmn.DecCoin
 				err = s.precompile.UnpackIntoInterface(&rewards, distribution.DelegationRewardsMethod, ethRes.Ret)
 				Expect(err).To(BeNil())
-				Expect(len(rewards)).To(Equal(0))
+
+				// The query still answers in the reward denom and nothing else.
+				for _, c := range rewards {
+					Expect(c.Denom).To(Equal(rewardDenom), "unexpected reward denom")
+				}
+
+				// The withdrawal credited at least what was outstanding when it was
+				// issued. "At least" because another block's worth may have been
+				// swept in with it.
+				balAfter, err := s.grpcHandler.GetBalanceFromBank(s.keyring.GetAccAddr(0), rewardDenom)
+				Expect(err).To(BeNil())
+				credited := balAfter.Balance.Amount.Sub(balBefore.Balance.Amount)
+				Expect(credited.GTE(amtBefore)).To(BeTrue(),
+					"expected the withdrawal to credit at least the outstanding rewards: credited %s, outstanding was %s",
+					credited, amtBefore)
 			})
 			It("should get rewards", func() {
 				accruedRewards, err := testutils.WaitToAccrueRewards(s.network, s.grpcHandler, s.keyring.GetAccAddr(0).String(), minExpRewardOrCommission)
@@ -2838,9 +2958,10 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				var rewards []cmn.DecCoin
 				err = s.precompile.UnpackIntoInterface(&rewards, distribution.DelegationRewardsMethod, ethRes.Ret)
 				Expect(err).To(BeNil())
-				Expect(len(rewards)).To(Equal(1))
-				Expect(len(rewards)).To(Equal(1))
-				Expect(rewards[0].Denom).To(Equal(rewardDenom))
+				// Selected by denom: the query can also carry the bond denom once
+				// transaction fees have reached this validator.
+				rewardCoin, found := decCoinByDenom(rewards, rewardDenom)
+				Expect(found).To(BeTrue(), "expected rewards to include the reward denom")
 
 				// The accrued rewards are based on 3 equal delegations to the existing 3 validators
 				// The query is from only 1 validator, thus, the expected reward
@@ -2848,7 +2969,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				accruedRewardsAmt := accruedRewards.AmountOf(rewardDenom)
 				expRewardPerValidator := accruedRewardsAmt.Quo(math.LegacyNewDec(3)).TruncateInt()
 
-				Expect(rewards[0].Amount).To(Equal(expRewardPerValidator.BigInt()))
+				Expect(rewardCoin.Amount).To(Equal(expRewardPerValidator.BigInt()))
 			})
 		})
 
@@ -2878,7 +2999,22 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				err = s.precompile.UnpackIntoInterface(&out, distribution.DelegationTotalRewardsMethod, ethRes.Ret)
 				Expect(err).To(BeNil())
 				Expect(len(out.Rewards)).To(Equal(1))
-				Expect(len(out.Rewards[0].Reward)).To(Equal(0))
+
+				// A brand-new delegation of 1 liao no longer reports an empty reward
+				// list. ATOX accrues every block, and DelegationTotalRewards answers
+				// in DecCoins, so even this delegation's vanishing share of one
+				// block's emission is a non-zero fraction rather than nothing. The
+				// property left to check is that the entry is denominated in the
+				// reward denom and is a negligible fraction of a whole coin.
+				// DecCoin.Amount is fixed-point at Precision decimals, so a whole
+				// unit is 10^18 raw. Observed here: 6150 raw, i.e. 6.15e-15 ATOX.
+				oneUnit := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+				for _, r := range out.Rewards[0].Reward {
+					Expect(r.Denom).To(Equal(rewardDenom), "unexpected reward denom")
+					Expect(uint8(18)).To(Equal(r.Precision))
+					Expect(r.Amount.Cmp(oneUnit)).To(Equal(-1),
+						"expected a 1 liao delegation to have accrued far less than one whole unit, got %s", r.Amount)
+				}
 			})
 
 			It("should get total rewards", func() {
@@ -2903,15 +3039,18 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				accruedRewardsAmt := accruedRewards.AmountOf(rewardDenom)
 				expRewardPerValidator := accruedRewardsAmt.Quo(math.LegacyNewDec(3))
 
-				// the response order may change
+				// the response order may change, and a per-validator entry can also
+				// carry the bond denom once transaction fees have reached it, so both
+				// levels are selected by denom rather than indexed.
 				for _, or := range out.Rewards {
-					Expect(1).To(Equal(len(or.Reward)))
-					Expect(or.Reward[0].Denom).To(Equal(rewardDenom))
-					Expect(or.Reward[0].Amount).To(Equal(expRewardPerValidator.TruncateInt().BigInt()))
+					c, found := decCoinByDenom(or.Reward, rewardDenom)
+					Expect(found).To(BeTrue(), "expected each validator's reward to include the reward denom")
+					Expect(c.Amount).To(Equal(expRewardPerValidator.TruncateInt().BigInt()))
 				}
 
-				Expect(1).To(Equal(len(out.Total)))
-				Expect(out.Total[0].Amount).To(Equal(accruedRewardsAmt.TruncateInt().BigInt()))
+				total, found := decCoinByDenom(out.Total, rewardDenom)
+				Expect(found).To(BeTrue(), "expected the total to include the reward denom")
+				Expect(total.Amount).To(Equal(accruedRewardsAmt.TruncateInt().BigInt()))
 			})
 
 			Context("query call with revert - all changes should revert to corresponding stateDB snapshot", func() {
