@@ -182,3 +182,9 @@ func (k Keeper) validatorToAccAddress(valAddr string) (sdk.AccAddress, error) {
 func (k Keeper) getValidatorVotingPower(ctx sdk.Context, validator stakingtypes.ValidatorI) math.Int {
 	return validator.GetTokens()
 }
+
+// GetValidatorMinSelfDelegation returns the chain-wide floor on a validator's own
+// stake, in the base denom. Zero means the requirement is disabled.
+func (k Keeper) GetValidatorMinSelfDelegation(ctx sdk.Context) math.Int {
+	return k.GetParams(ctx).ValidatorMinSelfDelegation
+}

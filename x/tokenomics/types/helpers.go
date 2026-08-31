@@ -52,6 +52,10 @@ func DefaultParams() Params {
 
 		MigrationMerkleRoot:       "",
 		MigrationClaimEndTimeUnix: 0, // 0 = no deadline
+
+		// 100 million ATOS. Backed 100:1 by 1 million ERC20 ATOS on Ethereum,
+		// which is the figure the self-stake requirement was specified in.
+		ValidatorMinSelfDelegation: math.NewIntWithDecimal(1, 26),
 	}
 }
 
@@ -100,6 +104,9 @@ func (p Params) Validate() error {
 	}
 	if p.MigrationClaimEndTimeUnix < 0 {
 		return fmt.Errorf("migration claim end time cannot be negative")
+	}
+	if p.ValidatorMinSelfDelegation.IsNil() || p.ValidatorMinSelfDelegation.IsNegative() {
+		return fmt.Errorf("validator min self delegation cannot be negative")
 	}
 	return nil
 }

@@ -1071,6 +1071,7 @@ func (app *Atoshi) setAnteHandler(txConfig client.TxConfig, maxGasWanted uint64)
 		MaxTxGasWanted:         maxGasWanted,
 		TxFeeChecker:           ethante.NewDynamicFeeChecker(app.FeeMarketKeeper),
 		EnergyKeeper:           &app.EnergyKeeper,
+		TokenomicsKeeper:       app.TokenomicsKeeper,
 	}
 
 	if err := options.Validate(); err != nil {

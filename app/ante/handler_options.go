@@ -14,6 +14,7 @@ import (
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	ibckeeper "github.com/cosmos/ibc-go/v8/modules/core/keeper"
 
+	cosmosante "github.com/atoshi-chain/atoshi/v20/app/ante/cosmos"
 	evmante "github.com/atoshi-chain/atoshi/v20/app/ante/evm"
 	anteutils "github.com/atoshi-chain/atoshi/v20/app/ante/utils"
 	energykeeper "github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
@@ -38,6 +39,10 @@ type HandlerOptions struct {
 	MaxTxGasWanted         uint64
 	TxFeeChecker           ante.TxFeeChecker
 	EnergyKeeper           *energykeeper.Keeper
+	// TokenomicsKeeper supplies the chain-wide validator self-stake floor.
+	// Optional: when nil the floor is not enforced, which is what unit tests
+	// building a bare ante chain want.
+	TokenomicsKeeper cosmosante.TokenomicsKeeper
 }
 
 // Validate checks if the keepers are defined

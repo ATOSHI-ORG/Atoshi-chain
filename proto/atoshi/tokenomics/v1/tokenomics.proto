@@ -95,6 +95,24 @@ message Params {
   // migration_claim_end_time_unix is the unix-time deadline after which migration
   // claims are rejected.
   int64 migration_claim_end_time_unix = 18;
+
+  // validator_min_self_delegation is the chain-wide floor, in the base denom, on
+  // a validator's own stake.
+  //
+  // The SDK's per-validator min_self_delegation cannot express this: a validator
+  // declares its own value in MsgCreateValidator and the SDK only enforces that
+  // its self-stake stays at or above whatever it declared, so declaring 1 opts
+  // out entirely. This param is checked in the AnteHandler against both the
+  // declared min_self_delegation and the initial self-stake, which makes the
+  // SDK's existing machinery enforce the floor from then on: it unbonds any
+  // validator whose self-stake falls below its declared minimum.
+  //
+  // Zero disables the check.
+  string validator_min_self_delegation = 19 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
 }
 
 // ReleaseState tracks the global price-unlock state machine.
