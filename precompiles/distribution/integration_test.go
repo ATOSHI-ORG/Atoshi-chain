@@ -1971,7 +1971,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 		})
 
 		It("should withdraw commission successfully to withdrawer address (contract)", func() {
-			balRes, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
+			balRes, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), rewardDenom)
 			Expect(err).To(BeNil())
 			initialWithdrawerBalance := balRes.Balance
 			Expect(initialWithdrawerBalance.Amount).To(Equal(math.ZeroInt()))
@@ -2007,7 +2007,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
 			Expect(s.network.NextBlock()).To(BeNil())
 
-			balRes, err = s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
+			balRes, err = s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), rewardDenom)
 			Expect(err).To(BeNil())
 			finalWithdrawerBalance := balRes.Balance
 			Expect(finalWithdrawerBalance.Amount).To(Equal(initialWithdrawerBalance.Amount.Add(accruedCommissionAmt)), "expected final balance to be equal to initial balance + validator commission")
