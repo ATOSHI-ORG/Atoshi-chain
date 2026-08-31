@@ -1225,8 +1225,9 @@ func (app *Atoshi) DefaultGenesis() atoshitypes.GenesisState {
 	return gen
 }
 
-// WithNativeDenomMetadata adds the native coin's bank denom metadata to a
-// default genesis, unless the operator already supplied an entry for it.
+// WithNativeDenomMetadata adds bank denom metadata for both native coins --
+// ATOS and ATOX -- to a default genesis, skipping any the operator already
+// supplied an entry for.
 //
 // x/bank's default genesis carries no metadata, and nothing registers any for
 // the native denom afterwards -- SetDenomMetaData is only reached when
@@ -1292,25 +1293,57 @@ func WithNativeDenomMetadata(cdc codec.Codec, gen atoshitypes.GenesisState, chai
 	var bankGen banktypes.GenesisState
 	cdc.MustUnmarshalJSON(raw, &bankGen)
 
-	for _, md := range bankGen.DenomMetadata {
-		if md.Base == coinInfo.Denom {
-			return
-		}
+	// Keyed on the display denom, not the base denom: BaseDenom and
+	// BaseDenomTestnet are both "liao", so comparing base denoms matches every
+	// chain and would label mainnet ATOX as ATOXtest.
+	atoxDisplay := atoshitypes.AtoxDisplayDenom
+	if coinInfo.DisplayDenom == atoshitypes.DisplayDenomTestnet {
+		atoxDisplay = atoshitypes.AtoxDisplayDenomTestnet
 	}
 
-	bankGen.DenomMetadata = append(bankGen.DenomMetadata, banktypes.Metadata{
-		Description: fmt.Sprintf("The native staking and gas token of the Atoshi chain. 1 %s = 10^%d %s.",
-			coinInfo.DisplayDenom, coinInfo.Decimals, coinInfo.Denom),
-		Base: coinInfo.Denom,
-		// NOTE: denom units MUST be in increasing exponent order.
-		DenomUnits: []*banktypes.DenomUnit{
-			{Denom: coinInfo.Denom, Exponent: 0},
-			{Denom: coinInfo.DisplayDenom, Exponent: uint32(coinInfo.Decimals)},
+	wanted := []banktypes.Metadata{
+		{
+			Description: fmt.Sprintf("The native staking and gas token of the Atoshi chain. 1 %s = 10^%d %s.",
+				coinInfo.DisplayDenom, coinInfo.Decimals, coinInfo.Denom),
+			Base: coinInfo.Denom,
+			// NOTE: denom units MUST be in increasing exponent order.
+			DenomUnits: []*banktypes.DenomUnit{
+				{Denom: coinInfo.Denom, Exponent: 0},
+				{Denom: coinInfo.DisplayDenom, Exponent: uint32(coinInfo.Decimals)},
+			},
+			Name:    coinInfo.DisplayDenom,
+			Symbol:  coinInfo.DisplayDenom,
+			Display: coinInfo.DisplayDenom,
 		},
-		Name:    coinInfo.DisplayDenom,
-		Symbol:  coinInfo.DisplayDenom,
-		Display: coinInfo.DisplayDenom,
-	})
+		// ATOX needs an entry just as much as ATOS does. It is the coin staking
+		// rewards are actually paid in -- x/tokenomics mints it per block into the
+		// fee collector and x/distribution splits it among validators and
+		// delegators -- so every wallet and explorer that renders a reward balance
+		// reads this. Without it they cannot know ATOX has 18 decimals and would
+		// show the raw aatox integer instead of an ATOX amount.
+		{
+			Description: fmt.Sprintf("The mining-reward token of the Atoshi chain, convertible to %s as tier releases land. 1 %s = 10^%d %s.",
+				coinInfo.DisplayDenom, atoxDisplay, atoshitypes.AtoxBaseDenomUnit, atoshitypes.AtoxBaseDenom),
+			Base: atoshitypes.AtoxBaseDenom,
+			DenomUnits: []*banktypes.DenomUnit{
+				{Denom: atoshitypes.AtoxBaseDenom, Exponent: 0},
+				{Denom: atoxDisplay, Exponent: atoshitypes.AtoxBaseDenomUnit},
+			},
+			Name:    atoxDisplay,
+			Symbol:  atoxDisplay,
+			Display: atoxDisplay,
+		},
+	}
+
+	present := make(map[string]bool, len(bankGen.DenomMetadata))
+	for _, md := range bankGen.DenomMetadata {
+		present[md.Base] = true
+	}
+	for _, md := range wanted {
+		if !present[md.Base] {
+			bankGen.DenomMetadata = append(bankGen.DenomMetadata, md)
+		}
+	}
 
 	gen[banktypes.ModuleName] = cdc.MustMarshalJSON(&bankGen)
 }
