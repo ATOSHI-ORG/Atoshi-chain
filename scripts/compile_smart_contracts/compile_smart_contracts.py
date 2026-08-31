@@ -168,8 +168,13 @@ def copy_to_contracts_directory(target_dir: Path, contracts: List[Contract]) -> 
 
 def is_evmos_repo(path: Path) -> bool:
     """
-    This function checks if the given path is the root of the Evmos repository,
+    This function checks if the given path is the root of this repository,
     where this script is designed to be executed.
+
+    The module path is matched against both the fork's own path and the
+    upstream evmos one. It only checked for the upstream path, which the fork
+    renamed, so the script refused to run at all -- and with it the only
+    supported way to regenerate the Solidity test artifacts.
     """
 
     contents = os.listdir(path)
@@ -183,7 +188,10 @@ def is_evmos_repo(path: Path) -> bool:
             if not line:
                 break
 
-            if "module github.com/evmos/evmos" in line:
+            if (
+                "module github.com/atoshi-chain/atoshi" in line
+                or "module github.com/evmos/evmos" in line
+            ):
                 return True
 
     return False
