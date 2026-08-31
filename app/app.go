@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 
 	autocliv1 "cosmossdk.io/api/cosmos/autocli/v1"
 	reflectionv1 "cosmossdk.io/api/cosmos/reflection/v1"
@@ -162,17 +163,17 @@ import (
 	hlcoretypes "github.com/bcp-innovations/hyperlane-cosmos/x/core/types"
 
 	atox "github.com/atoshi-chain/atoshi/v20/x/atox"
+	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
+	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
 	bridgeadapter "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter"
 	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
 	batypes "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types"
-	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
-	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
-	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
-	tokenomicskeeper "github.com/atoshi-chain/atoshi/v20/x/tokenomics/keeper"
-	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 	energy "github.com/atoshi-chain/atoshi/v20/x/energy"
 	energykeeper "github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
 	energytypes "github.com/atoshi-chain/atoshi/v20/x/energy/types"
+	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
+	tokenomicskeeper "github.com/atoshi-chain/atoshi/v20/x/tokenomics/keeper"
+	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 	"github.com/atoshi-chain/atoshi/v20/x/vesting"
 	vestingkeeper "github.com/atoshi-chain/atoshi/v20/x/vesting/keeper"
 	vestingtypes "github.com/atoshi-chain/atoshi/v20/x/vesting/types"
@@ -213,21 +214,21 @@ var (
 
 	// module account permissions
 	maccPerms = map[string][]string{
-		authtypes.FeeCollectorName:     {authtypes.Burner},
-		distrtypes.ModuleName:          nil,
-		stakingtypes.BondedPoolName:    {authtypes.Burner, authtypes.Staking},
-		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
-		govtypes.ModuleName:            {authtypes.Burner},
-		ibctransfertypes.ModuleName:    {authtypes.Minter, authtypes.Burner},
-		icatypes.ModuleName:            nil,
-		evmtypes.ModuleName:            {authtypes.Minter, authtypes.Burner}, // used for secure addition and subtraction of balance using module account
-		inflationtypes.ModuleName:      {authtypes.Minter},
-		erc20types.ModuleName:          {authtypes.Minter, authtypes.Burner},
-		oracletypes.ModuleName:         nil,
-		tokenomicstypes.ModuleName:     {authtypes.Minter},
-		tokenomicstypes.MinerPoolName:       {authtypes.Minter},
-		tokenomicstypes.ProjectPoolName:     {authtypes.Minter},
-		tokenomicstypes.MigrationPoolName:   {authtypes.Minter},
+		authtypes.FeeCollectorName:        {authtypes.Burner},
+		distrtypes.ModuleName:             nil,
+		stakingtypes.BondedPoolName:       {authtypes.Burner, authtypes.Staking},
+		stakingtypes.NotBondedPoolName:    {authtypes.Burner, authtypes.Staking},
+		govtypes.ModuleName:               {authtypes.Burner},
+		ibctransfertypes.ModuleName:       {authtypes.Minter, authtypes.Burner},
+		icatypes.ModuleName:               nil,
+		evmtypes.ModuleName:               {authtypes.Minter, authtypes.Burner}, // used for secure addition and subtraction of balance using module account
+		inflationtypes.ModuleName:         {authtypes.Minter},
+		erc20types.ModuleName:             {authtypes.Minter, authtypes.Burner},
+		oracletypes.ModuleName:            nil,
+		tokenomicstypes.ModuleName:        {authtypes.Minter},
+		tokenomicstypes.MinerPoolName:     {authtypes.Minter},
+		tokenomicstypes.ProjectPoolName:   {authtypes.Minter},
+		tokenomicstypes.MigrationPoolName: {authtypes.Minter},
 		// Minter to emit ATOX as block rewards; Burner because the ATOX transfer
 		// fee is burned, which is what recycles it back into the mining pool.
 		atoxtypes.ModuleName:       {authtypes.Minter, authtypes.Burner},
@@ -236,10 +237,10 @@ var (
 		// only holds interchain gas-paymaster fees that relayers pay in and the
 		// IGP owner claims out. Granting Minter to a bridge module would let a
 		// compromised mailbox print the gas token.
-		hlcoretypes.ModuleName: nil,
-		energytypes.ModuleName:              nil,
-		energytypes.LockedEnergyPoolName:    nil,
-		ratelimittypes.ModuleName:      nil,
+		hlcoretypes.ModuleName:           nil,
+		energytypes.ModuleName:           nil,
+		energytypes.LockedEnergyPoolName: nil,
+		ratelimittypes.ModuleName:        nil,
 	}
 )
 
@@ -296,16 +297,16 @@ type Atoshi struct {
 	FeeMarketKeeper feemarketkeeper.Keeper
 
 	// Evmos keepers
-	InflationKeeper inflationkeeper.Keeper
-	Erc20Keeper     erc20keeper.Keeper
-	EpochsKeeper    epochskeeper.Keeper
-	VestingKeeper   vestingkeeper.Keeper
-	OracleKeeper    oraclekeeper.Keeper
-	TokenomicsKeeper tokenomicskeeper.Keeper
-	AtoxKeeper       atoxkeeper.Keeper
-	HyperlaneKeeper  *hlcorekeeper.Keeper
+	InflationKeeper     inflationkeeper.Keeper
+	Erc20Keeper         erc20keeper.Keeper
+	EpochsKeeper        epochskeeper.Keeper
+	VestingKeeper       vestingkeeper.Keeper
+	OracleKeeper        oraclekeeper.Keeper
+	TokenomicsKeeper    tokenomicskeeper.Keeper
+	AtoxKeeper          atoxkeeper.Keeper
+	HyperlaneKeeper     *hlcorekeeper.Keeper
 	BridgeAdapterKeeper bakeeper.Keeper
-	EnergyKeeper    energykeeper.Keeper
+	EnergyKeeper        energykeeper.Keeper
 
 	// the module manager
 	mm                 *module.Manager
@@ -1216,9 +1217,102 @@ func (app *Atoshi) AppCodec() codec.Codec {
 	return app.appCodec
 }
 
-// DefaultGenesis returns a default genesis from the registered AppModuleBasic's.
+// DefaultGenesis returns a default genesis from the registered AppModuleBasic's,
+// with bank denom metadata for the native coin filled in.
 func (app *Atoshi) DefaultGenesis() atoshitypes.GenesisState {
-	return app.BasicModuleManager.DefaultGenesis(app.appCodec)
+	gen := app.BasicModuleManager.DefaultGenesis(app.appCodec)
+	WithNativeDenomMetadata(app.appCodec, gen, app.ChainID())
+	return gen
+}
+
+// WithNativeDenomMetadata adds the native coin's bank denom metadata to a
+// default genesis, unless the operator already supplied an entry for it.
+//
+// x/bank's default genesis carries no metadata, and nothing registers any for
+// the native denom afterwards -- SetDenomMetaData is only reached when
+// governance registers an ERC20 token pair. So `atoshid init` produced a
+// genesis whose denom_metadata was an empty list.
+//
+// That is not cosmetic. erc20's default genesis already registers a token pair
+// for the native denom, and the ERC20 precompile answers decimals(), name() and
+// symbol() from bank metadata; with none present it falls back to inferring the
+// unit from the denom's leading SI prefix, and "liao" has none, so all three
+// revert. Wallets, explorers and DEXes read decimals(). See
+// precompiles/erc20/query.go.
+//
+// Kept as a genesis default rather than an InitGenesis side effect so that the
+// value stays visible and editable in genesis.json, and so exported state
+// round-trips unchanged.
+// WithNativeDenomMetadataOf is the value-returning form, for the genesis
+// producers in cmd/atoshid that build from module.BasicManager.DefaultGenesis
+// and never reach (*Atoshi).DefaultGenesis.
+func WithNativeDenomMetadataOf(gen map[string]json.RawMessage, cdc codec.Codec, chainID string) map[string]json.RawMessage {
+	WithNativeDenomMetadata(cdc, gen, chainID)
+	return gen
+}
+
+// WithNativeDenomMetadata adds the native coin's bank denom metadata to a
+// default genesis, unless the operator already supplied an entry for it.
+//
+// x/bank's default genesis carries no metadata, and nothing registers any for
+// the native denom afterwards -- SetDenomMetaData is only reached when
+// governance registers an ERC20 token pair. So `atoshid init` produced a
+// genesis whose denom_metadata was an empty list.
+//
+// That is not cosmetic. erc20's default genesis already registers a token pair
+// for the native denom, and the ERC20 precompile answers decimals(), name() and
+// symbol() from bank metadata; with none present it falls back to inferring the
+// unit from the denom's leading SI prefix, and "liao" has none, so all three
+// revert. Wallets, explorers and DEXes read decimals(). See
+// precompiles/erc20/query.go.
+//
+// The denom comes from ChainsCoinInfo keyed on the chain id -- the same table
+// AtoshiAppOptions uses -- and NOT from evmtypes.GetEVMCoinDenom(). That global
+// is populated by the configurator during app construction and is still nil
+// while `atoshid init` runs, so reading it here panicked before the command
+// could write a genesis at all. An unknown chain id is left alone rather than
+// guessed at: the operator gets a genesis with no metadata, which
+// docs/check_genesis.py reports, instead of one silently carrying the wrong
+// denom.
+//
+// Kept as a genesis default rather than an InitGenesis side effect so that the
+// value stays visible and editable in genesis.json, and so exported state
+// round-trips unchanged.
+func WithNativeDenomMetadata(cdc codec.Codec, gen atoshitypes.GenesisState, chainID string) {
+	raw, ok := gen[banktypes.ModuleName]
+	if !ok {
+		return
+	}
+
+	coinInfo, found := evmtypes.ChainsCoinInfo[strings.Split(chainID, "-")[0]]
+	if !found {
+		return
+	}
+
+	var bankGen banktypes.GenesisState
+	cdc.MustUnmarshalJSON(raw, &bankGen)
+
+	for _, md := range bankGen.DenomMetadata {
+		if md.Base == coinInfo.Denom {
+			return
+		}
+	}
+
+	bankGen.DenomMetadata = append(bankGen.DenomMetadata, banktypes.Metadata{
+		Description: fmt.Sprintf("The native staking and gas token of the Atoshi chain. 1 %s = 10^%d %s.",
+			coinInfo.DisplayDenom, coinInfo.Decimals, coinInfo.Denom),
+		Base: coinInfo.Denom,
+		// NOTE: denom units MUST be in increasing exponent order.
+		DenomUnits: []*banktypes.DenomUnit{
+			{Denom: coinInfo.Denom, Exponent: 0},
+			{Denom: coinInfo.DisplayDenom, Exponent: uint32(coinInfo.Decimals)},
+		},
+		Name:    coinInfo.DisplayDenom,
+		Symbol:  coinInfo.DisplayDenom,
+		Display: coinInfo.DisplayDenom,
+	})
+
+	gen[banktypes.ModuleName] = cdc.MustMarshalJSON(&bankGen)
 }
 
 // InterfaceRegistry returns Evmos's InterfaceRegistry
