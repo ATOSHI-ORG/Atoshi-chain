@@ -51,7 +51,26 @@ var (
 	txArgs evmtypes.EvmTxArgs
 	// minExpRewardOrCommission is the minimun coins expected for validator's rewards or commission
 	// required for the tests
-	minExpRewardOrCommission = sdk.NewDecCoins(sdk.NewDecCoin(evmostypes.BaseDenom, testRewardsAmt))
+	// rewardDenom is the denom staking rewards and validator commission are paid
+	// in. It is ATOX, not the bond denom.
+	//
+	// x/tokenomics mints the per-block reward in ATOX into the fee collector, and
+	// x/distribution splits whatever is there among validators and delegators --
+	// so on this chain the block producers earn the mining token. Inflation is
+	// disabled, so no base denom is minted at all; the only base denom reaching
+	// the fee collector is transaction fees, and the empty blocks these tests
+	// produce generate none.
+	//
+	// The s.bondDenom uses left in this file are the ones that really are about
+	// the staking coin -- delegation amounts, account balances, gas fees.
+	rewardDenom = evmostypes.AtoxBaseDenom
+
+	// Denominated in ATOX, not the base denom. Staking rewards on this chain come
+	// from x/tokenomics' per-block ATOX mint into the fee collector; inflation is
+	// disabled, so empty blocks accrue no base-denom rewards at all and waiting
+	// for them never returns. Verified from the accrual helper's own diagnostic:
+	// after 60 simulated weeks a delegator held 0 liao and ~1.1e24 aatox.
+	minExpRewardOrCommission = sdk.NewDecCoins(sdk.NewDecCoin(evmostypes.AtoxBaseDenom, testRewardsAmt))
 )
 
 func TestPrecompileIntegrationTestSuite(t *testing.T) {
@@ -229,10 +248,10 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			// The query is from only 1 validator, thus, the expected reward
 			// for this delegation is totalAccruedRewards / validatorsCount (3)
 			valCount := len(s.network.GetValidators())
-			accruedRewardsAmt := accruedRewards.AmountOf(s.bondDenom)
+			accruedRewardsAmt := accruedRewards.AmountOf(rewardDenom)
 			expRewardPerValidator := accruedRewardsAmt.Quo(math.LegacyNewDec(int64(valCount)))
 
-			Expect(rewards[0].Denom).To(Equal(s.bondDenom))
+			Expect(rewards[0].Denom).To(Equal(rewardDenom))
 			Expect(rewards[0].Amount).To(Equal(expRewardPerValidator.TruncateInt().BigInt()))
 
 			// check that the rewards were added to the balance
@@ -261,7 +280,7 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			// get rewards
 			rwRes, err := s.grpcHandler.GetDelegationRewards(s.keyring.GetAccAddr(0).String(), s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			expRewardsAmt := rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+			expRewardsAmt := rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 			txArgs.GasPrice = gasPrice.BigInt()
 			callArgs.Args = []interface{}{
@@ -287,7 +306,7 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			Expect(err).To(BeNil())
 			Expect(len(rewards)).To(Equal(1))
 
-			Expect(rewards[0].Denom).To(Equal(s.bondDenom))
+			Expect(rewards[0].Denom).To(Equal(rewardDenom))
 			Expect(rewards[0].Amount).To(Equal(expRewardsAmt.BigInt()))
 
 			// check that the delegator final balance is initialBalance - fee
@@ -340,7 +359,7 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			// get rewards
 			rwRes, err := s.grpcHandler.GetDelegationRewards(s.keyring.GetAccAddr(0).String(), s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			expRewardsAmt := rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+			expRewardsAmt := rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 			txArgs.GasPrice = gasPrice.BigInt()
 			callArgs.Args = []interface{}{
@@ -365,7 +384,7 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			err = s.precompile.UnpackIntoInterface(&rewards, distribution.WithdrawDelegatorRewardsMethod, ethRes.Ret)
 			Expect(err).To(BeNil())
 			Expect(len(rewards)).To(Equal(1))
-			Expect(rewards[0].Denom).To(Equal(s.bondDenom))
+			Expect(rewards[0].Denom).To(Equal(rewardDenom))
 			Expect(rewards[0].Amount).To(Equal(expRewardsAmt.BigInt()))
 
 			// check tx sender balance is reduced by fees paid
@@ -396,7 +415,7 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			_, err := testutils.WaitToAccrueCommission(
 				s.network, s.grpcHandler,
 				valAddr.String(),
-				sdk.NewDecCoins(sdk.NewDecCoin(s.bondDenom, expCommAmt)),
+				sdk.NewDecCoins(sdk.NewDecCoin(rewardDenom, expCommAmt)),
 			)
 			Expect(err).To(BeNil())
 
@@ -449,7 +468,7 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			// get the accrued commission amount
 			commRes, err := s.grpcHandler.GetValidatorCommission(s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			expCommAmt := commRes.Commission.Commission.AmountOf(s.bondDenom).TruncateInt()
+			expCommAmt := commRes.Commission.Commission.AmountOf(rewardDenom).TruncateInt()
 
 			callArgs.Args = []interface{}{s.network.GetValidators()[0].OperatorAddress}
 			txArgs.GasPrice = gasPrice.BigInt()
@@ -520,7 +539,7 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			// get the accrued commission amount
 			commRes, err := s.grpcHandler.GetValidatorCommission(s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			expCommAmt := commRes.Commission.Commission.AmountOf(s.bondDenom).TruncateInt()
+			expCommAmt := commRes.Commission.Commission.AmountOf(rewardDenom).TruncateInt()
 
 			callArgs.Args = []interface{}{s.network.GetValidators()[0].OperatorAddress}
 			txArgs.GasPrice = gasPrice.BigInt()
@@ -631,7 +650,7 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 
 			// get the fee paid and calculate the expFinalBalance
 			fee := gasPrice.Mul(math.NewInt(txRes.GasUsed).BigInt(), gasPrice)
-			accruedRewardsAmt := accruedRewards.AmountOf(s.bondDenom).TruncateInt()
+			accruedRewardsAmt := accruedRewards.AmountOf(rewardDenom).TruncateInt()
 			// expected balance is initial + rewards - fee
 			expBalanceAmt := initialBalance.Amount.Add(accruedRewardsAmt).Sub(math.NewIntFromBigInt(fee))
 
@@ -705,11 +724,11 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			Expect(len(rewards)).To(Equal(1))
 
 			Expect(uint8(18)).To(Equal(rewards[0].Precision))
-			Expect(s.bondDenom).To(Equal(rewards[0].Denom))
+			Expect(rewardDenom).To(Equal(rewards[0].Denom))
 
 			// the expected rewards should be the accruedRewards per validator
 			// plus the 5% commission
-			expRewardAmt := accruedRewards.AmountOf(s.bondDenom).
+			expRewardAmt := accruedRewards.AmountOf(rewardDenom).
 				Quo(math.LegacyNewDec(3)).             // divide by validators count
 				Quo(math.LegacyNewDecWithPrec(95, 2)). // add 5% commission
 				Ceil().                                // round up to get the same value
@@ -743,9 +762,9 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			Expect(err).To(BeNil())
 			Expect(len(commission)).To(Equal(1))
 			Expect(uint8(18)).To(Equal(commission[0].Precision))
-			Expect(s.bondDenom).To(Equal(commission[0].Denom))
+			Expect(rewardDenom).To(Equal(commission[0].Denom))
 
-			expCommissionAmt := accruedCommission.AmountOf(s.bondDenom).TruncateInt()
+			expCommissionAmt := accruedCommission.AmountOf(rewardDenom).TruncateInt()
 			Expect(commission[0].Amount).To(Equal(expCommissionAmt.BigInt()))
 		})
 
@@ -865,9 +884,9 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			// The accrued rewards are based on 3 equal delegations to the existing 3 validators
 			// The query is from only 1 validator, thus, the expected reward
 			// for this delegation is totalAccruedRewards / validatorsCount (3)
-			expRewardAmt := accruedRewards.AmountOf(s.bondDenom).Quo(math.LegacyNewDec(3))
+			expRewardAmt := accruedRewards.AmountOf(rewardDenom).Quo(math.LegacyNewDec(3))
 
-			Expect(rewards[0].Denom).To(Equal(s.bondDenom))
+			Expect(rewards[0].Denom).To(Equal(rewardDenom))
 			Expect(rewards[0].Amount).To(Equal(expRewardAmt.TruncateInt().BigInt()))
 		})
 
@@ -896,13 +915,13 @@ var _ = Describe("Calling distribution precompile from EOA", func() {
 			// The accrued rewards are based on 3 equal delegations to the existing 3 validators
 			// The query is from only 1 validator, thus, the expected reward
 			// for this delegation is totalAccruedRewards / validatorsCount (3)
-			accruedRewardsAmt := accruedRewards.AmountOf(s.bondDenom)
+			accruedRewardsAmt := accruedRewards.AmountOf(rewardDenom)
 			expRewardPerValidator := accruedRewardsAmt.Quo(math.LegacyNewDec(3))
 
 			// the response order may change
 			for _, or := range out.Rewards {
 				Expect(1).To(Equal(len(or.Reward)))
-				Expect(or.Reward[0].Denom).To(Equal(s.bondDenom))
+				Expect(or.Reward[0].Denom).To(Equal(rewardDenom))
 				Expect(or.Reward[0].Amount).To(Equal(expRewardPerValidator.TruncateInt().BigInt()))
 			}
 
@@ -1160,7 +1179,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 
 			rwRes, err := s.grpcHandler.GetDelegationRewards(s.keyring.GetAccAddr(0).String(), s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			expRewardsAmt := rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+			expRewardsAmt := rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 			logCheckArgs := passCheck.
 				WithExpEvents(distribution.EventTypeWithdrawDelegatorRewards)
@@ -1202,7 +1221,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			// get the expected rewards for the delegation
 			rwRes, err := s.grpcHandler.GetDelegationRewards(s.keyring.GetAccAddr(0).String(), s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			expRewardsAmt := rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+			expRewardsAmt := rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 			callArgs.Args = []interface{}{
 				s.keyring.GetAddr(0), s.network.GetValidators()[0].OperatorAddress,
@@ -1225,7 +1244,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			Expect(err).To(BeNil())
 			Expect(len(rewards)).To(Equal(1))
 
-			Expect(rewards[0].Denom).To(Equal(s.bondDenom))
+			Expect(rewards[0].Denom).To(Equal(rewardDenom))
 			Expect(rewards[0].Amount).To(Equal(expRewardsAmt.BigInt()))
 
 			// should increase withdrawer balance by rewards
@@ -1288,7 +1307,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 					// get the pending rewards to claim
 					qRes, err := s.grpcHandler.GetDelegationRewards(s.keyring.GetAccAddr(0).String(), s.network.GetValidators()[0].OperatorAddress)
 					Expect(err).To(BeNil())
-					expRewards := qRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+					expRewards := qRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 					callArgs.Args = []interface{}{
 						s.keyring.GetAddr(0), s.network.GetValidators()[0].OperatorAddress, tc.before, tc.after,
@@ -1382,7 +1401,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				// get the pending rewards to claim
 				qRes, err := s.grpcHandler.GetDelegationRewards(s.keyring.GetAccAddr(0).String(), s.network.GetValidators()[0].OperatorAddress)
 				Expect(err).To(BeNil())
-				initRewards := qRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+				initRewards := qRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 				balRes, err := s.grpcHandler.GetBalanceFromBank(s.keyring.GetAccAddr(0), s.bondDenom)
 				Expect(err).To(BeNil())
@@ -1431,7 +1450,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				// rewards to claim should be the same or more than before
 				qRes, err = s.grpcHandler.GetDelegationRewards(s.keyring.GetAccAddr(0).String(), s.network.GetValidators()[0].OperatorAddress)
 				Expect(err).To(BeNil())
-				finalRewards := qRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+				finalRewards := qRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 				Expect(finalRewards.GTE(initRewards)).To(BeTrue())
 			},
 				Entry("withdrawer addr is existing acc", testCase{
@@ -1489,7 +1508,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			Expect(err).To(BeNil())
 
 			// contract's accrued rewards amt
-			accruedRewardsAmt = rwRes.AmountOf(s.bondDenom).TruncateInt()
+			accruedRewardsAmt = rwRes.AmountOf(rewardDenom).TruncateInt()
 
 			balRes, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
 			Expect(err).To(BeNil())
@@ -1548,7 +1567,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			// get accrued rewards prev to tx
 			rwRes, err := s.grpcHandler.GetDelegationRewards(sdk.AccAddress(contractAddr.Bytes()).String(), s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			accruedRewardsAmt = rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+			accruedRewardsAmt = rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 			callArgs.Args = []interface{}{s.network.GetValidators()[0].OperatorAddress}
 			logCheckArgs := passCheck.WithExpEvents(distribution.EventTypeWithdrawDelegatorRewards)
@@ -1632,7 +1651,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				Expect(err).To(BeNil())
 
 				// contract's accrued rewards amt
-				accruedRewardsAmt = rwRes.AmountOf(s.bondDenom).TruncateInt()
+				accruedRewardsAmt = rwRes.AmountOf(rewardDenom).TruncateInt()
 
 				balRes, err := s.grpcHandler.GetBalanceFromBank(delContractAddr.Bytes(), s.bondDenom)
 				Expect(err).To(BeNil())
@@ -1658,7 +1677,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				// get the pending rewards to claim
 				rwRes, err := s.grpcHandler.GetDelegationRewards(sdk.AccAddress(delContractAddr.Bytes()).String(), s.network.GetValidators()[0].OperatorAddress)
 				Expect(err).To(BeNil())
-				expRewards := rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+				expRewards := rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 				callArgs.Args = []interface{}{delContractAddr, s.network.GetValidators()[0].OperatorAddress, true, true}
 
@@ -1693,7 +1712,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				// delegation rewards should remain be the same or higher
 				rwRes, err = s.grpcHandler.GetDelegationRewards(sdk.AccAddress(delContractAddr.Bytes()).String(), s.network.GetValidators()[0].OperatorAddress)
 				Expect(err).To(BeNil())
-				finalRewards := rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+				finalRewards := rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 				Expect(finalRewards.GTE(expRewards)).To(BeTrue())
 			})
 		})
@@ -1725,7 +1744,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			// get the pending rewards to claim
 			rwRes, err := s.grpcHandler.GetDelegationRewards(sdk.AccAddress(contractAddr.Bytes()).String(), s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			expRewards := rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+			expRewards := rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 			logCheckArgs := passCheck.WithExpEvents(distribution.EventTypeWithdrawDelegatorRewards)
 
@@ -1853,7 +1872,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 
 			qRes, err := s.grpcHandler.GetValidatorCommission(s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			accruedCommissionAmt = qRes.Commission.Commission.AmountOf(s.bondDenom).TruncateInt()
+			accruedCommissionAmt = qRes.Commission.Commission.AmountOf(rewardDenom).TruncateInt()
 
 			// validator acc balance before the tx
 			balRes, err = s.grpcHandler.GetBalanceFromBank(s.validatorsKeys[0].AccAddr, s.bondDenom)
@@ -1927,7 +1946,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 					// get the pending commission to claim
 					qRes, err := s.grpcHandler.GetValidatorCommission(s.network.GetValidators()[0].OperatorAddress)
 					Expect(err).To(BeNil())
-					expCommission := qRes.Commission.Commission.AmountOf(s.bondDenom).TruncateInt()
+					expCommission := qRes.Commission.Commission.AmountOf(rewardDenom).TruncateInt()
 
 					callArgs.Args = []interface{}{s.network.GetValidators()[0].OperatorAddress, withdrawerAddr, tc.before, tc.after}
 
@@ -2252,7 +2271,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			Expect(err).To(BeNil())
 
 			// contract's accrued rewards amt
-			accruedRewardsAmt = rwRes.AmountOf(s.bondDenom).TruncateInt()
+			accruedRewardsAmt = rwRes.AmountOf(rewardDenom).TruncateInt()
 
 			balRes, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
 			Expect(err).To(BeNil())
@@ -2331,7 +2350,7 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 
 			rwRes, err := s.grpcHandler.GetDelegationRewards(sdk.AccAddress(contractAddr.Bytes()).String(), s.network.GetValidators()[0].OperatorAddress)
 			Expect(err).To(BeNil())
-			accruedRewardsAmt = rwRes.Rewards.AmountOf(s.bondDenom).TruncateInt()
+			accruedRewardsAmt = rwRes.Rewards.AmountOf(rewardDenom).TruncateInt()
 
 			txArgs.GasLimit = 200_000
 			res2, _, err := s.factory.CallContractAndCheckLogs(
@@ -2506,12 +2525,12 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 			Expect(err).To(BeNil())
 			Expect(len(rewards)).To(Equal(1))
 			Expect(uint8(18)).To(Equal(rewards[0].Precision))
-			Expect(s.bondDenom).To(Equal(rewards[0].Denom))
+			Expect(rewardDenom).To(Equal(rewards[0].Denom))
 
 			res, err := s.grpcHandler.GetValidatorOutstandingRewards(opAddr)
 			Expect(err).To(BeNil())
 
-			expRewardsAmt := res.Rewards.Rewards.AmountOf(s.bondDenom).TruncateInt()
+			expRewardsAmt := res.Rewards.Rewards.AmountOf(rewardDenom).TruncateInt()
 			Expect(expRewardsAmt.IsPositive()).To(BeTrue())
 			Expect(rewards[0].Amount).To(Equal(expRewardsAmt.BigInt()))
 		})
@@ -2570,9 +2589,9 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				Expect(err).To(BeNil())
 				Expect(len(commission)).To(Equal(1))
 				Expect(uint8(18)).To(Equal(commission[0].Precision))
-				Expect(s.bondDenom).To(Equal(commission[0].Denom))
+				Expect(rewardDenom).To(Equal(commission[0].Denom))
 
-				accruedCommissionAmt := accruedCommission.AmountOf(s.bondDenom).TruncateInt()
+				accruedCommissionAmt := accruedCommission.AmountOf(rewardDenom).TruncateInt()
 
 				Expect(commission[0].Amount).To(Equal(accruedCommissionAmt.BigInt()))
 			})
@@ -2709,12 +2728,12 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				Expect(err).To(BeNil())
 				Expect(len(rewards)).To(Equal(1))
 				Expect(len(rewards)).To(Equal(1))
-				Expect(rewards[0].Denom).To(Equal(s.bondDenom))
+				Expect(rewards[0].Denom).To(Equal(rewardDenom))
 
 				// The accrued rewards are based on 3 equal delegations to the existing 3 validators
 				// The query is from only 1 validator, thus, the expected reward
 				// for this delegation is totalAccruedRewards / validatorsCount (3)
-				accruedRewardsAmt := accruedRewards.AmountOf(s.bondDenom)
+				accruedRewardsAmt := accruedRewards.AmountOf(rewardDenom)
 				expRewardPerValidator := accruedRewardsAmt.Quo(math.LegacyNewDec(3)).TruncateInt()
 
 				Expect(rewards[0].Amount).To(Equal(expRewardPerValidator.BigInt()))
@@ -2769,13 +2788,13 @@ var _ = Describe("Calling distribution precompile from another contract", Ordere
 				Expect(err).To(BeNil())
 
 				// The accrued rewards are based on 3 equal delegations to the existing 3 validators
-				accruedRewardsAmt := accruedRewards.AmountOf(s.bondDenom)
+				accruedRewardsAmt := accruedRewards.AmountOf(rewardDenom)
 				expRewardPerValidator := accruedRewardsAmt.Quo(math.LegacyNewDec(3))
 
 				// the response order may change
 				for _, or := range out.Rewards {
 					Expect(1).To(Equal(len(or.Reward)))
-					Expect(or.Reward[0].Denom).To(Equal(s.bondDenom))
+					Expect(or.Reward[0].Denom).To(Equal(rewardDenom))
 					Expect(or.Reward[0].Amount).To(Equal(expRewardPerValidator.TruncateInt().BigInt()))
 				}
 

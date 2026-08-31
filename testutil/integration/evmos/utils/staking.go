@@ -3,13 +3,46 @@
 package utils
 
 import (
+	"errors"
 	"time"
 
 	errorsmod "cosmossdk.io/errors"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/grpc"
 	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/network"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
+
+// errAccrualTimeout is the sentinel the bounded wait loops return, so callers
+// can tell "nothing ever accrued" apart from a query or block-production error.
+var errAccrualTimeout = errors.New("timed out waiting for accrual")
+
+// maxAccrualRounds bounds the wait loops below.
+//
+// They used to spin unbounded, each round advancing the chain a simulated week.
+// If the target denom never accrues, that is not a test failure but a hang: the
+// suite burns the whole `go test` timeout and dies in a goroutine dump with no
+// statement of what it was waiting for. It is a real trap on this chain, where
+// inflation is disabled and block rewards are paid in ATOX, so empty blocks
+// accrue no base-denom rewards at all and the condition can never be met.
+//
+// 60 rounds is over a simulated year, far past anything a legitimate test needs.
+const maxAccrualRounds = 60
+
+// accrued reports whether got covers every denom and amount in want.
+//
+// Both wait loops used to test only the base denom, ignoring whatever the
+// caller actually passed. On this chain block rewards are ATOX and inflation is
+// off, so the base denom never accrues from empty blocks and the condition was
+// unsatisfiable regardless of what the caller asked for. Honouring the caller's
+// denoms lets a test wait for the coin it really expects.
+func accrued(got, want sdk.DecCoins) bool {
+	for _, c := range want {
+		if got.AmountOf(c.Denom).LT(c.Amount) {
+			return false
+		}
+	}
+	return true
+}
 
 // WaitToAccrueRewards is a helper function that waits for rewards to
 // accumulate up to a specified expected amount
@@ -20,8 +53,14 @@ func WaitToAccrueRewards(n network.Network, gh grpc.Handler, delegatorAddr strin
 		rewards = sdk.DecCoins{}
 	)
 
-	expAmt := expRewards.AmountOf(n.GetBaseDenom())
-	for rewards.AmountOf(n.GetBaseDenom()).LT(expAmt) {
+	for i := 0; !accrued(rewards, expRewards); i++ {
+		if i >= maxAccrualRounds {
+			return nil, errorsmod.Wrapf(
+				errAccrualTimeout,
+				"rewards for %s: wanted at least %q, have %q after %d rounds (~%d simulated weeks)",
+				delegatorAddr, expRewards, rewards, i, i,
+			)
+		}
 		rewards, err = checkRewardsAfter(n, gh, delegatorAddr, lapse)
 		if err != nil {
 			return nil, errorsmod.Wrap(err, "error checking rewards")
@@ -56,8 +95,14 @@ func WaitToAccrueCommission(n network.Network, gh grpc.Handler, validatorAddr st
 		commission = sdk.DecCoins{}
 	)
 
-	expAmt := expCommission.AmountOf(n.GetBaseDenom())
-	for commission.AmountOf(n.GetBaseDenom()).LT(expAmt) {
+	for i := 0; !accrued(commission, expCommission); i++ {
+		if i >= maxAccrualRounds {
+			return nil, errorsmod.Wrapf(
+				errAccrualTimeout,
+				"commission for %s: wanted at least %q, have %q after %d rounds (~%d simulated weeks)",
+				validatorAddr, expCommission, commission, i, i,
+			)
+		}
 		commission, err = checkCommissionAfter(n, gh, validatorAddr, lapse)
 		if err != nil {
 			return nil, errorsmod.Wrap(err, "error checking commission")
