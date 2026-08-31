@@ -4,6 +4,7 @@
 package network
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -42,6 +43,7 @@ import (
 	infltypes "github.com/atoshi-chain/atoshi/v20/x/inflation/v1/types"
 
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
+	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
 
 // genSetupFn is the type for the module genesis setup functions
@@ -515,7 +517,40 @@ func newDefaultGenesisState(evmosApp *app.Atoshi, params defaultGenesisParams) e
 	genesisState = setDefaultSlashingGenesisState(evmosApp, genesisState, params.slashing)
 	genesisState = setDefaultFeeMarketGenesisState(evmosApp, genesisState, params.feeMarket)
 	genesisState = setDefaultErc20GenesisState(evmosApp, genesisState)
+	genesisState = setDefaultTokenomicsGenesisState(evmosApp, genesisState)
 
+	return genesisState
+}
+
+// setDefaultTokenomicsGenesisState disables the chain-wide validator self-stake
+// floor for integration networks.
+//
+// The production default is 100 million ATOS. Every suite that creates a
+// validator does so with a few coins, so leaving the floor on rejects those
+// MsgCreateValidator calls in the AnteHandler -- it broke x/staking/keeper,
+// x/evm/keeper and precompiles/staking with "validator min_self_delegation must
+// be at least 100000000000000000000000000, got 1".
+//
+// Turning it off here rather than restating 1e26 across those suites keeps the
+// floor a mainnet policy question and leaves the suites testing what they are
+// about. The decorator itself is covered by unit tests in
+// app/ante/cosmos/min_self_delegation_test.go, and genesis gentxs by
+// docs/check_genesis.py; a test wanting the floor on can set the param through
+// the custom-genesis hook.
+func setDefaultTokenomicsGenesisState(_ *app.Atoshi, genesisState evmostypes.GenesisState) evmostypes.GenesisState {
+	tokenomicsGen := tokenomicstypes.DefaultGenesisState()
+	tokenomicsGen.Params.ValidatorMinSelfDelegation = sdkmath.ZeroInt()
+
+	// Marshalled with encoding/json, NOT AppCodec().MustMarshalJSON, because
+	// x/tokenomics' own module.go uses encoding/json for both DefaultGenesis and
+	// InitGenesis. Proto3 JSON encodes int64 as a string, so codec-marshalled
+	// bytes fail the module's plain json.Unmarshal with "cannot unmarshal string
+	// into Go struct field Params.params.halving_interval_blocks of type int64".
+	bz, err := json.Marshal(tokenomicsGen)
+	if err != nil {
+		panic(err)
+	}
+	genesisState[tokenomicstypes.ModuleName] = bz
 	return genesisState
 }
 
