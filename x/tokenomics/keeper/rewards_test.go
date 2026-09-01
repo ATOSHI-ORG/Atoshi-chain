@@ -359,7 +359,15 @@ func TestTriggerRelease_AuthorizationCappedByPoolBalance(t *testing.T) {
 		"cannot authorise more ATOS than the miner pool holds")
 }
 
-func TestTriggerReleaseCapsProjectClaimableToPoolBalance(t *testing.T) {
+// TestTriggerReleaseCapsProjectAuthorisationToPoolBalance checks the cap on how
+// much a tier judgment may authorise.
+//
+// It used to assert on ProjectClaimable, which TriggerRelease credited directly.
+// It no longer does: per the design doc the forward leg only books the
+// authorisation and ProjectClaimable is credited from the Ethereum receipt in
+// step 4. Crediting both places double-counted every release. The cap itself is
+// unchanged, so the assertion moves to the authorisation counter.
+func TestTriggerReleaseCapsProjectAuthorisationToPoolBalance(t *testing.T) {
 	bk := newTestBankKeeper()
 	projectAddr := authtypes.NewModuleAddress(tokenomicstypes.ProjectPoolName)
 	bk.balances[projectAddr.String()] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, math.NewInt(10)))
@@ -372,7 +380,10 @@ func TestTriggerReleaseCapsProjectClaimableToPoolBalance(t *testing.T) {
 	params.ProjectReleaseShareBps = 10000
 
 	require.NoError(t, k.TriggerRelease(ctx, &state, params))
-	require.Equal(t, math.NewInt(10), k.GetProjectClaimable(ctx))
+	require.Equal(t, math.NewInt(10), state.TotalProjectReleased,
+		"cannot authorise more ATOS than the project pool holds")
+	require.True(t, k.GetProjectClaimable(ctx).IsZero(),
+		"ProjectClaimable must stay untouched until the Ethereum receipt arrives")
 }
 
 func TestClaimMigrationTokensWithValidMerkleProof(t *testing.T) {

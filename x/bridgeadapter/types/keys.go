@@ -11,8 +11,21 @@ const (
 	// 10 leaves room for token types it may add.
 	AppModuleID uint8 = 10
 
-	// ReceiptPayloadLen is the fixed size of a tier-release receipt body.
-	ReceiptPayloadLen = 64
+	// TierMessagePayloadLen is the fixed size of both tier-release messages.
+	//
+	// The wire format is abi.encode(uint8 msgType, uint256, uint256) -- three
+	// 32-byte big-endian words, 96 bytes, identical in both directions. The
+	// design doc (§3.4) fixes the fields but not the byte layout; abi.encode was
+	// chosen over a packed 65-byte body so the Solidity side can use abi.decode
+	// natively instead of hand-rolled assembly offsets, which is precisely where
+	// the StakingCaller bech32-length bug came from.
+	TierMessagePayloadLen = 96
+
+	// Message types, per the design doc §3.4. The type tag is carried in the
+	// first word of every tier message so a body delivered to the wrong channel
+	// is rejected instead of being silently misread as amounts.
+	MsgTypeTierRelease    uint8 = 1 // Atoshi -> Ethereum: cumulative release targets, ATOS units
+	MsgTypeReleaseReceipt uint8 = 2 // Ethereum -> Atoshi: cumulative amounts released, ERC20 units
 
 	// HexAddressLen is the width of a Hyperlane address.
 	HexAddressLen = 32

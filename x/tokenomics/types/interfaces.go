@@ -7,6 +7,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
+	"github.com/bcp-innovations/hyperlane-cosmos/util"
+
 	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 )
 
@@ -73,4 +75,13 @@ type AtoxKeeper interface {
 
 	// AtoxSupplyCap is the ceiling live supply may not exceed.
 	AtoxSupplyCap(ctx sdk.Context) math.Int
+}
+
+// TierDispatcher is the x/bridgeadapter surface this module needs: step 1 of the
+// tier-release round trip, telling Ethereum the new cumulative targets.
+//
+// Declared here rather than imported so the dependency points one way --
+// x/bridgeadapter already imports this module's keeper.
+type TierDispatcher interface {
+	DispatchTierRelease(ctx sdk.Context, cumulativeMiner, cumulativeProject math.Int) (util.HexAddress, error)
 }

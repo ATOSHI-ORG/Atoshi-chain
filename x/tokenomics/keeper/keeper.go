@@ -27,6 +27,17 @@ type Keeper struct {
 	// atoxKeeper is optional so unit tests can exercise the tier engine
 	// without the ATOX module; block rewards are skipped when it is nil.
 	atoxKeeper tokenomicstypes.AtoxKeeper
+	// tierDispatcher sends the forward leg of a tier release to Ethereum. Set
+	// after construction because x/bridgeadapter already depends on this keeper,
+	// so taking it as a constructor argument would be an import cycle. Optional:
+	// nil means the round trip is not wired, which is what unit tests want.
+	tierDispatcher tokenomicstypes.TierDispatcher
+}
+
+// SetTierDispatcher wires the Ethereum-facing dispatcher. Called once from
+// app.go after both keepers exist.
+func (k *Keeper) SetTierDispatcher(d tokenomicstypes.TierDispatcher) {
+	k.tierDispatcher = d
 }
 
 func NewKeeper(

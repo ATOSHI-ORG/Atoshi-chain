@@ -17,48 +17,100 @@ const DefaultAtosPerErc20 = 100
 // its chain id.
 const DefaultEthereumDomain = 1
 
-// ----- Receipt payload (pure; the wire format Ethereum writes) -----
+// ----- Tier-release messages (pure; the wire format shared with Ethereum) -----
+//
+// Tier release is a four-step round trip (design doc §3.4), and both legs carry
+// the same 96-byte body: abi.encode(uint8 msgType, uint256, uint256).
+//
+//	[ 0:32] msgType, right-aligned as abi.encode pads a uint8
+//	[32:64] first cumulative amount
+//	[64:96] second cumulative amount
+//
+//	msgType 1  TIER_RELEASE     Atoshi -> Ethereum
+//	           [32:64] cumulativeMinerRelease    ATOS units
+//	           [64:96] cumulativeProjectRelease  ATOS units
+//	msgType 2  RELEASE_RECEIPT  Ethereum -> Atoshi
+//	           [32:64] totalReleasedToBridge     ERC20 units
+//	           [64:96] totalReleasedToProject    ERC20 units
+//
+// Every amount is a CUMULATIVE total, never a delta. That is what removes the
+// need for nonces or a dedup table: a repeat is a no-op, a gap is repaired by
+// the next message, and a stale message reports less than what is already
+// applied and gets rejected. The doc argues this explicitly -- with deltas, 29
+// lost messages mean 29 releases lost forever, and one duplicate means one
+// double release.
+//
+// The msgType tag is checked on decode so a body delivered to the wrong channel
+// is rejected rather than silently misread as amounts.
 
-// ParseReceipt decodes a tier-release receipt body.
-//
-// Layout mirrors Hyperlane's own warp payload — two big-endian 32-byte words —
-// so third-party relayers, explorers and Hyperlane's tooling can read our
-// messages without special-casing them:
-//
-//	[ 0:32] cumulative ERC20 released into the bridge vault
-//	[32:64] cumulative ERC20 sent to the project cold wallet
-//
-// Both are CUMULATIVE totals rather than deltas. That is what removes the need
-// for nonces or a dedup table: a repeat is a no-op, a gap is repaired by the
-// next message, and a stale message reports less than what is already applied
-// and gets rejected.
-func ParseReceipt(payload []byte) (toBridge, toProject math.Int, err error) {
-	if len(payload) != ReceiptPayloadLen {
+// parseTierMessage decodes either leg, verifying length and message type.
+func parseTierMessage(payload []byte, wantType uint8) (first, second math.Int, err error) {
+	if len(payload) != TierMessagePayloadLen {
 		return math.Int{}, math.Int{}, fmt.Errorf(
-			"%w: expected %d bytes, got %d", ErrInvalidPayload, ReceiptPayloadLen, len(payload))
+			"%w: expected %d bytes, got %d", ErrInvalidPayload, TierMessagePayloadLen, len(payload))
 	}
 
-	toBridge = math.NewIntFromBigInt(new(big.Int).SetBytes(payload[0:32]))
-	toProject = math.NewIntFromBigInt(new(big.Int).SetBytes(payload[32:64]))
-	return toBridge, toProject, nil
+	// abi.encode pads a uint8 into a full word, so every byte but the last must
+	// be zero. Checking the whole word rather than just payload[31] stops a body
+	// whose leading bytes carry data from being accepted as a valid type tag.
+	for i := 0; i < 31; i++ {
+		if payload[i] != 0 {
+			return math.Int{}, math.Int{}, fmt.Errorf(
+				"%w: message type word is not a padded uint8", ErrInvalidPayload)
+		}
+	}
+	if payload[31] != wantType {
+		return math.Int{}, math.Int{}, fmt.Errorf(
+			"%w: expected message type %d, got %d", ErrInvalidPayload, wantType, payload[31])
+	}
+
+	first = math.NewIntFromBigInt(new(big.Int).SetBytes(payload[32:64]))
+	second = math.NewIntFromBigInt(new(big.Int).SetBytes(payload[64:96]))
+	return first, second, nil
 }
 
-// BuildReceipt encodes a receipt body. Used by tests and by tooling that
-// simulates the Ethereum side; the chain itself only ever decodes.
-func BuildReceipt(toBridge, toProject math.Int) ([]byte, error) {
-	if toBridge.IsNil() || toBridge.IsNegative() || toProject.IsNil() || toProject.IsNegative() {
+// buildTierMessage encodes either leg.
+func buildTierMessage(msgType uint8, first, second math.Int) ([]byte, error) {
+	if first.IsNil() || first.IsNegative() || second.IsNil() || second.IsNegative() {
 		return nil, fmt.Errorf("%w: amounts must be non-negative", ErrInvalidPayload)
 	}
-	b := toBridge.BigInt().Bytes()
-	p := toProject.BigInt().Bytes()
-	if len(b) > 32 || len(p) > 32 {
+	a := first.BigInt().Bytes()
+	b := second.BigInt().Bytes()
+	if len(a) > 32 || len(b) > 32 {
 		return nil, fmt.Errorf("%w: amount exceeds 32 bytes", ErrInvalidPayload)
 	}
 
-	out := make([]byte, ReceiptPayloadLen)
-	copy(out[32-len(b):32], b)
-	copy(out[64-len(p):64], p)
+	out := make([]byte, TierMessagePayloadLen)
+	out[31] = msgType
+	copy(out[64-len(a):64], a)
+	copy(out[96-len(b):96], b)
 	return out, nil
+}
+
+// ParseReceipt decodes the reverse leg: what Ethereum actually released, in
+// ERC20 units.
+func ParseReceipt(payload []byte) (toBridge, toProject math.Int, err error) {
+	return parseTierMessage(payload, MsgTypeReleaseReceipt)
+}
+
+// BuildReceipt encodes the reverse leg. Used by tests and by tooling that
+// simulates the Ethereum side; in production the chain only decodes this leg.
+func BuildReceipt(toBridge, toProject math.Int) ([]byte, error) {
+	return buildTierMessage(MsgTypeReleaseReceipt, toBridge, toProject)
+}
+
+// BuildTierRelease encodes the forward leg: the cumulative amounts Atoshi has
+// authorized for release, in ATOS units. Ethereum divides by the peg to get its
+// own ERC20 targets.
+func BuildTierRelease(cumulativeMiner, cumulativeProject math.Int) ([]byte, error) {
+	return buildTierMessage(MsgTypeTierRelease, cumulativeMiner, cumulativeProject)
+}
+
+// ParseTierRelease decodes the forward leg. The chain only ever builds this
+// message; the decoder exists so tests can assert the exact bytes Ethereum will
+// receive, and so tooling can inspect a dispatched body.
+func ParseTierRelease(payload []byte) (cumulativeMiner, cumulativeProject math.Int, err error) {
+	return parseTierMessage(payload, MsgTypeTierRelease)
 }
 
 // Erc20ToAtos converts an ERC20 amount to ATOS at the configured peg. Both are

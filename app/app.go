@@ -595,6 +595,12 @@ func NewAtoshi(
 		app.BankKeeper,
 	)
 
+	// Close the tier-release round trip: x/bridgeadapter already holds the
+	// tokenomics keeper, so the forward-dispatch dependency is injected the other
+	// way after construction rather than through NewKeeper, which would be an
+	// import cycle.
+	app.TokenomicsKeeper.SetTierDispatcher(app.BridgeAdapterKeeper)
+
 	// Register as a Hyperlane app so the mailbox can route verified receipts
 	// here. The router keys on the recipient address's type field, and this
 	// module id is what distinguishes our receipts from a warp transfer.

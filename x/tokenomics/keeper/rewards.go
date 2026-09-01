@@ -196,6 +196,20 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 		actualProjectRelease = actualProjectRelease.Add(minerTarget.Sub(actualMinerRelease))
 	}
 
+	// ProjectClaimable is deliberately NOT credited here. Per the design doc
+	// §3.4 step 1 only books the authorisation; ProjectClaimable is set in step 4
+	// from the Ethereum receipt (x/bridgeadapter applyReceipt). Crediting it in
+	// both places double-counts every release -- invisible today only because the
+	// forward dispatch did not exist, so no receipt ever arrived.
+	//
+	// KNOWN GAP, needs review: the capacity cap below still measures headroom
+	// against ProjectClaimable, which now lags this authorisation by one round
+	// trip. Between step 1 and step 4 the cap cannot see the in-flight
+	// authorisation, so consecutive tier releases could over-authorise by up to
+	// the in-flight amount. Bounded by one release (release_percentage_bps of
+	// circulating supply), and the ATOX side is still protected by the
+	// ERC20-lands-first invariant, but the accounting wants a pending-authorisation
+	// counter rather than this proxy.
 	projectClaimable := k.GetProjectClaimable(ctx)
 	projectPoolAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.ProjectPoolName)
 	projectPoolBalance := k.bankKeeper.GetBalance(ctx, projectPoolAddr, k.baseDenom()).Amount
@@ -206,10 +220,26 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	if actualProjectRelease.GT(remainingProjectCapacity) {
 		actualProjectRelease = remainingProjectCapacity
 	}
-	k.SetProjectClaimable(ctx, projectClaimable.Add(actualProjectRelease))
 
 	state.TotalMinerReleased = state.TotalMinerReleased.Add(actualMinerRelease)
 	state.TotalProjectReleased = state.TotalProjectReleased.Add(actualProjectRelease)
+
+	// Step 1 of the round trip: tell Ethereum the new cumulative targets. Failure
+	// is logged, not propagated: the amounts are cumulative, so the next release
+	// carries the full target and repairs a missed dispatch, whereas returning an
+	// error here would abort the EndBlocker and stall the chain on a bridge that
+	// is merely unconfigured or paused.
+	if k.tierDispatcher != nil {
+		if _, err := k.tierDispatcher.DispatchTierRelease(
+			ctx, state.TotalMinerReleased, state.TotalProjectReleased,
+		); err != nil {
+			k.Logger(ctx).Error("tier release dispatch failed; next release will resend the cumulative target",
+				"error", err,
+				"cumulative_miner", state.TotalMinerReleased.String(),
+				"cumulative_project", state.TotalProjectReleased.String(),
+			)
+		}
+	}
 
 	ctx.EventManager().EmitEvent(
 		sdk.NewEvent(

@@ -363,7 +363,7 @@ func TestReceiptRoundTrip(t *testing.T) {
 	for _, c := range cases {
 		body, err := types.BuildReceipt(c.bridge, c.project)
 		require.NoError(t, err)
-		require.Len(t, body, types.ReceiptPayloadLen)
+		require.Len(t, body, types.TierMessagePayloadLen)
 
 		gotB, gotP, err := types.ParseReceipt(body)
 		require.NoError(t, err)
