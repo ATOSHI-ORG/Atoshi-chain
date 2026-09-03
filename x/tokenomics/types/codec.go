@@ -8,7 +8,6 @@ import (
 )
 
 func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
-	cdc.RegisterConcrete(&MsgClaimProjectTreasuryReward{}, "atoshi/tokenomics/MsgClaimProjectTreasuryReward", nil)
 	cdc.RegisterConcrete(&MsgClaimMigrationTokens{}, "atoshi/tokenomics/MsgClaimMigrationTokens", nil)
 	cdc.RegisterConcrete(&MsgUpdateParams{}, "atoshi/tokenomics/MsgUpdateParams", nil)
 }
@@ -17,7 +16,6 @@ func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 // route them through the standard tx pipeline.
 func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 	registry.RegisterImplementations((*sdk.Msg)(nil),
-		&MsgClaimProjectTreasuryReward{},
 		&MsgClaimMigrationTokens{},
 		&MsgUpdateParams{},
 	)

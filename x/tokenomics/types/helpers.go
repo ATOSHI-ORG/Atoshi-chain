@@ -24,6 +24,19 @@ const (
 	// random checks" into "the price touched the threshold at least once today"
 	// without visibly changing any threshold. 24 keeps it at most hourly.
 	MaxDailySamples = 24
+
+	// BpsDenominator is the basis-point scale.
+	BpsDenominator = 10_000
+
+	// DefaultMigrationRefillThresholdBps refills migration_pool once it drops
+	// below 20% of its configured total.
+	//
+	// 20% rather than something tighter because the refill is bounded by the
+	// ProjectClaimable authorisation, which only grows when a tier release
+	// completes a full round trip -- roughly monthly. Waiting until the pool is
+	// nearly empty would leave the bridge unable to serve inbound transfers for
+	// whatever remains of that month.
+	DefaultMigrationRefillThresholdBps = 2_000
 )
 
 // DefaultParams returns the genesis tokenomics parameters.
@@ -70,6 +83,7 @@ func DefaultParams() Params {
 		// cannot land closer together than 8h.
 		PriceCheckEpochBlocks:  17_280 / DefaultDailySamples,
 		DailySamples:           DefaultDailySamples,
+		MigrationRefillThresholdBps: DefaultMigrationRefillThresholdBps,
 
 		MigrationMerkleRoot:       "",
 		MigrationClaimEndTimeUnix: 0, // 0 = no deadline
@@ -119,6 +133,10 @@ func (p Params) Validate() error {
 		if _, err := sdk.AccAddressFromBech32(p.ProjectTreasuryAddress); err != nil {
 			return fmt.Errorf("invalid project treasury address: %w", err)
 		}
+	}
+	if p.MigrationRefillThresholdBps > BpsDenominator {
+		return fmt.Errorf("migration_refill_threshold_bps must be <= %d, got %d",
+			BpsDenominator, p.MigrationRefillThresholdBps)
 	}
 	if p.DailySamples <= 0 {
 		return fmt.Errorf("daily_samples must be positive")
@@ -239,11 +257,6 @@ func validateBlockRewardState(s BlockRewardState) error {
 }
 
 // ----- Msg ValidateBasic -----
-
-func (msg MsgClaimProjectTreasuryReward) ValidateBasic() error {
-	_, err := sdk.AccAddressFromBech32(msg.Authority)
-	return err
-}
 
 func (msg MsgClaimMigrationTokens) ValidateBasic() error {
 	if _, err := sdk.AccAddressFromBech32(msg.Claimer); err != nil {

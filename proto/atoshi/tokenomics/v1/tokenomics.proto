@@ -81,8 +81,13 @@ message Params {
   // miner + project share must equal 10000.
   uint32 project_release_share_bps = 14;
 
-  // project_treasury_address is the bech32 address that receives project releases.
-  // Mutable via gov MsgUpdateParams.
+  // project_treasury_address is unused.
+  //
+  // It used to be the only address allowed to withdraw against ProjectClaimable.
+  // That withdrawal is gone -- the project's share of a tier release arrives as
+  // ERC20 on Ethereum, and ProjectClaimable is the ceiling for refilling
+  // migration_pool out of project_pool, not a balance anyone may draw. Kept as a
+  // reserved field rather than removed so existing genesis files still parse.
   string project_treasury_address = 15;
 
   // price_check_epoch_blocks is the MINIMUM number of blocks between two tier
@@ -98,6 +103,20 @@ message Params {
   // Set it to roughly one_day / daily_samples. At 5s blocks and 3 samples that
   // is 5760 blocks (8h).
   int64 price_check_epoch_blocks = 16;
+
+  // migration_refill_threshold_bps triggers a migration_pool refill.
+  //
+  // When migration_pool's balance drops below this fraction of
+  // migration_pool_total, the EndBlocker moves ATOS in from project_pool, capped
+  // by the ProjectClaimable authorisation. Design doc 1.4 calls this "半自动补充".
+  //
+  // The refill exists because migration_pool is the reserve behind the ordinary
+  // user bridge: every bridge-in draws from it, and if it empties the bridge
+  // stops accepting inbound transfers even though project_pool holds 8.7
+  // trillion ATOS that tier releases have already authorised.
+  //
+  // Zero disables the refill.
+  uint32 migration_refill_threshold_bps = 21;
 
   // daily_samples is how many readings per UTC day count as tier samples.
   //

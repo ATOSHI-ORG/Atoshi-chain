@@ -135,6 +135,14 @@ func (k Keeper) EndBlocker(ctx sdk.Context) error {
 	}
 	today := now / secondsPerDay
 
+	// Keep the user bridge liquid before doing anything else. Independent of the
+	// tier machinery: it moves already-authorised ATOS between two pools and does
+	// not change any cumulative total, so a failure here should not stop the
+	// sampling below.
+	if err := k.RefillMigrationPool(ctx); err != nil {
+		k.Logger(ctx).Error("migration pool refill failed", "err", err)
+	}
+
 	// ----- settle the previous day, if it has rolled over -----
 	if state.CurrentSampleDay != 0 && today > state.CurrentSampleDay {
 		// A gap of more than one day means no sample landed on those days. That
@@ -424,3 +432,92 @@ func (k Keeper) MigrationPoolTotal(ctx sdk.Context) math.Int {
 
 // BaseDenom is the ATOS denom.
 func (k Keeper) BaseDenom() string { return k.baseDenom() }
+
+// RefillMigrationPool tops migration_pool up out of project_pool.
+//
+// migration_pool is the reserve behind the ordinary user bridge: every bridge-in
+// releases ATOS from it, and every bridge-out returns ATOS to it. If it empties,
+// inbound transfers stop -- even though project_pool holds trillions of ATOS
+// that tier releases have already authorised. Design doc 1.4 calls the fix
+// "半自动补充（低于阈值自动补，从 project_pool 补充）".
+//
+// # What bounds the transfer
+//
+// ProjectClaimable. That counter is the cumulative ATOS the Ethereum side has
+// confirmed releasing to the project (receipt leg, design doc 3.4 step 4), and
+// it is the ONLY thing that makes this transfer solvent: moving ATOS out of
+// project_pool without it would put ATOS into circulation that no locked ERC20
+// backs, which is the invariant the whole round trip exists to protect.
+//
+// It is not a balance anyone may withdraw. The project's half of a release is
+// paid as ERC20 into the project cold wallet on Ethereum; this counter is the
+// separate, on-chain permission to keep the bridge liquid. An earlier version
+// let params.project_treasury_address draw ATOS against it, which paid the
+// project twice for one release.
+//
+// # Why it is not an error to be unable to refill
+//
+// A short pool with no authorisation left is a legitimate state: it means the
+// bridge has drained faster than tier releases have authorised. The right
+// response is to stop refilling, not to halt the chain, so this returns nil and
+// leaves the bridge's own rate limiting to reject transfers it cannot fund.
+func (k Keeper) RefillMigrationPool(ctx sdk.Context) error {
+	params := k.GetParams(ctx)
+	if params.MigrationRefillThresholdBps == 0 {
+		return nil
+	}
+
+	total := params.MigrationPoolTotal
+	if total.IsNil() || !total.IsPositive() {
+		return nil
+	}
+
+	migrationAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.MigrationPoolName)
+	balance := k.bankKeeper.GetBalance(ctx, migrationAddr, k.baseDenom()).Amount
+
+	threshold := total.MulRaw(int64(params.MigrationRefillThresholdBps)).QuoRaw(tokenomicstypes.BpsDenominator)
+	if balance.GTE(threshold) {
+		return nil
+	}
+
+	authorised := k.GetProjectClaimable(ctx)
+	if !authorised.IsPositive() {
+		return nil
+	}
+
+	// Refill back to full, bounded by the authorisation and by what project_pool
+	// actually holds. Refilling to the threshold instead would re-trigger on
+	// almost every block once the pool hovered near it.
+	want := total.Sub(balance)
+	if want.GT(authorised) {
+		want = authorised
+	}
+
+	projectAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.ProjectPoolName)
+	projectBalance := k.bankKeeper.GetBalance(ctx, projectAddr, k.baseDenom()).Amount
+	if want.GT(projectBalance) {
+		want = projectBalance
+	}
+	if !want.IsPositive() {
+		return nil
+	}
+
+	coins := sdk.NewCoins(sdk.NewCoin(k.baseDenom(), want))
+	if err := k.bankKeeper.SendCoinsFromModuleToModule(
+		ctx, tokenomicstypes.ProjectPoolName, tokenomicstypes.MigrationPoolName, coins,
+	); err != nil {
+		return err
+	}
+
+	// Spend the authorisation. Without this the same permission would fund an
+	// unlimited number of refills.
+	k.SetProjectClaimable(ctx, authorised.Sub(want))
+
+	ctx.EventManager().EmitEvent(sdk.NewEvent(
+		tokenomicstypes.EventTypeMigrationPoolRefilled,
+		sdk.NewAttribute(tokenomicstypes.AttributeKeyAmount, want.String()),
+		sdk.NewAttribute(tokenomicstypes.AttributeKeyRemainingAuthorisation,
+			authorised.Sub(want).String()),
+	))
+	return nil
+}

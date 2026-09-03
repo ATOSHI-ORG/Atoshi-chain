@@ -13,8 +13,19 @@ option go_package = "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types";
 service Msg {
   option (cosmos.msg.v1.service) = true;
 
-  // ClaimProjectTreasuryReward lets the project treasury withdraw unlocked funds.
-  rpc ClaimProjectTreasuryReward(MsgClaimProjectTreasuryReward) returns (MsgClaimProjectTreasuryRewardResponse);
+  // 16 held ClaimProjectTreasuryReward, which let params.project_treasury_address
+  // withdraw ATOS out of project_pool against the ProjectClaimable counter.
+  //
+  // Removed because it paid the project twice. The project's half of a tier
+  // release is delivered as ERC20 on Ethereum, into the project cold wallet
+  // (design doc 1.6). ProjectClaimable is not a balance the project may draw --
+  // it is the ceiling on how much may be moved from project_pool into
+  // migration_pool to keep the ordinary user bridge liquid (design doc 1.3, 1.4).
+  // Letting an address withdraw against it meant one ERC20 release backing both
+  // the cold-wallet payment and an on-chain ATOS payout.
+  //
+  // Anyone holding project-share ERC20 who wants chain ATOS uses the ordinary
+  // bridge-in path, which locks their ERC20 and draws from migration_pool.
 
   // ClaimMigrationTokens lets a user redeem the pre-mine migration airdrop via Merkle proof.
   rpc ClaimMigrationTokens(MsgClaimMigrationTokens) returns (MsgClaimMigrationTokensResponse);
@@ -23,13 +34,6 @@ service Msg {
   // project treasury address and migration Merkle root).
   rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
 }
-
-message MsgClaimProjectTreasuryReward {
-  option (cosmos.msg.v1.signer) = "authority";
-
-  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
-}
-message MsgClaimProjectTreasuryRewardResponse {}
 
 message MsgClaimMigrationTokens {
   option (cosmos.msg.v1.signer) = "claimer";

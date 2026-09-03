@@ -26,7 +26,6 @@ func DefaultParams() Params {
 		InsufficientGasPrice:     math.LegacyNewDecWithPrec(21, 4), // 0.0021
 		SubsidizedMsgTypeUrls: []string{
 			"/atoshi.tokenomics.v1.MsgClaimMigrationTokens",
-			"/atoshi.tokenomics.v1.MsgClaimProjectTreasuryReward",
 			"/atoshi.oracle.v1.MsgReportPrice",
 			// Delegate / undelegate of energy itself MUST be subsidized:
 			// the AnteHandler greedily reserves up to gas_limit worth of

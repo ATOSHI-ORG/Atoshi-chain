@@ -808,3 +808,97 @@ func TestBeginBlocker_NoStateChangeWhenNoBondedValidators(t *testing.T) {
 	require.True(t, preReleaseState.TotalMinerReleased.Equal(postReleaseState.TotalMinerReleased),
 		"audit Issue-18: release state must not move when nothing is bonded")
 }
+
+// ───────────────────── migration_pool 补充 ─────────────────────
+//
+// 这些用例守的是一条不变量：从 project_pool 搬进 migration_pool 的 ATOS，
+// 必须有 Ethereum 已确认释放的 ERC20 做抵押，而 ProjectClaimable 就是那个
+// 抵押额度。搬了不扣额度，同一份抵押就能无限次补充。
+
+func refillFixture(t *testing.T, migrationBal, projectBal, authorised math.Int) (Keeper, sdk.Context, *testBankKeeper) {
+	t.Helper()
+	bk := newTestBankKeeper()
+	bk.balances[authtypes.NewModuleAddress(tokenomicstypes.MigrationPoolName).String()] =
+		sdk.NewCoins(sdk.NewCoin("liao", migrationBal))
+	bk.balances[authtypes.NewModuleAddress(tokenomicstypes.ProjectPoolName).String()] =
+		sdk.NewCoins(sdk.NewCoin("liao", projectBal))
+	sk := testStakingKeeper{totalBonded: math.NewInt(100)}
+	k, ctx := newKeeperForTest(t, bk, sk, testOracleKeeper{})
+
+	p := k.GetParams(ctx)
+	p.MigrationPoolTotal = math.NewInt(1_000)
+	p.MigrationRefillThresholdBps = 2_000 // 低于 20% 补
+	require.NoError(t, k.SetParams(ctx, p))
+	k.SetProjectClaimable(ctx, authorised)
+	return k, ctx, bk
+}
+
+func migrationBalance(k Keeper, ctx sdk.Context, bk *testBankKeeper) math.Int {
+	return bk.GetBalance(ctx,
+		authtypes.NewModuleAddress(tokenomicstypes.MigrationPoolName), "liao").Amount
+}
+
+func TestRefillMigrationPool_AboveThresholdDoesNothing(t *testing.T) {
+	// 300 / 1000 = 30% > 20%
+	k, ctx, bk := refillFixture(t, math.NewInt(300), math.NewInt(10_000), math.NewInt(500))
+	require.NoError(t, k.RefillMigrationPool(ctx))
+	require.Equal(t, math.NewInt(300), migrationBalance(k, ctx, bk))
+	require.Equal(t, math.NewInt(500), k.GetProjectClaimable(ctx), "授权额度不该动")
+}
+
+func TestRefillMigrationPool_RefillsToFullAndSpendsAuthorisation(t *testing.T) {
+	// 100 / 1000 = 10% < 20%，缺口 900，授权 900 够
+	k, ctx, bk := refillFixture(t, math.NewInt(100), math.NewInt(10_000), math.NewInt(900))
+	require.NoError(t, k.RefillMigrationPool(ctx))
+	require.Equal(t, math.NewInt(1_000), migrationBalance(k, ctx, bk), "应补到满")
+	require.True(t, k.GetProjectClaimable(ctx).IsZero(), "授权额度应被扣光")
+}
+
+func TestRefillMigrationPool_BoundedByAuthorisation(t *testing.T) {
+	// 缺口 900 但只授权了 200 —— 这是最要紧的一条：超出授权就是放出
+	// 没有 ERC20 抵押的 ATOS
+	k, ctx, bk := refillFixture(t, math.NewInt(100), math.NewInt(10_000), math.NewInt(200))
+	require.NoError(t, k.RefillMigrationPool(ctx))
+	require.Equal(t, math.NewInt(300), migrationBalance(k, ctx, bk),
+		"补充量必须停在授权额度上")
+	require.True(t, k.GetProjectClaimable(ctx).IsZero())
+}
+
+func TestRefillMigrationPool_BoundedByProjectPoolBalance(t *testing.T) {
+	// 授权 900 但 project_pool 只有 50
+	k, ctx, bk := refillFixture(t, math.NewInt(100), math.NewInt(50), math.NewInt(900))
+	require.NoError(t, k.RefillMigrationPool(ctx))
+	require.Equal(t, math.NewInt(150), migrationBalance(k, ctx, bk))
+	require.Equal(t, math.NewInt(850), k.GetProjectClaimable(ctx),
+		"只扣实际搬走的那部分")
+}
+
+func TestRefillMigrationPool_NoAuthorisationIsNotAnError(t *testing.T) {
+	// 池子见底但授权用完，是合法状态：桥的流出快过 tier 释放的授权速度。
+	// 正确反应是停止补充，让桥自己的限流去拒绝付不起的转账，而不是让链停下。
+	k, ctx, bk := refillFixture(t, math.NewInt(10), math.NewInt(10_000), math.ZeroInt())
+	require.NoError(t, k.RefillMigrationPool(ctx))
+	require.Equal(t, math.NewInt(10), migrationBalance(k, ctx, bk))
+}
+
+func TestRefillMigrationPool_ZeroThresholdDisables(t *testing.T) {
+	k, ctx, bk := refillFixture(t, math.NewInt(10), math.NewInt(10_000), math.NewInt(900))
+	p := k.GetParams(ctx)
+	p.MigrationRefillThresholdBps = 0
+	require.NoError(t, k.SetParams(ctx, p))
+
+	require.NoError(t, k.RefillMigrationPool(ctx))
+	require.Equal(t, math.NewInt(10), migrationBalance(k, ctx, bk))
+	require.Equal(t, math.NewInt(900), k.GetProjectClaimable(ctx))
+}
+
+func TestRefillMigrationPool_RepeatedCallsCannotReuseAuthorisation(t *testing.T) {
+	// 一份授权只能补一次。不扣额度的话这里第二次会再搬一笔。
+	k, ctx, bk := refillFixture(t, math.NewInt(100), math.NewInt(10_000), math.NewInt(200))
+	require.NoError(t, k.RefillMigrationPool(ctx))
+	after := migrationBalance(k, ctx, bk)
+
+	require.NoError(t, k.RefillMigrationPool(ctx))
+	require.Equal(t, after, migrationBalance(k, ctx, bk),
+		"授权已用完，第二次不该再搬")
+}

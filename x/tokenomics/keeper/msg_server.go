@@ -24,48 +24,6 @@ func NewMsgServerImpl(keeper Keeper) tokenomicstypes.MsgServer {
 
 var _ tokenomicstypes.MsgServer = msgServer{}
 
-func (k msgServer) ClaimProjectTreasuryReward(goCtx context.Context, msg *tokenomicstypes.MsgClaimProjectTreasuryReward) (*tokenomicstypes.MsgClaimProjectTreasuryRewardResponse, error) {
-	ctx := sdk.UnwrapSDKContext(goCtx)
-	params := k.GetParams(ctx)
-	if params.ProjectTreasuryAddress == "" {
-		return nil, tokenomicstypes.ErrNoProjectAddress
-	}
-	if msg.Authority != params.ProjectTreasuryAddress {
-		return nil, tokenomicstypes.ErrUnauthorized
-	}
-
-	claimable := k.GetProjectClaimable(ctx)
-	if !claimable.IsPositive() {
-		return nil, tokenomicstypes.ErrNothingToClaim
-	}
-
-	recipient, err := sdk.AccAddressFromBech32(params.ProjectTreasuryAddress)
-	if err != nil {
-		return nil, err
-	}
-	coin := sdk.NewCoin(k.baseDenom(), claimable)
-	poolAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.ProjectPoolName)
-	available := k.bankKeeper.GetBalance(ctx, poolAddr, k.baseDenom()).Amount
-	if available.LT(claimable) {
-		return nil, tokenomicstypes.ErrInsufficientClaimable
-	}
-	if err := k.bankKeeper.SendCoinsFromModuleToAccount(ctx, tokenomicstypes.ProjectPoolName, recipient, sdk.NewCoins(coin)); err != nil {
-		return nil, err
-	}
-
-	k.SetProjectClaimable(ctx, math.ZeroInt())
-
-	ctx.EventManager().EmitEvent(
-		sdk.NewEvent(
-			tokenomicstypes.EventTypeClaimProjectReward,
-			sdk.NewAttribute(tokenomicstypes.AttributeKeyRecipient, params.ProjectTreasuryAddress),
-			sdk.NewAttribute(tokenomicstypes.AttributeKeyAmount, claimable.String()),
-		),
-	)
-
-	return &tokenomicstypes.MsgClaimProjectTreasuryRewardResponse{}, nil
-}
-
 func (k msgServer) ClaimMigrationTokens(goCtx context.Context, msg *tokenomicstypes.MsgClaimMigrationTokens) (*tokenomicstypes.MsgClaimMigrationTokensResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 	if k.HasMigrationClaimed(ctx, msg.Claimer) {

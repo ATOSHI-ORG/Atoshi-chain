@@ -24,35 +24,11 @@ func NewTxCmd() *cobra.Command {
 		RunE:                       client.ValidateCmd,
 	}
 	txCmd.AddCommand(
-		NewClaimProjectTreasuryRewardCmd(),
 		NewClaimMigrationTokensCmd(),
 	)
 	return txCmd
 }
 
-// NewClaimProjectTreasuryRewardCmd lets the configured project treasury claim
-// unlocked project-pool funds.
-func NewClaimProjectTreasuryRewardCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "claim-project-treasury-reward",
-		Short: "Claim unlocked project-pool funds (signer must be params.ProjectTreasuryAddress)",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cliCtx, err := client.GetClientTxContext(cmd)
-			if err != nil {
-				return err
-			}
-			msg := &types.MsgClaimProjectTreasuryReward{
-				Authority: cliCtx.GetFromAddress().String(),
-			}
-			return tx.GenerateOrBroadcastTxCLI(cliCtx, cmd.Flags(), msg)
-		},
-	}
-	flags.AddTxFlagsToCmd(cmd)
-	return cmd
-}
-
-// NewClaimMigrationTokensCmd redeems pre-mine migration ATOS via Merkle proof.
 func NewClaimMigrationTokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claim-migration-tokens AMOUNT PROOF_HEX[,PROOF_HEX...]",
