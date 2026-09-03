@@ -85,9 +85,26 @@ message Params {
   // Mutable via gov MsgUpdateParams.
   string project_treasury_address = 15;
 
-  // price_check_epoch_blocks is how often (in blocks) the EndBlocker evaluates the
-  // price/volume streak. Defaults to ~24h.
+  // price_check_epoch_blocks is the MINIMUM number of blocks between two tier
+  // samples.
+  //
+  // It used to mean "how often the EndBlocker evaluates the streak", i.e. the
+  // chain picked the sampling instants. Under the daily-sampling rule the feeder
+  // picks them, so this became a spacing floor instead: it stops a feeder from
+  // spending the whole day's sample quota inside a few seconds, which would
+  // collapse "three readings spread across 24h" into "three readings at one
+  // instant" and let a momentary spike satisfy the day.
+  //
+  // Set it to roughly one_day / daily_samples. At 5s blocks and 3 samples that
+  // is 5760 blocks (8h).
   int64 price_check_epoch_blocks = 16;
+
+  // daily_samples is how many readings per UTC day count as tier samples.
+  //
+  // Under ANY-of-N semantics this is the number of chances the price gets each
+  // day, so it directly sets how permissive the rule is: raising it makes the
+  // threshold easier to clear, not harder. Default 3.
+  int64 daily_samples = 20;
 
   // migration_merkle_root is the hex-encoded Merkle root of the migration airdrop.
   string migration_merkle_root = 17;
@@ -136,6 +153,41 @@ message ReleaseState {
   // both would read zero forever, and a permanently-zero term in the circulating
   // supply formula is dead weight that has to be explained to every reader.
   reserved 7, 8;
+
+  // ----- daily sampling -----
+  //
+  // The release rule is "the feeder takes daily_samples readings at random times
+  // during the UTC day; if ANY of them clears both thresholds, the day counts
+  // towards the streak". Randomising the instants is the feeder's job -- the
+  // chain only records outcomes, because a chain-chosen instant is predictable
+  // and therefore gameable.
+  //
+  // Before this, the chain evaluated once per price_check_epoch_blocks against
+  // whatever the latest report happened to be. That is a different rule: it
+  // samples at a fixed, publicly known block height.
+
+  // current_sample_day is the UTC day index (unix / 86400) being sampled.
+  int64 current_sample_day = 9;
+
+  // samples_today counts the readings consumed as tier samples today, capped at
+  // params.daily_samples. The cap matters under ANY-of-N semantics: without it,
+  // a feeder reporting continuously would turn "the price held on three random
+  // checks" into "the price touched the threshold at least once today", which is
+  // a far weaker condition.
+  uint32 samples_today = 10;
+
+  // day_qualified is true once any sample today has cleared both thresholds.
+  bool day_qualified = 11;
+
+  // last_sampled_price_time is the timestamp of the oracle report last consumed
+  // as a sample. A report is only sampled once -- without this the same report
+  // would be re-counted every block until the next one arrived, burning the
+  // day's quota in three consecutive blocks.
+  int64 last_sampled_price_time = 12;
+
+  // last_sample_block is the height at which the previous sample was taken, used
+  // to enforce params.price_check_epoch_blocks as a minimum spacing.
+  int64 last_sample_block = 13;
 }
 
 // BlockRewardState tracks how much of the miner pool has already been distributed.

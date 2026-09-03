@@ -144,6 +144,15 @@ func (ok testOracleKeeper) GetParams(ctx sdk.Context) oracletypes.Params {
 
 func newKeeperForTest(t *testing.T, bk *testBankKeeper, sk testStakingKeeper, ok testOracleKeeper) (Keeper, sdk.Context) {
 	t.Helper()
+	return newKeeperForTestIface(t, bk, sk, ok)
+}
+
+// newKeeperForTestIface takes the OracleKeeper interface so a test can supply a
+// pointer-receiver implementation and mutate the reported price between calls.
+func newKeeperForTestIface(
+	t *testing.T, bk *testBankKeeper, sk testStakingKeeper, ok tokenomicstypes.OracleKeeper,
+) (Keeper, sdk.Context) {
+	t.Helper()
 
 	key := storetypes.NewKVStoreKey(tokenomicstypes.StoreKey)
 	db := dbm.NewMemDB()
@@ -432,6 +441,39 @@ func TestClaimMigrationTokensWithValidMerkleProof(t *testing.T) {
 // (pauses the streak; does not reset it).
 
 // helper to make a fresh keeper with a controllable oracle.
+// mutableOracleKeeper is testOracleKeeper with pointer receivers, so a test can
+// change the reported price between EndBlocker calls. The daily-sampling tests
+// need that: the chain consumes a report exactly once, keyed on its timestamp,
+// so exercising the quota and the ANY-of-N rule requires feeding distinct
+// readings to the same keeper.
+type mutableOracleKeeper struct {
+	price  oracletypes.PriceData
+	err    error
+	params *oracletypes.Params
+}
+
+func (ok *mutableOracleKeeper) GetCurrentPrice(sdk.Context) (oracletypes.PriceData, error) {
+	return ok.price, ok.err
+}
+
+func (ok *mutableOracleKeeper) GetParams(sdk.Context) oracletypes.Params {
+	if ok.params != nil {
+		return *ok.params
+	}
+	return oracletypes.DefaultParams()
+}
+
+func newKeeperWithOracleIface(t *testing.T, ok tokenomicstypes.OracleKeeper) (Keeper, sdk.Context) {
+	t.Helper()
+	bk := newTestBankKeeper()
+	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] =
+		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
+	bk.balances[authtypes.NewModuleAddress("tokenomics_project_pool").String()] =
+		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
+	sk := testStakingKeeper{totalBonded: math.NewInt(100)}
+	return newKeeperForTestIface(t, bk, sk, ok)
+}
+
 func newKeeperWithOracle(t *testing.T, ok testOracleKeeper) (Keeper, sdk.Context) {
 	bk := newTestBankKeeper()
 	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] =
@@ -443,9 +485,12 @@ func newKeeperWithOracle(t *testing.T, ok testOracleKeeper) (Keeper, sdk.Context
 }
 
 // Set release state so the next EndBlocker tick is forced to evaluate.
+// forceTierEvaluation clears the spacing gate so the next EndBlocker takes a
+// sample regardless of how recently the previous one was taken.
 func forceTierEvaluation(t *testing.T, k Keeper, ctx sdk.Context) {
 	st := k.GetReleaseState(ctx)
-	st.LastCheckBlock = 0 // force evaluation regardless of epoch
+	st.LastCheckBlock = 0
+	st.LastSampleBlock = 0 // PriceCheckEpochBlocks is now a spacing floor
 	require.NoError(t, k.SetReleaseState(ctx, st))
 }
 
@@ -470,9 +515,11 @@ func TestEndBlocker_RejectsStaleOraclePrice(t *testing.T) {
 		"stale oracle data must not advance the tier streak; got %d", got.ConsecutiveDays)
 }
 
-func TestEndBlocker_FreshPriceAdvancesStreak(t *testing.T) {
-	// Price timestamp is fresh (within MaxPriceAgeSeconds), price+volume
-	// above tier 0 thresholds → ConsecutiveDays should increment.
+func TestEndBlocker_QualifyingSampleMarksTheDayButDoesNotSettleIt(t *testing.T) {
+	// A qualifying sample marks the day; the streak only moves when the day
+	// rolls over. This is the part of the rule that reads backwards at first:
+	// "consecutive days" is settled per day, not per sample, so one good
+	// reading cannot advance the streak on its own.
 	now := int64(1_700_000_000)
 	freshPrice := oracletypes.PriceData{
 		Price:     math.LegacyMustNewDecFromStr("1000.00"),
@@ -486,8 +533,179 @@ func TestEndBlocker_FreshPriceAdvancesStreak(t *testing.T) {
 	require.NoError(t, k.EndBlocker(ctx))
 
 	got := k.GetReleaseState(ctx)
-	require.EqualValues(t, 1, got.ConsecutiveDays,
-		"fresh high-tier price should advance the streak; got %d", got.ConsecutiveDays)
+	require.True(t, got.DayQualified, "a qualifying reading should mark the day")
+	require.EqualValues(t, 1, got.SamplesToday, "the reading should be consumed as a sample")
+	require.EqualValues(t, 0, got.ConsecutiveDays,
+		"the streak must not move until the day settles; got %d", got.ConsecutiveDays)
+}
+
+func TestEndBlocker_StreakAdvancesAtDayRollover(t *testing.T) {
+	now := int64(1_700_000_000)
+	freshPrice := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 60,
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: freshPrice})
+	ctx = ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, ctx)
+	require.NoError(t, k.EndBlocker(ctx))
+	require.True(t, k.GetReleaseState(ctx).DayQualified)
+
+	// Next UTC day: the previous day settles and the streak advances.
+	next := ctx.WithBlockTime(time.Unix(now+secondsPerDay, 0)).WithBlockHeight(200)
+	require.NoError(t, k.EndBlocker(next))
+
+	got := k.GetReleaseState(next)
+	require.EqualValues(t, 1, got.ConsecutiveDays, "settled day should advance the streak")
+	require.False(t, got.DayQualified, "the new day starts unqualified")
+	require.EqualValues(t, 0, got.SamplesToday, "the new day starts with a fresh quota")
+}
+
+func TestEndBlocker_AnyQualifyingSampleSettlesTheDay(t *testing.T) {
+	// ANY-of-N: the day counts if one sample clears the bar, even when later
+	// samples fail. This is the rule the project chose over "all N must pass".
+	now := int64(1_700_000_000)
+	oracle := &mutableOracleKeeper{price: oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 60,
+	}}
+	k, ctx := newKeeperWithOracleIface(t, oracle)
+
+	// Sample 1 qualifies.
+	c1 := ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, c1)
+	require.NoError(t, k.EndBlocker(c1))
+	require.True(t, k.GetReleaseState(c1).DayQualified)
+
+	// Sample 2 fails, same day. Two things it must satisfy to be consumed at
+	// all: a timestamp newer than the one already sampled, and freshness
+	// relative to the *new* block time. Anchoring it to `now` while the block
+	// clock moves forward an hour makes the reading older than
+	// MaxPriceAgeSeconds, and it gets skipped as stale instead of sampled --
+	// which would make this test pass for the wrong reason.
+	oracle.price = oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("0.0001"),
+		Volume24h: math.LegacyMustNewDecFromStr("1"),
+		Timestamp: now + 3600 - 60,
+	}
+	c2 := ctx.WithBlockTime(time.Unix(now+3600, 0)).WithBlockHeight(100_000)
+	require.NoError(t, k.EndBlocker(c2))
+
+	got := k.GetReleaseState(c2)
+	require.EqualValues(t, 2, got.SamplesToday)
+	require.True(t, got.DayQualified,
+		"a later failing sample must not take back a day already qualified")
+}
+
+func TestEndBlocker_SameReportIsSampledOnlyOnce(t *testing.T) {
+	// Without this, the same reading would be re-counted on every block until a
+	// new report arrived, spending the whole day's quota on one price.
+	now := int64(1_700_000_000)
+	freshPrice := oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 60,
+	}
+	k, ctx := newKeeperWithOracle(t, testOracleKeeper{price: freshPrice})
+
+	c1 := ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, c1)
+	require.NoError(t, k.EndBlocker(c1))
+	require.EqualValues(t, 1, k.GetReleaseState(c1).SamplesToday)
+
+	// Same report again. The block height jumps well past the spacing floor so
+	// that gate cannot be what stops it, and the block time stays close enough
+	// that the report is still fresh -- otherwise this would pass because the
+	// reading went stale, not because it was already consumed.
+	c2 := ctx.WithBlockTime(time.Unix(now+60, 0)).WithBlockHeight(100_000)
+	require.NoError(t, k.EndBlocker(c2))
+	require.EqualValues(t, 1, k.GetReleaseState(c2).SamplesToday,
+		"the same report must not be consumed twice")
+}
+
+func TestEndBlocker_SampleQuotaIsCapped(t *testing.T) {
+	// The cap is what keeps ANY-of-N meaningful: every extra sample is another
+	// chance to clear the bar, so an uncapped feeder reporting continuously
+	// would reduce the rule to "the price touched the threshold once today".
+	now := int64(1_700_000_000)
+	oracle := &mutableOracleKeeper{}
+	k, ctx := newKeeperWithOracleIface(t, oracle)
+
+	params := k.GetParams(ctx)
+	quota := params.DailySamples
+	require.Positive(t, quota, "DailySamples must default to something positive")
+
+	// Feed quota+3 distinct failing reports, all on the same UTC day, spaced far
+	// enough apart in blocks to clear the spacing floor.
+	for i := int64(0); i < quota+3; i++ {
+		oracle.price = oracletypes.PriceData{
+			Price:     math.LegacyMustNewDecFromStr("0.0001"),
+			Volume24h: math.LegacyMustNewDecFromStr("1"),
+			Timestamp: now - 60 + i,
+		}
+		c := ctx.WithBlockTime(time.Unix(now, 0)).
+			WithBlockHeight(100 + i*(params.PriceCheckEpochBlocks+1))
+		if i == 0 {
+			forceTierEvaluation(t, k, c)
+		}
+		require.NoError(t, k.EndBlocker(c))
+	}
+
+	require.EqualValues(t, quota, k.GetReleaseState(ctx).SamplesToday,
+		"samples must stop at the daily quota")
+}
+
+func TestEndBlocker_SpacingFloorRejectsClusteredSamples(t *testing.T) {
+	// Three readings inside a few seconds are not "three readings spread across
+	// 24h" -- a momentary spike would satisfy the day.
+	now := int64(1_700_000_000)
+	oracle := &mutableOracleKeeper{price: oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 60,
+	}}
+	k, ctx := newKeeperWithOracleIface(t, oracle)
+
+	c1 := ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, c1)
+	require.NoError(t, k.EndBlocker(c1))
+	require.EqualValues(t, 1, k.GetReleaseState(c1).SamplesToday)
+
+	// New report, next block. Inside the spacing floor, so not sampled.
+	oracle.price = oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 59,
+	}
+	c2 := ctx.WithBlockTime(time.Unix(now+5, 0)).WithBlockHeight(101)
+	require.NoError(t, k.EndBlocker(c2))
+	require.EqualValues(t, 1, k.GetReleaseState(c2).SamplesToday,
+		"a reading inside the spacing floor must not be sampled")
+}
+
+func TestEndBlocker_UnqualifiedDayResetsStreak(t *testing.T) {
+	now := int64(1_700_000_000)
+	oracle := &mutableOracleKeeper{price: oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("0.0001"),
+		Volume24h: math.LegacyMustNewDecFromStr("1"),
+		Timestamp: now - 60,
+	}}
+	k, ctx := newKeeperWithOracleIface(t, oracle)
+	c1 := ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+
+	st := k.GetReleaseState(c1)
+	st.ConsecutiveDays = 5
+	st.LastSampleBlock = 0
+	require.NoError(t, k.SetReleaseState(c1, st))
+	require.NoError(t, k.EndBlocker(c1))
+	require.False(t, k.GetReleaseState(c1).DayQualified)
+
+	next := ctx.WithBlockTime(time.Unix(now+secondsPerDay, 0)).WithBlockHeight(200)
+	require.NoError(t, k.EndBlocker(next))
+	require.EqualValues(t, 0, k.GetReleaseState(next).ConsecutiveDays,
+		"a day with no qualifying sample resets the streak")
 }
 
 func TestEndBlocker_StalenessPausesNotResetsStreak(t *testing.T) {

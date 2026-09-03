@@ -9,6 +9,23 @@ import (
 
 // ----- Params -----
 
+const (
+	// DefaultDailySamples is how many oracle readings per UTC day count as tier
+	// samples. The rule is ANY-of-N: if one of the day's samples clears both the
+	// price and volume thresholds, the day counts towards the streak.
+	DefaultDailySamples = 3
+
+	// MaxDailySamples caps what governance may set DailySamples to.
+	//
+	// The cap exists because the parameter is one-directional: under ANY-of-N,
+	// every extra sample is another chance for the threshold to be met, so
+	// raising it can only make the release easier to trigger. Left unbounded, a
+	// proposal setting it to a few thousand would turn "the price held on three
+	// random checks" into "the price touched the threshold at least once today"
+	// without visibly changing any threshold. 24 keeps it at most hourly.
+	MaxDailySamples = 24
+)
+
 // DefaultParams returns the genesis tokenomics parameters.
 // Pool layout, as fractions of the 10 trillion ATOS supply. Each pool is backed
 // 100:1 by ERC20 ATOS on Ethereum, and the three add up to the whole supply:
@@ -48,7 +65,11 @@ func DefaultParams() Params {
 		ProjectReleaseShareBps:  5000,
 
 		ProjectTreasuryAddress: "",
-		PriceCheckEpochBlocks:  17_280,
+		// Minimum spacing between two tier samples, not an evaluation period.
+		// one_day / DefaultDailySamples = 17280 / 3, so the day's three samples
+		// cannot land closer together than 8h.
+		PriceCheckEpochBlocks:  17_280 / DefaultDailySamples,
+		DailySamples:           DefaultDailySamples,
 
 		MigrationMerkleRoot:       "",
 		MigrationClaimEndTimeUnix: 0, // 0 = no deadline
@@ -98,6 +119,15 @@ func (p Params) Validate() error {
 		if _, err := sdk.AccAddressFromBech32(p.ProjectTreasuryAddress); err != nil {
 			return fmt.Errorf("invalid project treasury address: %w", err)
 		}
+	}
+	if p.DailySamples <= 0 {
+		return fmt.Errorf("daily_samples must be positive")
+	}
+	// More samples is strictly more permissive under ANY-of-N semantics (each
+	// one is another chance to clear the bar), so an unbounded value would
+	// quietly turn the rule into "the price touched the threshold once today".
+	if p.DailySamples > MaxDailySamples {
+		return fmt.Errorf("daily_samples must be <= %d, got %d", MaxDailySamples, p.DailySamples)
 	}
 	if p.PriceCheckEpochBlocks <= 0 {
 		return fmt.Errorf("price check epoch blocks must be positive")
