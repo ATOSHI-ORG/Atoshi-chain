@@ -17,6 +17,13 @@ const (
 	GovPrecompileAddress          = "0x0000000000000000000000000000000000000805"
 	SlashingPrecompileAddress     = "0x0000000000000000000000000000000000000806"
 	EvidencePrecompileAddress     = "0x0000000000000000000000000000000000000807"
+	// BridgeAdapterPrecompileAddress exposes MsgBridgeOut to the EVM.
+	//
+	// Without it, bridging out is unreachable from MetaMask and every other EVM
+	// wallet: MsgBridgeOut is a Cosmos message and those wallets only sign EVM
+	// transactions. Staking is usable from a wallet because it has a precompile;
+	// the bridge did not.
+	BridgeAdapterPrecompileAddress = "0x0000000000000000000000000000000000000808"
 )
 
 // AvailableStaticPrecompiles defines the full list of all available EVM extension addresses.
@@ -34,4 +41,5 @@ var AvailableStaticPrecompiles = []string{
 	GovPrecompileAddress,
 	SlashingPrecompileAddress,
 	EvidencePrecompileAddress,
+	BridgeAdapterPrecompileAddress,
 }

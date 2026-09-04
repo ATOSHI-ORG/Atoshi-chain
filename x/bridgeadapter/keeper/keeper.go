@@ -49,6 +49,14 @@ func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 
 func (k Keeper) GetAuthority() string { return k.authority }
 
+// BaseDenom is the denom the bridge moves, i.e. the chain's base unit.
+//
+// Exported so the EVM precompile can build the max_fee coin without being
+// handed a second keeper. It forwards to tokenomics rather than hardcoding a
+// string, so renaming the base unit cannot leave a caller pointing at a denom
+// that no longer exists.
+func (k Keeper) BaseDenom() string { return k.tokenomicsKeeper.BaseDenom() }
+
 // ===== Params =====
 
 func (k Keeper) GetParams(ctx sdk.Context) types.Params {

@@ -10,15 +10,9 @@ import (
 
 	evidencekeeper "cosmossdk.io/x/evidence/keeper"
 
-	authzkeeper "github.com/cosmos/cosmos-sdk/x/authz/keeper"
-	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
-	distributionkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
-	govkeeper "github.com/cosmos/cosmos-sdk/x/gov/keeper"
-	slashingkeeper "github.com/cosmos/cosmos-sdk/x/slashing/keeper"
-	channelkeeper "github.com/cosmos/ibc-go/v8/modules/core/04-channel/keeper"
-	"github.com/ethereum/go-ethereum/common"
 	bankprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/bank"
 	"github.com/atoshi-chain/atoshi/v20/precompiles/bech32"
+	bridgeadapterprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/bridgeadapter"
 	distprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/distribution"
 	evidenceprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/evidence"
 	govprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/gov"
@@ -27,12 +21,20 @@ import (
 	slashingprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/slashing"
 	stakingprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/staking"
 	vestingprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/vesting"
+	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
 	erc20Keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/core/vm"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	transferkeeper "github.com/atoshi-chain/atoshi/v20/x/ibc/transfer/keeper"
 	stakingkeeper "github.com/atoshi-chain/atoshi/v20/x/staking/keeper"
 	vestingkeeper "github.com/atoshi-chain/atoshi/v20/x/vesting/keeper"
+	authzkeeper "github.com/cosmos/cosmos-sdk/x/authz/keeper"
+	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+	distributionkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
+	govkeeper "github.com/cosmos/cosmos-sdk/x/gov/keeper"
+	slashingkeeper "github.com/cosmos/cosmos-sdk/x/slashing/keeper"
+	channelkeeper "github.com/cosmos/ibc-go/v8/modules/core/04-channel/keeper"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 const bech32PrecompileBaseGas = 6_000
@@ -51,6 +53,7 @@ func NewAvailableStaticPrecompiles(
 	govKeeper govkeeper.Keeper,
 	slashingKeeper slashingkeeper.Keeper,
 	evidenceKeeper evidencekeeper.Keeper,
+	bridgeAdapterKeeper bakeeper.Keeper,
 ) map[common.Address]vm.PrecompiledContract {
 	// Clone the mapping from the latest EVM fork.
 	precompiles := maps.Clone(vm.PrecompiledContractsBerlin)
@@ -112,6 +115,11 @@ func NewAvailableStaticPrecompiles(
 		panic(fmt.Errorf("failed to instantiate evidence precompile: %w", err))
 	}
 
+	bridgeAdapterPrecompile, err := bridgeadapterprecompile.NewPrecompile(bridgeAdapterKeeper, authzKeeper)
+	if err != nil {
+		panic(fmt.Errorf("failed to instantiate bridgeadapter precompile: %w", err))
+	}
+
 	// Stateless precompiles
 	precompiles[bech32Precompile.Address()] = bech32Precompile
 	precompiles[p256Precompile.Address()] = p256Precompile
@@ -125,6 +133,7 @@ func NewAvailableStaticPrecompiles(
 	precompiles[govPrecompile.Address()] = govPrecompile
 	precompiles[slashingPrecompile.Address()] = slashingPrecompile
 	precompiles[evidencePrecompile.Address()] = evidencePrecompile
+	precompiles[bridgeAdapterPrecompile.Address()] = bridgeAdapterPrecompile
 
 	return precompiles
 }

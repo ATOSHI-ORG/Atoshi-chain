@@ -726,6 +726,7 @@ func NewAtoshi(
 			app.GovKeeper,
 			app.SlashingKeeper,
 			app.EvidenceKeeper,
+			app.BridgeAdapterKeeper,
 		),
 	)
 

@@ -11,10 +11,10 @@ import (
 	channeltypes "github.com/cosmos/ibc-go/v8/modules/core/04-channel/types"
 	host "github.com/cosmos/ibc-go/v8/modules/core/24-host"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/params"
 	"github.com/atoshi-chain/atoshi/v20/types"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/core/vm"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 var (
@@ -30,6 +30,13 @@ var (
 		VestingPrecompileAddress,      // Vesting precompile
 		BankPrecompileAddress,         // Bank precompile
 		GovPrecompileAddress,          // Gov precompile
+		// BridgeAdapter precompile. Without it, bridging out is unreachable
+		// from MetaMask and every other EVM wallet -- MsgBridgeOut is a Cosmos
+		// message and those wallets only sign EVM transactions.
+		//
+		// The list must stay sorted (ValidatePrecompiles enforces it for
+		// determinism), and 0x808 belongs after 0x805.
+		BridgeAdapterPrecompileAddress,
 	}
 	// DefaultExtraEIPs defines the default extra EIPs to be included
 	// On v15, EIP 3855 was enabled
