@@ -104,6 +104,26 @@ message Params {
   // is 5760 blocks (8h).
   int64 price_check_epoch_blocks = 16;
 
+  // day_seconds is how long a sampling "day" lasts.
+  //
+  // The release rule counts CONSECUTIVE DAYS, and a day is settled at the
+  // boundary of this window, so the real time to a release is
+  // consecutive_days_required * day_seconds. On mainnet this must be 86400 --
+  // the rule is specified in calendar days.
+  //
+  // It is a parameter only so a test network can compress it. With the mainnet
+  // value a testnet needs 30 real days to see one release, and even the reduced
+  // consecutive_days_required used for testing still needs that many real day
+  // boundaries, which makes the whole cross-chain path untestable in an
+  // afternoon. Set it to a few minutes there.
+  //
+  // ⚠️ Changing it on a live chain rescales the streak: days already counted
+  // were measured against the old window, and the ones after against the new
+  // one, so "30 consecutive days" stops meaning one thing. Change it only
+  // alongside a fresh genesis, or accept that the streak in progress is
+  // meaningless.
+  int64 day_seconds = 22;
+
   // migration_refill_threshold_bps triggers a migration_pool refill.
   //
   // When migration_pool's balance drops below this fraction of

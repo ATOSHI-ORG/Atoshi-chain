@@ -25,6 +25,10 @@ const (
 	// without visibly changing any threshold. 24 keeps it at most hourly.
 	MaxDailySamples = 24
 
+	// DefaultDaySeconds is the calendar day the release rule is specified in.
+	// Only a test network should deviate; see Params.DaySeconds.
+	DefaultDaySeconds = 86_400
+
 	// BpsDenominator is the basis-point scale.
 	BpsDenominator = 10_000
 
@@ -83,6 +87,7 @@ func DefaultParams() Params {
 		// cannot land closer together than 8h.
 		PriceCheckEpochBlocks:  17_280 / DefaultDailySamples,
 		DailySamples:           DefaultDailySamples,
+		DaySeconds:             DefaultDaySeconds,
 		MigrationRefillThresholdBps: DefaultMigrationRefillThresholdBps,
 
 		MigrationMerkleRoot:       "",
@@ -133,6 +138,9 @@ func (p Params) Validate() error {
 		if _, err := sdk.AccAddressFromBech32(p.ProjectTreasuryAddress); err != nil {
 			return fmt.Errorf("invalid project treasury address: %w", err)
 		}
+	}
+	if p.DaySeconds <= 0 {
+		return fmt.Errorf("day_seconds must be positive")
 	}
 	if p.MigrationRefillThresholdBps > BpsDenominator {
 		return fmt.Errorf("migration_refill_threshold_bps must be <= %d, got %d",

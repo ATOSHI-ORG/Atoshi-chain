@@ -86,11 +86,6 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 	return nil
 }
 
-// secondsPerDay is the UTC day length used to bucket samples. Deliberately a
-// plain constant and not a parameter: the release rule is specified in calendar
-// days, so a configurable "day" would silently rescale the 30-day streak.
-const secondsPerDay = 86400
-
 // EndBlocker samples the oracle and settles the streak at UTC day boundaries.
 //
 // # The rule
@@ -133,7 +128,15 @@ func (k Keeper) EndBlocker(ctx sdk.Context) error {
 		// sample in day 0 and settle the day at the first real block.
 		return nil
 	}
-	today := now / secondsPerDay
+	// The sampling window. A parameter so a test network can compress it --
+	// with the mainnet value one release takes consecutive_days_required real
+	// days, which makes the cross-chain path untestable in an afternoon. See
+	// Params.DaySeconds for why changing it mid-streak is meaningless.
+	daySeconds := params.DaySeconds
+	if daySeconds <= 0 {
+		daySeconds = tokenomicstypes.DefaultDaySeconds
+	}
+	today := now / daySeconds
 
 	// Keep the user bridge liquid before doing anything else. Independent of the
 	// tier machinery: it moves already-authorised ATOS between two pools and does

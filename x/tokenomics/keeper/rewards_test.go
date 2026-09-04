@@ -553,7 +553,7 @@ func TestEndBlocker_StreakAdvancesAtDayRollover(t *testing.T) {
 	require.True(t, k.GetReleaseState(ctx).DayQualified)
 
 	// Next UTC day: the previous day settles and the streak advances.
-	next := ctx.WithBlockTime(time.Unix(now+secondsPerDay, 0)).WithBlockHeight(200)
+	next := ctx.WithBlockTime(time.Unix(now+tokenomicstypes.DefaultDaySeconds, 0)).WithBlockHeight(200)
 	require.NoError(t, k.EndBlocker(next))
 
 	got := k.GetReleaseState(next)
@@ -702,7 +702,7 @@ func TestEndBlocker_UnqualifiedDayResetsStreak(t *testing.T) {
 	require.NoError(t, k.EndBlocker(c1))
 	require.False(t, k.GetReleaseState(c1).DayQualified)
 
-	next := ctx.WithBlockTime(time.Unix(now+secondsPerDay, 0)).WithBlockHeight(200)
+	next := ctx.WithBlockTime(time.Unix(now+tokenomicstypes.DefaultDaySeconds, 0)).WithBlockHeight(200)
 	require.NoError(t, k.EndBlocker(next))
 	require.EqualValues(t, 0, k.GetReleaseState(next).ConsecutiveDays,
 		"a day with no qualifying sample resets the streak")
@@ -901,4 +901,42 @@ func TestRefillMigrationPool_RepeatedCallsCannotReuseAuthorisation(t *testing.T)
 	require.NoError(t, k.RefillMigrationPool(ctx))
 	require.Equal(t, after, migrationBalance(k, ctx, bk),
 		"授权已用完，第二次不该再搬")
+}
+
+func TestEndBlocker_DaySecondsCompressesTheWindow(t *testing.T) {
+	// 这个参数存在的唯一理由：主网一个 release 要 consecutive_days_required 个
+	// 真实日切，测试网等不了。压缩之后同一套判定逻辑在几分钟内就能跑完，
+	// 而不用给测试环境另写一条代码路径。
+	const testDay = 300 // 5 分钟
+
+	now := int64(1_700_000_000)
+	oracle := &mutableOracleKeeper{price: oracletypes.PriceData{
+		Price:     math.LegacyMustNewDecFromStr("1000.00"),
+		Volume24h: math.LegacyMustNewDecFromStr("1000000"),
+		Timestamp: now - 60,
+	}}
+	k, ctx := newKeeperWithOracleIface(t, oracle)
+
+	p := k.GetParams(ctx)
+	p.DaySeconds = testDay
+	require.NoError(t, k.SetParams(ctx, p))
+
+	c1 := ctx.WithBlockTime(time.Unix(now, 0)).WithBlockHeight(100)
+	forceTierEvaluation(t, k, c1)
+	require.NoError(t, k.EndBlocker(c1))
+	require.True(t, k.GetReleaseState(c1).DayQualified)
+	require.EqualValues(t, 0, k.GetReleaseState(c1).ConsecutiveDays)
+
+	// 只推进一个压缩后的「天」，不是 86400 秒
+	next := ctx.WithBlockTime(time.Unix(now+testDay, 0)).WithBlockHeight(200)
+	require.NoError(t, k.EndBlocker(next))
+	require.EqualValues(t, 1, k.GetReleaseState(next).ConsecutiveDays,
+		"压缩后的窗口边界也应该结算当天")
+}
+
+func TestParams_ZeroDaySecondsRejected(t *testing.T) {
+	// 0 会让 now/daySeconds 除零 panic，而 panic 在 EndBlocker 里会让链停摆。
+	p := tokenomicstypes.DefaultParams()
+	p.DaySeconds = 0
+	require.Error(t, p.Validate())
 }
