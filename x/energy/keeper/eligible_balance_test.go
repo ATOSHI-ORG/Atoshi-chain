@@ -81,9 +81,9 @@ func atos(n int64) math.Int {
 	return math.NewIntWithDecimal(1, 18).MulRaw(n)
 }
 
-// TestEligibleBalance_SumsAllFourTerms pins the definition: energy eligibility
-// is everything the holder owns, wherever the coins are parked.
-func TestEligibleBalance_SumsAllFourTerms(t *testing.T) {
+// TestEligibleBalance_SumsAllFiveTerms pins the definition: energy eligibility
+// is everything the holder owns, wherever the coins are parked -- including ATOX.
+func TestEligibleBalance_SumsAllFiveTerms(t *testing.T) {
 	k, ctx, bank, staking := newKeeperWithStaking(t)
 	addr := sdk.AccAddress([]byte("holder--------------"))
 
@@ -95,7 +95,47 @@ func TestEligibleBalance_SumsAllFourTerms(t *testing.T) {
 	acct.LockedAtos = atos(8_000)
 	k.SetEnergyAccount(ctx, acct)
 
-	require.Equal(t, atos(15_000).String(), k.EligibleBalance(ctx, addr).String())
+	bank.atox[addr.String()] = atos(16_000)
+
+	require.Equal(t, atos(31_000).String(), k.EligibleBalance(ctx, addr).String())
+}
+
+// TestEligibleBalance_ConversionIsCapNeutral is why ATOX counts at face value
+// rather than at a discount.
+//
+// Conversion burns ATOX and pays the same number of liao, so a holder who claims
+// has simply changed which denom holds their entitlement. Energy capacity must
+// not notice -- discounting ATOX would mean capacity JUMPED on every claim, and
+// weighting it below par would mean capacity FELL, both punishing or rewarding
+// the holder for an accounting event they did not choose.
+func TestEligibleBalance_ConversionIsCapNeutral(t *testing.T) {
+	k, ctx, bank, _ := newKeeperWithStaking(t)
+	addr := sdk.AccAddress([]byte("converter-----------"))
+
+	bank.atox[addr.String()] = atos(1_000)
+	bank.balances[addr.String()] = math.ZeroInt()
+	before := k.EligibleBalance(ctx, addr)
+
+	// Convert a quarter: 250 ATOX burned, 250 liao paid out.
+	bank.atox[addr.String()] = atos(750)
+	bank.balances[addr.String()] = atos(250)
+
+	require.Equal(t, before.String(), k.EligibleBalance(ctx, addr).String(),
+		"converting ATOX into ATOS must leave energy capacity unchanged")
+}
+
+// TestEligibleBalance_UnwithdrawnAtoxDoesNotCount: ATOX accrued as staking
+// rewards sits in the distribution module and is not in the holder's account
+// yet. Counting it would hand out energy against coins they cannot spend, and
+// would treat ATOX rewards differently from ATOS rewards, which already do not
+// count until withdrawn.
+func TestEligibleBalance_UnwithdrawnAtoxDoesNotCount(t *testing.T) {
+	k, ctx, bank, _ := newKeeperWithStaking(t)
+	addr := sdk.AccAddress([]byte("miner---------------"))
+
+	// Nothing in the wallet; rewards are still with x/distribution.
+	bank.balances[addr.String()] = math.ZeroInt()
+	require.True(t, k.EligibleBalance(ctx, addr).IsZero())
 }
 
 // TestEligibleBalance_StakingIsCapNeutral is the behaviour the user asked for:
