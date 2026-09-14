@@ -65,8 +65,13 @@ func ComputeIndexDelta(amount, remainderIn, supplyCap math.Int) (math.LegacyDec,
 	return math.LegacyNewDecFromIntWithPrec(deltaScaled, 18), remainderOut, nil
 }
 
-// ComputeTransferFee returns the fee charged ON TOP of an ATOX transfer of
-// `amount`, rounded up.
+// ComputeTransferFee returns the ATOX transfer fee on `amount`, rounded up.
+//
+// The fee is INCLUSIVE: `amount` is what leaves the sender, and the recipient
+// receives amount - fee. (It used to be charged on top; x/atox/wrapper carved it
+// into the amount instead, because an on-top fee makes a plain ERC20-style
+// transfer(to, amount) move a different number than it names, and leaves the
+// last coins of a balance permanently stuck.)
 //
 // Rounding up rather than down keeps the fee from being avoidable by splitting:
 // truncating would make any transfer below BpsDenominator/feeBps aatox free, so
@@ -85,9 +90,17 @@ func ComputeTransferFee(amount math.Int, feeBps uint32) math.Int {
 	return fee
 }
 
-// MaxSendableWithFee returns the largest amount an account holding `balance` can
-// transfer once the on-top fee is accounted for, i.e. the value a wallet's "Max"
-// button must use. Sending more than this always fails for want of fee headroom.
+// MaxSendableWithFee returns the largest amount sendable under an ON-TOP fee.
+//
+// NOT what a wallet's "Max" button should use any more. The fee is inclusive, so
+// the whole balance is sendable and no headroom is needed; the only deduction is
+// the conversion burn a settlement will take. The number to show is
+// max_sendable from the account query (QueryAccountResponse.MaxSendable), which
+// accounts for that.
+//
+// Kept because the on-top arithmetic is still what its tests pin down, and
+// because a fee could be made on-top again by a future param without rewriting
+// it. Nothing in production calls it.
 func MaxSendableWithFee(balance math.Int, feeBps uint32) math.Int {
 	if balance.IsNil() || !balance.IsPositive() {
 		return math.ZeroInt()
