@@ -711,3 +711,58 @@ func TestGenesis_SweptIndexRoundTrip(t *testing.T) {
 	require.ErrorContains(t, bad.Validate(), "exceeds global_index")
 }
 
+
+// TestConversionBurnDoesNotFreeMintHeadroom is the 1-trillion peg guard.
+//
+// Both burns lower live supply, but only the transfer fee may be re-mined. If
+// conversion burn also freed headroom, the destroyed ATOX would come back as
+// block rewards and its new holder could draw on an exchange pool that already
+// paid for the originals -- the peg would leak a little on every conversion.
+func TestConversionBurnDoesNotFreeMintHeadroom(t *testing.T) {
+	k, ctx, _ := setup(t)
+	disableTransferFee(t, k, ctx)
+	alice := acc("alice")
+
+	cap := k.GetParams(ctx).SupplyCap
+	require.NoError(t, k.MintAtox(ctx, alice, cap))
+	require.True(t, k.MintedAgainstCap(ctx).Equal(cap), "at the cap after minting it all")
+
+	// A release converts part of alice's holding; settling burns the ATOX.
+	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, math.NewIntWithDecimal(1, 28)))
+	_, err := k.SettleAccount(ctx, alice, types.TriggerClaim)
+	require.NoError(t, err)
+
+	burned := k.GetGlobalState(ctx).TotalBurned
+	require.True(t, burned.IsPositive(), "conversion must have burned something")
+	require.True(t, k.AtoxSupply(ctx).LT(cap), "live supply dropped")
+
+	// The headroom must NOT have opened up.
+	require.True(t, k.MintedAgainstCap(ctx).Equal(cap),
+		"conversion burn freed %s of mint headroom; it must free none",
+		cap.Sub(k.MintedAgainstCap(ctx)))
+	require.ErrorIs(t, k.MintAtox(ctx, alice, math.NewInt(1)), types.ErrSupplyCapReached)
+}
+
+// TestTransferFeeBurnDoesFreeMintHeadroom is the other half: the fee is a toll,
+// and burning it is how the toll is recycled into future block rewards.
+func TestTransferFeeBurnDoesFreeMintHeadroom(t *testing.T) {
+	k, ctx, bank := setup(t)
+	alice, bob := acc("alice"), acc("bob")
+
+	cap := k.GetParams(ctx).SupplyCap
+	require.NoError(t, k.MintAtox(ctx, alice, cap))
+	require.True(t, k.MintedAgainstCap(ctx).Equal(cap))
+
+	// No release yet, so nothing converts -- this isolates the fee burn.
+	send := types.MaxSendableWithFee(cap, k.GetParams(ctx).TransferFeeBps)
+	require.NoError(t, bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, send))))
+
+	fee := k.GetGlobalState(ctx).TotalFeeBurned
+	require.True(t, fee.IsPositive(), "the transfer must have burned a fee")
+	require.True(t, k.GetGlobalState(ctx).TotalBurned.IsZero(), "no conversion happened")
+
+	freed := cap.Sub(k.MintedAgainstCap(ctx))
+	require.Equal(t, fee.String(), freed.String(),
+		"fee burn must free exactly its own amount of headroom")
+	require.NoError(t, k.MintAtox(ctx, bob, fee), "the recycled fee is mintable again")
+}

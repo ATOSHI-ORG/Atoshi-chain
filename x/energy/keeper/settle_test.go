@@ -17,6 +17,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
 
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
+
 	"github.com/atoshi-chain/atoshi/v20/x/energy/types"
 )
 
@@ -29,16 +31,30 @@ import (
 // after constructing the keeper.
 type fakeBank struct {
 	balances map[string]math.Int
-	denom    string
-	onSend   func(from, to sdk.AccAddress, amt sdk.Coins)
+	// atox is the aatox ledger, kept apart from `balances` (which is the base
+	// denom). GetBalance used to ignore the denom argument and answer every
+	// query from `balances`, which was harmless while energy only ever asked for
+	// one denom -- but EligibleBalance now also reads ATOX, and a denom-blind
+	// stub reported the holder's ATOS a second time as ATOX.
+	atox   map[string]math.Int
+	denom  string
+	onSend func(from, to sdk.AccAddress, amt sdk.Coins)
 }
 
 func newFakeBank(denom string) *fakeBank {
-	return &fakeBank{balances: map[string]math.Int{}, denom: denom}
+	return &fakeBank{
+		balances: map[string]math.Int{},
+		atox:     map[string]math.Int{},
+		denom:    denom,
+	}
 }
 
 func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) sdk.Coin {
-	v, ok := b.balances[addr.String()]
+	ledger := b.balances
+	if denom == atoshitypes.AtoxBaseDenom {
+		ledger = b.atox
+	}
+	v, ok := ledger[addr.String()]
 	if !ok {
 		return sdk.NewCoin(denom, math.ZeroInt())
 	}
