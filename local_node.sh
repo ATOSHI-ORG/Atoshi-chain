@@ -18,7 +18,9 @@ MONIKER="atoshi-dev-node"
 # Keyring configuration
 # Using 'file' backend for password-protected key storage
 # This is more secure than 'test' which allows anyone to export keys without password
-KEYRING="file"
+# test 而不是 file：file 后端每次操作都要输密码，脚本跑到 gentx 就卡死在
+# "too many failed passphrase attempts"。这是本地开发链，密钥没有价值。
+KEYRING="${KEYRING:-test}"
 KEYALGO="eth_secp256k1"
 LOGLEVEL="info"
 
@@ -314,15 +316,23 @@ if [[ $overwrite == "y" || $overwrite == "Y" ]]; then
 	# Validator: 100,000,000 ATOS
 	# Dev accounts: 1,000 ATOS each
 	echo -e "${BLUE}Allocating genesis accounts...${NC}"
-	atoshid add-genesis-account "$(atoshid keys show "$VAL_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 100000000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
-	atoshid add-genesis-account "$(atoshid keys show "$USER1_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
+	# 2 亿 ATOS，不是 1 亿。gentx 要自委托满 validator_min_self_delegation
+	# （1 亿），而签 gentx 本身还要花掉一点手续费 —— 给正好 1 亿的话会以
+	# "99999999999800000000000000liao is smaller than 100000000000000000000000000liao"
+	# 失败，差的就是那笔手续费。
+	atoshid add-genesis-account "$(atoshid keys show "$VAL_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 200000000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
+	# user1 额外带 100 万 ATOX，这样不用等挖矿就能测 ATOX 的转账手续费和兑换。
+	atoshid add-genesis-account "$(atoshid keys show "$USER1_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000000$BASE_DENOM,1000000000000000000000000aatox --keyring-backend "$KEYRING" --home "$HOMEDIR"
 	atoshid add-genesis-account "$(atoshid keys show "$USER2_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
 	atoshid add-genesis-account "$(atoshid keys show "$USER3_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
 	atoshid add-genesis-account "$(atoshid keys show "$USER4_KEY" -a --keyring-backend "$KEYRING" --home "$HOMEDIR")" 1000000000000000000000$BASE_DENOM --keyring-backend "$KEYRING" --home "$HOMEDIR"
 
 	# Sign genesis transaction
 	echo -e "${BLUE}Creating genesis transaction...${NC}"
-	atoshid gentx "$VAL_KEY" 1000000000000000000000$BASE_DENOM --gas-prices ${BASEFEE}$BASE_DENOM --keyring-backend "$KEYRING" --chain-id "$CHAINID" --home "$HOMEDIR"
+	# 质押 1 亿 ATOS，等于 x/staking 的 validator_min_self_delegation。
+	# 原来写的 1000 ATOS 是这个参数加进来之前的值，现在会让创世直接 panic：
+	# "validator min_self_delegation must be at least 100000000000000000000000000, got 1"
+	atoshid gentx "$VAL_KEY" 100000000000000000000000000$BASE_DENOM --min-self-delegation 100000000000000000000000000 --gas-prices ${BASEFEE}$BASE_DENOM --keyring-backend "$KEYRING" --chain-id "$CHAINID" --home "$HOMEDIR"
 
 	# Collect genesis tx
 	atoshid collect-gentxs --home "$HOMEDIR"
