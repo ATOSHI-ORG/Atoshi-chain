@@ -82,65 +82,30 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 		return to, err
 	}
 
-	if err := k.chargeTransferFee(sdkCtx, from, to, moved); err != nil {
-		return to, err
-	}
-
+	// The transfer fee is NOT charged here. A SendRestrictionFn can only redirect
+	// the recipient, so it cannot carve the fee out of the transferred amount --
+	// charging from this point can only add it on top. x/atox/wrapper takes it
+	// out of the amount instead; this function is left with the one job it can
+	// do correctly, which is settling both sides before their balances move.
 	return to, nil
 }
 
 // feeInProgressKey marks a context as being inside the fee collection send.
 type feeInProgressKey struct{}
 
-// chargeTransferFee takes the on-top ATOX fee from the sender and burns it.
-//
-// SendRestrictionFn can only return a replacement recipient or an error, so it
-// cannot enlarge the transfer it is inspecting. It can, however, move coins
-// itself — verified against the real bank keeper — and that is how an on-top fee
-// becomes possible at all. Doing it here rather than in a dedicated message is
-// what makes the fee unavoidable: MsgSend, the ERC20 precompile that EVM wallets
-// use, IBC and Authz all funnel into bank.SendCoins, so all of them are charged.
-//
-// The sender's balance is already short by `moved` at this point, so the fee is
-// taken from what remains — which is exactly the on-top semantics: sending 100
-// at 1000 bps costs 110 in total.
-//
-// If the sender cannot cover amount+fee the error propagates out of the outer
-// send and baseapp discards the whole tx's writes, so the debit already made is
-// never committed. Verified: the debit is NOT rolled back by bank itself, only by
-// the tx-level cache, so the fee must never be silently skipped on shortfall.
-//
-// Exemptions matter as much as the charge. Transfers touching a module account go
-// free because ATOX reaches holders through the atox module account,
-// fee_collector and distribution; taxing those would take 10% out of every
-// holder's mining income before they ever saw it.
-func (k Keeper) chargeTransferFee(ctx sdk.Context, from, to sdk.AccAddress, moved math.Int) error {
-	params := k.GetParams(ctx)
-	if params.TransferFeeBps == 0 {
-		return nil
-	}
-	if k.isModuleAccount(ctx, from) || k.isModuleAccount(ctx, to) {
-		return nil
-	}
 
-	fee := types.ComputeTransferFee(moved, params.TransferFeeBps)
-	if !fee.IsPositive() {
-		return nil
-	}
-
-	coins := sdk.NewCoins(sdk.NewCoin(k.atoxDenom, fee))
-	feeCtx := ctx.WithValue(feeInProgressKey{}, true)
-
-	if err := k.bankKeeper.SendCoinsFromAccountToModule(feeCtx, from, types.ModuleName, coins); err != nil {
-		return err
-	}
-	if err := k.bankKeeper.BurnCoins(ctx, types.ModuleName, coins); err != nil {
-		return err
-	}
-
-	// Burning is the recycling: MintAtox caps against live supply, so destroying
-	// the fee restores headroom for the same amount to be mined again as future
-	// block rewards.
+// RecordFeeBurn books a transfer fee that the bank wrapper has already collected
+// and burned.
+//
+// The wrapper owns the carve-out (only it can change the transferred amount) but
+// this keeper owns the counter, so the two are split rather than letting the
+// wrapper write into this module's store.
+//
+// Burning IS the recycling: MintAtox measures against live supply, so destroying
+// the fee restores headroom for the same amount to be mined again as future
+// block rewards. Conversion burn is tracked separately in TotalBurned precisely
+// because it must NOT restore headroom.
+func (k Keeper) RecordFeeBurn(ctx sdk.Context, from sdk.AccAddress, fee, moved math.Int) error {
 	gs := k.GetGlobalState(ctx)
 	gs.TotalFeeBurned = gs.TotalFeeBurned.Add(fee)
 	if err := k.SetGlobalState(ctx, gs); err != nil {
@@ -153,6 +118,14 @@ func (k Keeper) chargeTransferFee(ctx sdk.Context, from, to sdk.AccAddress, move
 		sdk.NewAttribute(types.AttributeKeyAmount, fee.String()),
 		sdk.NewAttribute(types.AttributeKeyTransferAmount, moved.String()),
 	))
-
 	return nil
 }
+
+// TransferFeeBps exposes the fee rate to the bank wrapper.
+func (k Keeper) TransferFeeBps(ctx sdk.Context) uint32 { return k.GetParams(ctx).TransferFeeBps }
+
+// IsModuleAccount exposes the exemption test to the bank wrapper.
+func (k Keeper) IsModuleAccount(ctx sdk.Context, addr sdk.AccAddress) bool {
+	return k.isModuleAccount(ctx, addr)
+}
+
