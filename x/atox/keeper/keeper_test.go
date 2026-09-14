@@ -21,6 +21,7 @@ import (
 
 	"github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
 	"github.com/atoshi-chain/atoshi/v20/x/atox/types"
+	"github.com/atoshi-chain/atoshi/v20/x/atox/wrapper"
 )
 
 const (
@@ -39,6 +40,7 @@ type fakeBank struct {
 	supply   sdk.Coins
 	modAddrs map[string]sdk.AccAddress
 	hook     func(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) (sdk.AccAddress, error)
+	feeK     wrapper.AtoxKeeper
 	depth    int
 	failed   bool
 }
@@ -144,8 +146,60 @@ func (b *fakeBank) SendCoinsFromModuleToModule(ctx context.Context, from, to str
 }
 
 // SendCoins is the account-to-account path used by the transfer tests.
+//
+// Routed through wrapper.ChargeInclusiveFee, the same function app.go installs
+// in front of the real bank keeper, so these tests exercise the production fee
+// rules instead of a second copy of them that could drift.
+//
+// feeK is set by setup(); until then (during keeper construction) it is nil and
+// sends go straight through.
 func (b *fakeBank) SendCoins(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) error {
-	return b.send(ctx, from, to, amt)
+	if b.feeK == nil {
+		return b.send(ctx, from, to, amt)
+	}
+	// The carve-out is two moves -- fee to the module, then the remainder to the
+	// recipient -- and they must succeed or fail together. In production that is
+	// baseapp: both run inside one tx, so an error at either step discards the
+	// other's writes. Here the balances are a Go map that no cache wraps, so the
+	// pair is bracketed explicitly; without it a failed net send would leave the
+	// fee collected against a transfer that never happened.
+	return b.atomically(func() error {
+		return wrapper.ChargeInclusiveFee(ctx, rawSender{b}, b.feeK, from, to, amt)
+	})
+}
+
+func (b *fakeBank) atomically(fn func() error) error {
+	if b.depth > 0 {
+		return fn()
+	}
+	snapBalances := make(map[string]sdk.Coins, len(b.balances))
+	for k, v := range b.balances {
+		snapBalances[k] = v
+	}
+	snapSupply := b.supply
+
+	b.depth++
+	err := fn()
+	b.depth--
+
+	if err != nil {
+		b.balances, b.supply, b.failed = snapBalances, snapSupply, false
+	}
+	return err
+}
+
+// rawSender exposes the untaxed primitives to the fee logic, so the recursive
+// call for the net amount does not re-enter the carve-out.
+type rawSender struct{ b *fakeBank }
+
+func (r rawSender) SendCoins(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) error {
+	return r.b.send(ctx, from, to, amt)
+}
+func (r rawSender) SendCoinsFromAccountToModule(ctx context.Context, from sdk.AccAddress, m string, amt sdk.Coins) error {
+	return r.b.SendCoinsFromAccountToModule(ctx, from, m, amt)
+}
+func (r rawSender) BurnCoins(ctx context.Context, m string, amt sdk.Coins) error {
+	return r.b.BurnCoins(ctx, m, amt)
 }
 
 type fakeAccountKeeper struct {
@@ -208,6 +262,7 @@ func setup(t *testing.T) (keeper.Keeper, sdk.Context, *fakeBank) {
 	require.NoError(t, bank.MintCoins(ctx, sourceModule,
 		sdk.NewCoins(sdk.NewCoin(atosDenom, math.NewIntWithDecimal(1, 32)))))
 
+	bank.feeK = k
 	return k, ctx, bank
 }
 

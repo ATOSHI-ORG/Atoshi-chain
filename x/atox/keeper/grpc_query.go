@@ -54,13 +54,14 @@ func (q Querier) Account(goCtx context.Context, req *types.QueryAccountRequest) 
 
 	canClaim, reason := q.claimStatus(ctx, addr, claimable)
 
-	// The burn is what settling would destroy; subtract it before sizing a
-	// transfer, then leave room for the fee on top of what is left.
+	// The fee is inclusive, so it needs no headroom: the whole remaining balance
+	// is sendable, and the recipient simply receives it minus the fee. The only
+	// deduction is the conversion burn, which settling -- something any transfer
+	// triggers -- will destroy before the transfer is applied.
 	sendable := balance.Sub(unsettled)
 	if sendable.IsNegative() {
 		sendable = math.ZeroInt()
 	}
-	sendable = types.MaxSendableWithFee(sendable, q.GetParams(ctx).TransferFeeBps)
 
 	return &types.QueryAccountResponse{
 		Account:            q.GetAtoxAccount(ctx, addr),
