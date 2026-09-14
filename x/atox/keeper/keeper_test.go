@@ -111,16 +111,26 @@ func (b *fakeBank) send(ctx context.Context, from, to sdk.AccAddress, amt sdk.Co
 }
 
 func (b *fakeBank) sendInner(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) error {
+	// Order matches cosmos-sdk v0.53.4 BaseSendKeeper.SendCoins: the restriction
+	// runs FIRST, then the debit, then the credit.
+	//
+	// This used to debit first, which is not what the chain does -- app.go wires
+	// bankkeeper.NewBaseKeeper, and its SendCoins calls sendRestriction.apply
+	// before subUnlockedCoins. The difference is invisible to a restriction that
+	// only inspects, but conversion burn moves the sender's coins from inside the
+	// restriction: under the old order the sender was already debited, so a
+	// send-max looked like it had nothing left to burn and failed for a reason
+	// production would never produce.
+	if b.hook != nil {
+		if _, err := b.hook(ctx, from, to, amt); err != nil { // 1. restriction
+			return err
+		}
+	}
 	cur := b.balances[from.String()]
 	if !cur.IsAllGTE(amt) {
 		return fmt.Errorf("insufficient funds: %s has %s, needs %s", from, cur, amt)
 	}
-	b.balances[from.String()] = cur.Sub(amt...) // 1. debit sender
-	if b.hook != nil {
-		if _, err := b.hook(ctx, from, to, amt); err != nil { // 2. restriction
-			return err
-		}
-	}
+	b.balances[from.String()] = cur.Sub(amt...)                   // 2. debit sender
 	b.balances[to.String()] = b.balances[to.String()].Add(amt...) // 3. credit receiver
 	return nil
 }
@@ -379,8 +389,15 @@ func TestSolvency_NinetyTransfersCannotOutEarnStayingPut(t *testing.T) {
 	for i := 1; i <= hops; i++ {
 		require.NoError(t, k.AddToExchangePool(ctx, sourceModule, perRelease))
 		next := acc(fmt.Sprintf("hop%d", i))
+		// Settle BEFORE reading the balance. The send itself would settle and
+		// burn, so a balance read now and spent in the same call is stale by
+		// exactly the burn -- the same trap a wallet hits when it offers
+		// "send max" without settling first.
+		_, err := k.SettleAccount(ctx, holder, types.TriggerClaim)
+		require.NoError(t, err)
+		left := bank.GetBalance(ctx, holder, atoxDenom).Amount
 		require.NoError(t, bank.SendCoins(ctx, holder, next,
-			sdk.NewCoins(sdk.NewCoin(atoxDenom, pot))))
+			sdk.NewCoins(sdk.NewCoin(atoxDenom, left))))
 		holder = next
 	}
 
@@ -422,7 +439,17 @@ func TestTransfer_SplitsSpanBetweenSenderAndReceiver(t *testing.T) {
 	rel := math.NewIntWithDecimal(1, 28)
 	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, rel))
 
-	require.NoError(t, bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, pot))))
+	// Move what alice actually still holds. Settling release 1 burned the ATOX
+	// that bought her payout, so the full `pot` is no longer there.
+	//
+	// Bob still earns the FULL release 2 from the smaller balance -- that is the
+	// entitlement denominator at work: his 0.99*cap is valued at
+	// 0.99*cap * delta / (1 - 0.01) = cap * delta. Without the denominator he
+	// would come up 1% short here.
+	_, err := k.SettleAccount(ctx, alice, types.TriggerClaim)
+	require.NoError(t, err)
+	aliceLeft := bank.GetBalance(ctx, alice, atoxDenom).Amount
+	require.NoError(t, bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, aliceLeft))))
 
 	// Release 2 accrues entirely to bob.
 	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, rel))
@@ -445,11 +472,18 @@ func TestSelfTransfer_IsNeutral(t *testing.T) {
 	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, rel))
 
 	before, beforeU := k.Claimable(ctx, alice)
-	require.NoError(t, bank.SendCoins(ctx, alice, alice, sdk.NewCoins(sdk.NewCoin(atoxDenom, pot))))
+	// Settle first, then self-transfer what is actually left.
+	_, serr := k.SettleAccount(ctx, alice, types.TriggerClaim)
+	require.NoError(t, serr)
+	selfAmt := bank.GetBalance(ctx, alice, atoxDenom).Amount
+	require.NoError(t, bank.SendCoins(ctx, alice, alice, sdk.NewCoins(sdk.NewCoin(atoxDenom, selfAmt))))
 	after, afterU := k.Claimable(ctx, alice)
 
 	require.Equal(t, before.Add(beforeU).String(), after.Add(afterU).String())
-	require.Equal(t, pot.String(), k.AtoxBalance(ctx, alice).String())
+	// Neutral means the self-transfer changed nothing -- not that the balance is
+	// still the minted `pot`. Settling before the send burned the ATOX that
+	// bought alice's payout, so compare against the post-settle figure.
+	require.Equal(t, selfAmt.String(), k.AtoxBalance(ctx, alice).String())
 }
 
 func TestEndBlocker_SweepCoversEveryAccountAndCyclesCursor(t *testing.T) {
@@ -676,3 +710,4 @@ func TestGenesis_SweptIndexRoundTrip(t *testing.T) {
 	bad.SweptIndex = bad.GlobalState.GlobalIndex.Add(math.LegacyOneDec())
 	require.ErrorContains(t, bad.Validate(), "exceeds global_index")
 }
+

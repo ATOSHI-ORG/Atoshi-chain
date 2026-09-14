@@ -107,24 +107,82 @@ func MaxSendableWithFee(balance math.Int, feeBps uint32) math.Int {
 	return a
 }
 
-// ComputeOwed returns the ATOS owed to a holder of `atoxBalance` aatox over an
-// index span of `delta`, truncated toward zero.
+// ComputeOwed returns the ATOS owed to a holder over an index span, and the
+// ATOX to burn for it.
+//
+// # Why the balance alone is not the base
+//
+// Conversion burns ATOX 1:1 against the ATOS paid, so a holder's balance shrinks
+// as they claim. Accruing on the shrunken balance would under-pay everyone who
+// claims early: 100 ATOX claimed at every tier would yield ~88 ATOS instead of
+// 100, and the "one ATOX ultimately converts to one ATOS" promise would hold
+// only for holders who never claimed.
+//
+// The fix needs no extra state. After a settlement an account's balance IS its
+// remaining entitlement, because exactly the drawn part was burned:
+//
+//	balance = entitlement * (1 - accountIndex)
+//	=> entitlement = balance / (1 - accountIndex)
+//
+// so the span is valued against that reconstructed entitlement:
+//
+//	owed = balance * (globalIndex - accountIndex) / (1 - accountIndex)
+//
+// The result is claim-timing independent. 100 ATOX yields exactly 100 ATOS by
+// index 1.0 whether claimed once at the end, at every tier, or anywhere between
+// — TestClaimTimingDoesNotChangeTotal pins this.
+//
+// # Rounding
 //
 // Truncating down is required, not cosmetic: it guarantees
 //
-//	sum_over_holders(owed) <= liveSupply*delta <= supplyCap*delta <= released
+//	sum_over_holders(owed) <= supplyCap*delta <= released
 //
-// so the pool can always cover what has been booked. Rounding up, or rounding
-// to nearest, would let the sum exceed the released amount and eventually
-// leave the last claimants unable to withdraw.
-func ComputeOwed(atoxBalance math.Int, delta math.LegacyDec) math.Int {
+// so the pool can always cover what has been booked. Rounding up, or rounding to
+// nearest, would let the sum exceed the released amount and eventually leave the
+// last claimants unable to withdraw.
+//
+// # burn
+//
+// burn == owed numerically: one aatox is destroyed per liao paid, which is what
+// makes the 1:1 cap hold. It is returned separately rather than left for the
+// caller to re-derive, so the two can never drift apart.
+//
+// accountIndex at or above 1.0 means the entitlement is fully drawn; the
+// division would blow up, so it returns zero instead.
+func ComputeOwed(atoxBalance math.Int, accountIndex, globalIndex math.LegacyDec) (owed, burn math.Int) {
+	zero := math.ZeroInt()
 	if atoxBalance.IsNil() || !atoxBalance.IsPositive() {
-		return math.ZeroInt()
+		return zero, zero
 	}
-	if delta.IsNil() || !delta.IsPositive() {
-		return math.ZeroInt()
+	if accountIndex.IsNil() || globalIndex.IsNil() {
+		return zero, zero
 	}
-	return delta.MulInt(atoxBalance).TruncateInt()
+	if !globalIndex.GT(accountIndex) {
+		return zero, zero
+	}
+
+	one := math.LegacyOneDec()
+	if accountIndex.GTE(one) {
+		// Fully drawn. Nothing left to convert, and 1/(1-1) is undefined.
+		return zero, zero
+	}
+
+	delta := globalIndex.Sub(accountIndex)
+	remaining := one.Sub(accountIndex)
+
+	// balance * delta / remaining, truncated. Multiply before dividing so the
+	// division only loses sub-liao precision rather than compounding.
+	owed = delta.MulInt(atoxBalance).Quo(remaining).TruncateInt()
+
+	// The entitlement reconstruction is exact in arithmetic but the balance is an
+	// integer, so at globalIndex == 1.0 rounding can ask for a hair more than is
+	// held. Burning cannot exceed the balance, and paying more ATOS than ATOX
+	// burned would break the cap -- so clamp both together.
+	if owed.GT(atoxBalance) {
+		owed = atoxBalance
+	}
+	return owed, owed
 }
 
 // ----- Params -----
@@ -179,6 +237,7 @@ func DefaultGlobalState() GlobalState {
 		TotalPending:        math.ZeroInt(),
 		TotalPaidOut:        math.ZeroInt(),
 		TotalFeeBurned:      math.ZeroInt(),
+		TotalBurned:         math.ZeroInt(),
 	}
 }
 
@@ -196,6 +255,7 @@ func (s GlobalState) Validate() error {
 		{"total_pending", s.TotalPending},
 		{"total_paid_out", s.TotalPaidOut},
 		{"total_fee_burned", s.TotalFeeBurned},
+		{"total_burned", s.TotalBurned},
 	}
 	for _, c := range ints {
 		if c.v.IsNil() {
