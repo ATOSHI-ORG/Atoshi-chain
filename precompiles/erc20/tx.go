@@ -9,7 +9,6 @@ import (
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/authz"
-	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -92,8 +91,7 @@ func (p *Precompile) transfer(
 
 	var prevAllowance *big.Int
 	if ownerIsSpender {
-		msgSrv := bankkeeper.NewMsgServerImpl(p.BankKeeper)
-		_, err = msgSrv.Send(ctx, msg)
+		_, err = p.bankMsgServerOrStock().Send(ctx, msg)
 	} else {
 		_, _, prevAllowance, err = GetAuthzExpirationAndAllowance(p.AuthzKeeper, ctx, spenderAddr, from, p.tokenPair.Denom)
 		if err != nil {
