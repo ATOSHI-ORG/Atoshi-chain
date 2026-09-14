@@ -38,7 +38,7 @@ type BankAppModule struct {
 	bank.AppModule
 
 	base           bankkeeper.BaseKeeper
-	wrapped        bankkeeper.Keeper
+	atox           AtoxKeeper
 	legacySubspace exported.Subspace
 }
 
@@ -47,13 +47,13 @@ type BankAppModule struct {
 func NewBankAppModule(
 	inner bank.AppModule,
 	base bankkeeper.BaseKeeper,
-	wrapped bankkeeper.Keeper,
+	atox AtoxKeeper,
 	legacySubspace exported.Subspace,
 ) BankAppModule {
 	return BankAppModule{
 		AppModule:      inner,
 		base:           base,
-		wrapped:        wrapped,
+		atox:           atox,
 		legacySubspace: legacySubspace,
 	}
 }
@@ -65,7 +65,8 @@ func NewBankAppModule(
 // migration shows up as a diff here rather than as a silently missing upgrade
 // step.
 func (am BankAppModule) RegisterServices(cfg module.Configurator) {
-	banktypes.RegisterMsgServer(cfg.MsgServer(), bankkeeper.NewMsgServerImpl(am.wrapped))
+	banktypes.RegisterMsgServer(cfg.MsgServer(),
+		NewMsgServer(bankkeeper.NewMsgServerImpl(am.base), am.base, am.atox))
 	banktypes.RegisterQueryServer(cfg.QueryServer(), am.base)
 
 	m := bankkeeper.NewMigrator(am.base, am.legacySubspace)

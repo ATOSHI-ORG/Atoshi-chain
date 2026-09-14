@@ -572,20 +572,6 @@ func NewAtoshi(
 		atoshitypes.AtoxBaseDenom,
 	)
 
-	// Wrap bank so the ATOX transfer fee comes OUT of the transferred amount
-	// rather than on top of it.
-	//
-	// Must be assigned back to app.BankKeeper, and must happen after AtoxKeeper
-	// exists: everything constructed below -- the bank module's msgServer, the
-	// erc20 precompile -- resolves SendCoins through this interface value, so a
-	// keeper captured before this line would keep the unwrapped behaviour and the
-	// fee would silently revert to on-top for that path.
-	//
-	// Module-internal movement is unaffected: SendCoinsFromModuleToAccount and
-	// friends call the concrete keeper's own SendCoins, which does not route back
-	// through the wrapper.
-	app.BankKeeper = atoxwrapper.NewFeeInclusiveBank(app.BankKeeper, app.AtoxKeeper)
-
 	app.TokenomicsKeeper = tokenomicskeeper.NewKeeper(
 		keys[tokenomicstypes.StoreKey],
 		appCodec,
@@ -826,7 +812,7 @@ func NewAtoshi(
 		atoxwrapper.NewBankAppModule(
 			bank.NewAppModule(appCodec, baseBankKeeper, app.AccountKeeper, app.GetSubspace(banktypes.ModuleName)),
 			baseBankKeeper,
-			app.BankKeeper,
+			app.AtoxKeeper,
 			app.GetSubspace(banktypes.ModuleName),
 		),
 		capability.NewAppModule(appCodec, *app.CapabilityKeeper, false),

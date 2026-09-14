@@ -5,6 +5,8 @@ import (
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	"github.com/stretchr/testify/require"
 
@@ -12,6 +14,7 @@ import (
 	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 	"github.com/atoshi-chain/atoshi/v20/utils"
 	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
+	atoxwrapper "github.com/atoshi-chain/atoshi/v20/x/atox/wrapper"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
 
@@ -51,13 +54,35 @@ func TestAtoxWiring_EndToEnd(t *testing.T) {
 	require.NoError(t, k.MintAtox(ctx, alice, mined))
 	require.Equal(t, mined.String(), a.BankKeeper.GetBalance(ctx, alice, atoshitypes.AtoxBaseDenom).Amount.String())
 
-	// --- transfer through the real bank: fee charged on top and burned ---
-	send := atoxtypes.MaxSendableWithFee(mined, k.GetParams(ctx).TransferFeeBps)
+	// --- transfer through the real bank: fee taken OUT of the amount and burned ---
+	//
+	// This is the assertion that proves the fee wrapper is actually installed in
+	// app.go. Going through a.BankKeeper exercises the same interface value the
+	// bank msgServer and the erc20 precompile resolve SendCoins through, so an
+	// unwrapped keeper would show up here as bob receiving the full `send`.
+	// Go through the Msg server, not BankKeeper.SendCoins.
+	//
+	// That is where the fee lives, and it is where both user paths arrive: a
+	// wallet's MsgSend via the Msg router, and the erc20 precompile which builds
+	// the same MsgSend. Calling SendCoins directly is the module-internal path
+	// and is deliberately untaxed, so a test driving it would prove nothing about
+	// what a user experiences.
+	send := mined // inclusive fees let the whole balance move
+	expectedFee := atoxtypes.ComputeTransferFee(send, k.GetParams(ctx).TransferFeeBps)
 	supplyBefore := a.BankKeeper.GetSupply(ctx, atoshitypes.AtoxBaseDenom).Amount
-	require.NoError(t, a.BankKeeper.SendCoins(ctx, alice, bob,
-		sdk.NewCoins(sdk.NewCoin(atoshitypes.AtoxBaseDenom, send))))
 
-	require.Equal(t, send.String(), a.BankKeeper.GetBalance(ctx, bob, atoshitypes.AtoxBaseDenom).Amount.String())
+	msgSrv := atoxwrapper.NewMsgServer(
+		bankkeeper.NewMsgServerImpl(a.BankKeeper.(bankkeeper.BaseKeeper)),
+		a.BankKeeper.(bankkeeper.BaseKeeper), k)
+	_, err := msgSrv.Send(ctx, banktypes.NewMsgSend(alice, bob,
+		sdk.NewCoins(sdk.NewCoin(atoshitypes.AtoxBaseDenom, send))))
+	require.NoError(t, err)
+
+	require.Equal(t, "0", a.BankKeeper.GetBalance(ctx, alice, atoshitypes.AtoxBaseDenom).Amount.String(),
+		"exactly the requested amount leaves the sender")
+	require.Equal(t, send.Sub(expectedFee).String(),
+		a.BankKeeper.GetBalance(ctx, bob, atoshitypes.AtoxBaseDenom).Amount.String(),
+		"recipient gets the amount minus the fee")
 	burned := k.GetGlobalState(ctx).TotalFeeBurned
 	require.True(t, burned.IsPositive(), "transfer fee must be charged through the real bank path")
 	require.Equal(t, supplyBefore.Sub(burned).String(),
