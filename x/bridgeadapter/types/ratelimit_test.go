@@ -296,3 +296,62 @@ func TestDefaultParams_LimitsAreSane(t *testing.T) {
 	// The fixed leg binds at full pool: 5 billion, against 5% of 300 billion.
 	require.Equal(t, math.NewIntWithDecimal(5, 27).String(), l.Global.String())
 }
+
+func TestCheckInbound_GlobalCapOnly(t *testing.T) {
+	l := types.Limits{Inbound: math.NewInt(1_000)}
+
+	require.NoError(t, types.CheckInbound(l, math.NewInt(600), math.ZeroInt()))
+	require.NoError(t, types.CheckInbound(l, math.NewInt(400), math.NewInt(600)),
+		"exactly reaching the cap is allowed")
+	require.ErrorIs(t,
+		types.CheckInbound(l, math.NewInt(1), math.NewInt(1_000)),
+		types.ErrInboundCapReached)
+}
+
+// TestCheckInbound_UnsetCapMeansUnlimited is the opposite default from outbound,
+// and it is deliberate.
+//
+// Outbound treats a zero Global as "fully throttled": a chain with no outbound
+// cap configured should not be paying out. Inbound fails OPEN because the
+// migration pool balance is already a hard ceiling, and failing closed would
+// strand every bridge-in -- with its ERC20 locked on Ethereum -- on a chain that
+// simply had not set the parameter yet.
+func TestCheckInbound_UnsetCapMeansUnlimited(t *testing.T) {
+	for _, l := range []types.Limits{
+		{Inbound: math.ZeroInt()},
+		{},                             // nil Int
+		{Inbound: math.NewInt(-5)},     // negative
+	} {
+		require.NoError(t, types.CheckInbound(l, math.NewIntWithDecimal(1, 30), math.ZeroInt()))
+	}
+}
+
+func TestCheckInbound_RejectsNonPositive(t *testing.T) {
+	l := types.Limits{Inbound: math.NewInt(1_000)}
+	require.ErrorIs(t, types.CheckInbound(l, math.ZeroInt(), math.ZeroInt()), types.ErrInvalidAmount)
+	require.ErrorIs(t, types.CheckInbound(l, math.NewInt(-1), math.ZeroInt()), types.ErrInvalidAmount)
+}
+
+// TestResolveLimits_InboundTakesSmallerLeg mirrors the outbound behaviour: the
+// bps leg tightens the cap on its own as the pool drains, without a proposal.
+func TestResolveLimits_InboundTakesSmallerLeg(t *testing.T) {
+	p := types.DefaultParams()
+	p.InboundDailyCap = math.NewInt(1_000)
+	p.InboundDailyCapBpsOfPool = 100 // 1%
+
+	// Pool large enough that the fixed leg binds.
+	l := types.ResolveLimits(p, math.NewInt(1_000_000), math.NewInt(1_000_000))
+	require.Equal(t, "1000", l.Inbound.String())
+
+	// Pool small enough that the 1% leg binds.
+	l = types.ResolveLimits(p, math.NewInt(50_000), math.NewInt(1_000_000))
+	require.Equal(t, "500", l.Inbound.String())
+}
+
+// TestInboundHasNoPerAddressLimit pins the decision not to add one: two
+// addresses sharing the same day draw from one pot and nothing else.
+func TestInboundHasNoPerAddressLimit(t *testing.T) {
+	l := types.Limits{Inbound: math.NewInt(1_000), PerAddress: math.NewInt(1)}
+	// PerAddress is set, and must be ignored by the inbound path.
+	require.NoError(t, types.CheckInbound(l, math.NewInt(900), math.ZeroInt()))
+}

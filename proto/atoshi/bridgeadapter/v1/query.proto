@@ -16,6 +16,28 @@ service Query {
   // ReceiptState is what an auditor compares against the Ethereum vault: the
   // cumulative ERC20 confirmed here must equal what the vault reports having
   // released.
+  // Limits reports the caps in force right now plus how much of each is left,
+  // for both directions.
+  //
+  // Without it a client can read the params but not the usage, so the only
+  // number it can show is the ceiling -- which looks identical whether the day
+  // is untouched or nearly exhausted. That is the single most common reason a
+  // rate limit is reported as "not working".
+  rpc Limits(QueryLimitsRequest) returns (QueryLimitsResponse) {
+    option (google.api.http).get = "/atoshi/bridgeadapter/v1/limits";
+  }
+
+  // RateLimitState is the raw daily counters, unresolved against the caps.
+  rpc RateLimitState(QueryRateLimitStateRequest) returns (QueryRateLimitStateResponse) {
+    option (google.api.http).get = "/atoshi/bridgeadapter/v1/rate_limit_state";
+  }
+
+  // AddressUsage is one address's outbound usage today, for showing a per-user
+  // remaining allowance.
+  rpc AddressUsage(QueryAddressUsageRequest) returns (QueryAddressUsageResponse) {
+    option (google.api.http).get = "/atoshi/bridgeadapter/v1/address_usage/{address}";
+  }
+
   rpc ReceiptState(QueryReceiptStateRequest) returns (QueryReceiptStateResponse) {
     option (google.api.http).get = "/atoshi/bridgeadapter/v1/receipt_state";
   }
@@ -41,6 +63,98 @@ message QueryReceiptStateResponse {
 
   // pending_project is the same figure for the project share.
   string pending_project = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryLimitsRequest {}
+message QueryLimitsResponse {
+  // outbound_* are the resolved outbound caps and what is left of them today.
+  string outbound_global_cap = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string outbound_global_remaining = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string outbound_large_budget = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string outbound_large_remaining = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string per_address_cap = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string small_transfer_threshold = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string min_transfer_out = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  bool crisis_mode = 8;
+
+  // inbound_* mirror the outbound pair for the bridge-in direction.
+  string inbound_cap = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string inbound_remaining = 10 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // resets_at_unix is when today's counters roll over (UTC midnight).
+  //
+  // The rate-limit day is a real 24 hours even on a test network, where
+  // tokenomics compresses its own day to minutes -- the two are unrelated
+  // clocks, and a client that assumes otherwise will show a reset that never
+  // comes.
+  int64 resets_at_unix = 11;
+
+  // migration_pool_balance is what the bps legs are computed against, returned
+  // so a client can reproduce the caps rather than trust them.
+  string migration_pool_balance = 12 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryRateLimitStateRequest {}
+message QueryRateLimitStateResponse {
+  RateLimitState state = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryAddressUsageRequest {
+  string address = 1;
+}
+message QueryAddressUsageResponse {
+  // used today by this address, outbound.
+  string used = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // remaining is per_address_cap - used, floored at zero.
+  string remaining = 2 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true

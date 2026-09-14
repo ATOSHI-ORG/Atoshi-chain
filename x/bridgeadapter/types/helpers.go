@@ -146,6 +146,14 @@ func DefaultParams() Params {
 		GlobalDailyCap:          math.NewIntWithDecimal(5, 27),
 		GlobalDailyCapBpsOfPool: 500,
 
+		// 3 billion ATOS a day inbound, or 1% of the migration pool, whichever is
+		// smaller. A circuit breaker, not a throttle: at the intended scale a
+		// day's legitimate bridge-ins are orders of magnitude below this, so it
+		// only ever fires on a fault, and then it bounds the day's loss to ~1% of
+		// the pool while somebody notices.
+		InboundDailyCap:          math.NewIntWithDecimal(3, 27),
+		InboundDailyCapBpsOfPool: 100,
+
 		// 2% of the daily cap per address, so no single actor can take the day.
 		PerAddressDailyBps: 200,
 
