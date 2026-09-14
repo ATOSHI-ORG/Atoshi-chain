@@ -65,7 +65,9 @@ func TestAccountQuery_MaxSendableIsActuallySendable(t *testing.T) {
 	require.True(t, res.MaxSendable.IsPositive())
 	require.True(t, res.BurnOnSettle.IsPositive(), "a release is outstanding, so settling burns")
 	require.True(t, res.MaxSendable.LT(res.AtoxBalance),
-		"max_sendable must be below the raw balance, or the field buys nothing")
+		"max_sendable must be below the raw balance by the pending burn")
+	require.Equal(t, res.AtoxBalance.Sub(res.BurnOnSettle).String(), res.MaxSendable.String(),
+		"with an inclusive fee the only deduction is the conversion burn")
 
 	// One more than the quoted maximum must fail.
 	tooMuch := res.MaxSendable.AddRaw(1)

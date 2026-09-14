@@ -164,6 +164,7 @@ import (
 
 	atox "github.com/atoshi-chain/atoshi/v20/x/atox"
 	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
+	atoxwrapper "github.com/atoshi-chain/atoshi/v20/x/atox/wrapper"
 	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
 	bridgeadapter "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter"
 	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
@@ -449,7 +450,7 @@ func NewAtoshi(
 		sdk.GetConfig().GetBech32AccountAddrPrefix(),
 		authAddr,
 	)
-	app.BankKeeper = bankkeeper.NewBaseKeeper(
+	baseBankKeeper := bankkeeper.NewBaseKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[banktypes.StoreKey]),
 		app.AccountKeeper,
@@ -457,6 +458,7 @@ func NewAtoshi(
 		authAddr,
 		logger,
 	)
+	app.BankKeeper = baseBankKeeper
 
 	// optional: enable sign mode textual by overwriting the default tx config (after setting the bank keeper)
 	enabledSignModes := append(authtx.DefaultSignModes, sigtypes.SignMode_SIGN_MODE_TEXTUAL) //nolint:gocritic
@@ -569,6 +571,20 @@ func NewAtoshi(
 		atoshitypes.BaseDenom,
 		atoshitypes.AtoxBaseDenom,
 	)
+
+	// Wrap bank so the ATOX transfer fee comes OUT of the transferred amount
+	// rather than on top of it.
+	//
+	// Must be assigned back to app.BankKeeper, and must happen after AtoxKeeper
+	// exists: everything constructed below -- the bank module's msgServer, the
+	// erc20 precompile -- resolves SendCoins through this interface value, so a
+	// keeper captured before this line would keep the unwrapped behaviour and the
+	// fee would silently revert to on-top for that path.
+	//
+	// Module-internal movement is unaffected: SendCoinsFromModuleToAccount and
+	// friends call the concrete keeper's own SendCoins, which does not route back
+	// through the wrapper.
+	app.BankKeeper = atoxwrapper.NewFeeInclusiveBank(app.BankKeeper, app.AtoxKeeper)
 
 	app.TokenomicsKeeper = tokenomicskeeper.NewKeeper(
 		keys[tokenomicstypes.StoreKey],
@@ -803,7 +819,16 @@ func NewAtoshi(
 			app, app.txConfig,
 		),
 		auth.NewAppModule(appCodec, app.AccountKeeper, authsims.RandomGenesisAccounts, app.GetSubspace(authtypes.ModuleName)),
-		bank.NewAppModule(appCodec, app.BankKeeper, app.AccountKeeper, app.GetSubspace(banktypes.ModuleName)),
+		// Bank's Msg server is bound to the fee-inclusive wrapper while its store
+		// migrations keep the concrete keeper they type-assert for. Using plain
+		// bank.NewAppModule here would either panic at startup or leave MsgSend
+		// untaxed while the erc20 precompile was taxed.
+		atoxwrapper.NewBankAppModule(
+			bank.NewAppModule(appCodec, baseBankKeeper, app.AccountKeeper, app.GetSubspace(banktypes.ModuleName)),
+			baseBankKeeper,
+			app.BankKeeper,
+			app.GetSubspace(banktypes.ModuleName),
+		),
 		capability.NewAppModule(appCodec, *app.CapabilityKeeper, false),
 		gov.NewAppModule(appCodec, &app.GovKeeper, app.AccountKeeper, app.BankKeeper, app.GetSubspace(govtypes.ModuleName)),
 		slashing.NewAppModule(appCodec, app.SlashingKeeper, app.AccountKeeper, app.BankKeeper, app.StakingKeeper, app.GetSubspace(slashingtypes.ModuleName), app.interfaceRegistry),

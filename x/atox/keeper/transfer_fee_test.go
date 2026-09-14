@@ -16,22 +16,43 @@ func atox(n int64) math.Int { return math.NewIntWithDecimal(n, 18) }
 
 // TestTransferFee_ChargedOnTopAndBurned pins the headline behaviour: sending 100
 // ATOX costs the sender 110, the receiver gets 100, and the 10 is destroyed.
-func TestTransferFee_ChargedOnTopAndBurned(t *testing.T) {
+// TestTransferFee_TakenOutOfTheAmountAndBurned pins the fee model: inclusive.
+//
+// "send 100" means 100 leaves the sender, not 110. The receiver gets 90. The
+// alternative -- charging on top -- makes the ERC20 transfer(to, amount) that
+// wallets and exchanges call need funds the caller never accounted for, and
+// leaves every account with a remainder it can never move.
+func TestTransferFee_TakenOutOfTheAmountAndBurned(t *testing.T) {
 	k, ctx, bank := setup(t)
 	alice, bob := acc("alice"), acc("bob")
 
-	require.NoError(t, k.MintAtox(ctx, alice, atox(110)))
+	require.NoError(t, k.MintAtox(ctx, alice, atox(100)))
 	supplyBefore := k.AtoxSupply(ctx)
 
 	require.NoError(t, bank.SendCoins(ctx, alice, bob,
 		sdk.NewCoins(sdk.NewCoin(atoxDenom, atox(100)))))
 
-	require.Equal(t, "0", k.AtoxBalance(ctx, alice).String(), "sender pays amount + fee")
-	require.Equal(t, atox(100).String(), k.AtoxBalance(ctx, bob).String(), "receiver gets the full amount")
+	require.Equal(t, "0", k.AtoxBalance(ctx, alice).String(),
+		"exactly the requested amount leaves the sender")
+	require.Equal(t, atox(90).String(), k.AtoxBalance(ctx, bob).String(),
+		"receiver gets the amount minus the fee")
 
 	require.Equal(t, supplyBefore.Sub(atox(10)).String(), k.AtoxSupply(ctx).String(),
 		"the fee must be burned, not parked somewhere")
 	require.Equal(t, atox(10).String(), k.GetGlobalState(ctx).TotalFeeBurned.String())
+}
+
+// TestTransferFee_AccountCanBeEmptied is the practical payoff of inclusive fees.
+// On-top charging strands a remainder forever: a holder of 100 could move at
+// most 90, and the 1 left after 90+9 could never be sent.
+func TestTransferFee_AccountCanBeEmptied(t *testing.T) {
+	k, ctx, bank := setup(t)
+	alice, bob := acc("alice"), acc("bob")
+
+	require.NoError(t, k.MintAtox(ctx, alice, atox(100)))
+	all := k.AtoxBalance(ctx, alice)
+	require.NoError(t, bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, all))))
+	require.Equal(t, "0", k.AtoxBalance(ctx, alice).String(), "the wallet must end up empty")
 }
 
 // TestTransferFee_BurnRestoresMintHeadroom is what makes burning the recycling
@@ -77,45 +98,66 @@ func TestTransferFee_ModuleAccountPathsAreFree(t *testing.T) {
 // TestTransferFee_InsufficientHeadroomRejects covers the sharp edge behind the
 // wallet's Max button: a holder cannot send their entire balance, because the fee
 // is charged on top of it.
-func TestTransferFee_InsufficientHeadroomRejects(t *testing.T) {
+// TestTransferFee_BoundaryIsTheBalance: with an inclusive fee the only limit is
+// the balance itself. Sending it all works; one aatox more does not.
+//
+// This replaces a test that asserted the opposite -- that sending the whole
+// balance must FAIL "because nothing is left for the fee". That was the on-top
+// model's behaviour and the reason a remainder could never be moved.
+func TestTransferFee_BoundaryIsTheBalance(t *testing.T) {
 	k, ctx, bank := setup(t)
 	alice, bob := acc("alice"), acc("bob")
 
 	require.NoError(t, k.MintAtox(ctx, alice, atox(100)))
 
-	// Attempt in a cache-wrapped context and discard it, mirroring how baseapp
-	// runs every msg. bank does NOT undo the debit it already made on failure —
-	// atomicity comes only from the tx-level cache — so the failed attempt must
-	// not be allowed to leak into the rest of this test.
+	// One over the balance fails. Run it in a discarded cache context: bank does
+	// not undo the debit it already made, atomicity comes only from the tx-level
+	// cache, so a failed attempt must not leak into the assertions below.
 	failCtx, _ := ctx.CacheContext()
-	err := bank.SendCoins(failCtx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, atox(100))))
-	require.Error(t, err, "sending the whole balance leaves nothing for the fee")
+	require.Error(t, bank.SendCoins(failCtx, alice, bob,
+		sdk.NewCoins(sdk.NewCoin(atoxDenom, atox(100).AddRaw(1)))))
 
-	// The largest sendable amount is balance / 1.1, and it must succeed.
-	maxSend := types.MaxSendableWithFee(atox(100), k.GetParams(ctx).TransferFeeBps)
-	require.NoError(t, bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, maxSend))))
-	require.True(t, k.AtoxBalance(ctx, alice).LTE(math.NewInt(1)),
-		"Max should leave at most rounding dust, got %s", k.AtoxBalance(ctx, alice))
+	// The whole balance succeeds, and empties the account exactly.
+	require.NoError(t, bank.SendCoins(ctx, alice, bob,
+		sdk.NewCoins(sdk.NewCoin(atoxDenom, atox(100)))))
+	require.Equal(t, "0", k.AtoxBalance(ctx, alice).String())
+	require.Equal(t, atox(90).String(), k.AtoxBalance(ctx, bob).String())
 }
 
-// TestTransferFee_CannotBeSplitAway is why the fee rounds up. Truncating would
-// make any transfer smaller than 10000/bps aatox free, letting a sender move an
-// unlimited amount fee-free in dust-sized pieces.
+// TestTransferFee_CannotBeSplitAway: splitting into dust does not dodge the fee.
+//
+// Rounding up is what closes it. At 1000 bps a 2-aatox transfer owes ceil(0.2)=1
+// -- half the transfer -- so a sender who splits pays proportionally MORE, not
+// less. Truncating instead would make every transfer below 10 aatox free and the
+// fee avoidable by anyone willing to send dust.
 func TestTransferFee_CannotBeSplitAway(t *testing.T) {
 	k, ctx, bank := setup(t)
 	alice, bob := acc("alice"), acc("bob")
 
 	require.NoError(t, k.MintAtox(ctx, alice, math.NewInt(1_000)))
-
-	// 1 aatox at 1000 bps truncates to 0; rounding up charges 1.
-	require.Equal(t, "1", types.ComputeTransferFee(math.NewInt(1), 1000).String())
+	require.Equal(t, "1", types.ComputeTransferFee(math.NewInt(2), 1000).String())
 
 	for i := 0; i < 10; i++ {
 		require.NoError(t, bank.SendCoins(ctx, alice, bob,
-			sdk.NewCoins(sdk.NewCoin(atoxDenom, math.NewInt(1)))))
+			sdk.NewCoins(sdk.NewCoin(atoxDenom, math.NewInt(2)))))
 	}
 	require.Equal(t, "10", k.GetGlobalState(ctx).TotalFeeBurned.String(),
-		"every dust transfer must still pay a fee")
+		"20 aatox split into dust still paid 10 in fees -- half of it")
+	require.Equal(t, "10", k.AtoxBalance(ctx, bob).String(),
+		"and the receiver got only half")
+}
+
+// TestTransferFee_RejectsWhenNothingWouldArrive: an amount so small the fee eats
+// all of it is refused rather than reported as a successful transfer of zero.
+func TestTransferFee_RejectsWhenNothingWouldArrive(t *testing.T) {
+	k, ctx, bank := setup(t)
+	alice, bob := acc("alice"), acc("bob")
+
+	require.NoError(t, k.MintAtox(ctx, alice, math.NewInt(1_000)))
+	require.ErrorIs(t,
+		bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, math.NewInt(1)))),
+		types.ErrInvalidAmount)
+	require.Equal(t, "0", k.AtoxBalance(ctx, bob).String())
 }
 
 // TestTransferFee_ZeroBpsDisables confirms governance can turn the fee off
