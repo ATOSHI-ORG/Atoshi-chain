@@ -15,6 +15,7 @@ import (
 
 	authzkeeper "github.com/cosmos/cosmos-sdk/x/authz/keeper"
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	cmn "github.com/atoshi-chain/atoshi/v20/precompiles/common"
 	erc20 "github.com/atoshi-chain/atoshi/v20/precompiles/erc20"
 	erc20types "github.com/atoshi-chain/atoshi/v20/x/erc20/types"
@@ -57,13 +58,14 @@ func NewPrecompile(
 	bankKeeper bankkeeper.Keeper,
 	authzKeeper authzkeeper.Keeper,
 	transferKeeper transferkeeper.Keeper,
+	bankMsgServer banktypes.MsgServer,
 ) (*Precompile, error) {
 	newABI, err := LoadABI()
 	if err != nil {
 		return nil, fmt.Errorf("error loading the ABI: %w", err)
 	}
 
-	erc20Precompile, err := erc20.NewPrecompile(tokenPair, bankKeeper, authzKeeper, transferKeeper)
+	erc20Precompile, err := erc20.NewPrecompile(tokenPair, bankKeeper, authzKeeper, transferKeeper, bankMsgServer)
 	if err != nil {
 		return nil, fmt.Errorf("error instantiating the ERC20 precompile: %w", err)
 	}

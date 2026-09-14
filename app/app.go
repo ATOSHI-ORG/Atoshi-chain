@@ -680,6 +680,19 @@ func NewAtoshi(
 		app.AuthzKeeper, &app.TransferKeeper,
 	)
 
+	// The token-pair precompiles must move coins through the fee-inclusive Msg
+	// server, the same one the Msg router is bound to below.
+	//
+	// Left alone, precompiles/erc20 builds its own with
+	// bankkeeper.NewMsgServerImpl(bankKeeper) -- the stock server, no fee. ATOX
+	// is a registered token pair, so that made ERC20 transfer() a fee-free way
+	// to move it, while transferFrom() went out through authz and therefore the
+	// router and did pay. Pinned by
+	// x/atox/keeper.TestTransferFee_BothMsgSendPaths.
+	app.Erc20Keeper.SetBankMsgServer(atoxwrapper.NewMsgServer(
+		bankkeeper.NewMsgServerImpl(baseBankKeeper), baseBankKeeper, app.AtoxKeeper,
+	))
+
 	// Create the rate limit keeper
 	app.RateLimitKeeper = *ratelimitkeeper.NewKeeper(
 		appCodec,
