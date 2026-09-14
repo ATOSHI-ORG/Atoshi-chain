@@ -245,6 +245,7 @@ func (is *IntegrationTestSuite) setupERC20Precompile(denom string, tokenPairs []
 		is.network.App.BankKeeper,
 		is.network.App.AuthzKeeper,
 		is.network.App.TransferKeeper,
+			nil, // 无费率包装：这些测试不关心 ATOX 手续费
 	)
 	Expect(err).ToNot(HaveOccurred(), "failed to set up %q erc20 precompile", tokenPair.Denom)
 
@@ -262,6 +263,7 @@ func setupERC20PrecompileForTokenPair(
 		unitNetwork.App.BankKeeper,
 		unitNetwork.App.AuthzKeeper,
 		unitNetwork.App.TransferKeeper,
+			nil, // 无费率包装：这些测试不关心 ATOX 手续费
 	)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "failed to create %q erc20 precompile", tokenPair.Denom)
@@ -291,6 +293,7 @@ func setupNewERC20PrecompileForTokenPair(
 		unitNetwork.App.BankKeeper,
 		unitNetwork.App.AuthzKeeper,
 		unitNetwork.App.TransferKeeper,
+			nil, // 无费率包装：这些测试不关心 ATOX 手续费
 	)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "failed to create %q erc20 precompile", tokenPair.Denom)

@@ -16,6 +16,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authzkeeper "github.com/cosmos/cosmos-sdk/x/authz/keeper"
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	auth "github.com/atoshi-chain/atoshi/v20/precompiles/authorization"
 	erc20types "github.com/atoshi-chain/atoshi/v20/x/erc20/types"
 	transferkeeper "github.com/atoshi-chain/atoshi/v20/x/ibc/transfer/keeper"
@@ -51,6 +52,18 @@ type Precompile struct {
 	transferKeeper transferkeeper.Keeper
 	// BankKeeper is a public field so that the werc20 precompile can use it.
 	BankKeeper bankkeeper.Keeper
+	// bankMsgServer is the Msg server transfer() sends through.
+	//
+	// It has to be injected rather than built here from BankKeeper, because the
+	// chain binds bank's Msg service to a wrapper that charges the ATOX transfer
+	// fee. Building one locally gets the stock server instead, and then
+	// transfer() moves ATOX untaxed while transferFrom() -- which goes out
+	// through authz and therefore the Msg router -- pays the fee. See
+	// x/atox/keeper.TestTransferFee_BothMsgSendPaths.
+	//
+	// nil falls back to the stock server, which is correct for a chain with no
+	// such wrapper.
+	bankMsgServer banktypes.MsgServer
 }
 
 // NewPrecompile creates a new ERC-20 Precompile instance as a
@@ -60,6 +73,7 @@ func NewPrecompile(
 	bankKeeper bankkeeper.Keeper,
 	authzKeeper authzkeeper.Keeper,
 	transferKeeper transferkeeper.Keeper,
+	bankMsgServer banktypes.MsgServer,
 ) (*Precompile, error) {
 	newABI, err := cmn.LoadABI(f, abiPath)
 	if err != nil {
@@ -77,6 +91,7 @@ func NewPrecompile(
 		tokenPair:      tokenPair,
 		BankKeeper:     bankKeeper,
 		transferKeeper: transferKeeper,
+		bankMsgServer:  bankMsgServer,
 	}
 	// Address defines the address of the ERC-20 precompile contract.
 	p.SetAddress(p.tokenPair.GetERC20Contract())
@@ -216,4 +231,23 @@ func (p *Precompile) HandleMethod(
 	}
 
 	return bz, err
+}
+
+// BankMsgServer exposes the injected Msg server so the wiring from x/erc20 can
+// be asserted from a test rather than trusted. nil means none was injected.
+func (p Precompile) BankMsgServer() banktypes.MsgServer { return p.bankMsgServer }
+
+// bankMsgServerOrStock returns the injected Msg server, or a stock one built
+// from the bank keeper when none was injected.
+//
+// The fallback exists so the precompile stays usable standalone (its own unit
+// tests build it without a chain). On this chain the injected one is the
+// fee-inclusive wrapper, and getting the stock one instead is a silent
+// fee bypass -- which is why the wiring is pinned by a test rather than left to
+// whoever next touches x/erc20.
+func (p Precompile) bankMsgServerOrStock() banktypes.MsgServer {
+	if p.bankMsgServer != nil {
+		return p.bankMsgServer
+	}
+	return bankkeeper.NewMsgServerImpl(p.BankKeeper)
 }
