@@ -19,6 +19,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	"github.com/stretchr/testify/require"
+
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 	protov2 "google.golang.org/protobuf/proto"
 
 	energyante "github.com/atoshi-chain/atoshi/v20/x/energy/ante"
@@ -30,6 +32,7 @@ import (
 
 type fakeBank struct {
 	balances map[string]math.Int
+	atox     map[string]math.Int
 	denom    string
 	// records the last SendCoinsFromAccountToModule call so we can assert
 	lastFrom   sdk.AccAddress
@@ -38,10 +41,20 @@ type fakeBank struct {
 }
 
 func newFakeBank(denom string) *fakeBank {
-	return &fakeBank{balances: map[string]math.Int{}, denom: denom}
+	return &fakeBank{balances: map[string]math.Int{}, atox: map[string]math.Int{}, denom: denom}
 }
 
 func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) sdk.Coin {
+	// Denom-aware: EligibleBalance reads both the base denom and aatox, and a
+	// stub that answers every denom from one ledger would double-count the
+	// holder's ATOS as ATOX. These tests carry no ATOX, so aatox reads zero.
+	if denom == atoshitypes.AtoxBaseDenom {
+		v, ok := b.atox[addr.String()]
+		if !ok {
+			return sdk.NewCoin(denom, math.ZeroInt())
+		}
+		return sdk.NewCoin(denom, v)
+	}
 	v, ok := b.balances[addr.String()]
 	if !ok {
 		return sdk.NewCoin(denom, math.ZeroInt())

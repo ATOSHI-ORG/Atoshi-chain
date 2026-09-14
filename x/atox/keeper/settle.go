@@ -217,7 +217,7 @@ func (k Keeper) MintAtox(ctx sdk.Context, recipient sdk.AccAddress, amount math.
 
 	// The cap is what the index divides by, so exceeding it would break the
 	// solvency bound sum(balances)*delta <= cap*delta.
-	if k.AtoxSupply(ctx).Add(amount).GT(params.SupplyCap) {
+	if k.MintedAgainstCap(ctx).Add(amount).GT(params.SupplyCap) {
 		return types.ErrSupplyCapReached
 	}
 
@@ -329,7 +329,7 @@ func (k Keeper) MintAtoxToModule(ctx sdk.Context, module string, amount math.Int
 	if amount.IsNil() || !amount.IsPositive() {
 		return types.ErrInvalidAmount
 	}
-	if k.AtoxSupply(ctx).Add(amount).GT(k.GetParams(ctx).SupplyCap) {
+	if k.MintedAgainstCap(ctx).Add(amount).GT(k.GetParams(ctx).SupplyCap) {
 		return types.ErrSupplyCapReached
 	}
 
@@ -353,4 +353,28 @@ func (k Keeper) MintAtoxToModule(ctx sdk.Context, module string, amount math.Int
 // than relying on an error every block.
 func (k Keeper) AtoxSupplyCap(ctx sdk.Context) math.Int {
 	return k.GetParams(ctx).SupplyCap
+}
+
+// MintedAgainstCap is what MintAtox measures against SupplyCap: the live supply
+// plus everything conversion has destroyed.
+//
+// The two burns have to count differently, and the cap is where it shows:
+//
+//	transfer fee  -- burned, and DOES free headroom. That is the whole recycling
+//	                 mechanism: the toll leaves the sender, supply drops, and the
+//	                 same amount can be mined again as future block rewards.
+//	conversion    -- burned, and must NOT free headroom. Those aatox were paid
+//	                 for: one ATOS left the exchange pool for each. Letting them
+//	                 be re-mined would hand the replacement holder a claim on a
+//	                 pool that already paid for the originals, and the 1 trillion
+//	                 ATOX / 1 trillion ATOS peg would drift every conversion.
+//
+// Measuring against live supply alone would silently pick the second behaviour
+// for both, so conversion burn is added back here.
+func (k Keeper) MintedAgainstCap(ctx sdk.Context) math.Int {
+	burned := k.GetGlobalState(ctx).TotalBurned
+	if burned.IsNil() {
+		burned = math.ZeroInt()
+	}
+	return k.AtoxSupply(ctx).Add(burned)
 }

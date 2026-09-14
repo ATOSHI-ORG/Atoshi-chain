@@ -10,6 +10,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 	"github.com/atoshi-chain/atoshi/v20/x/energy/types"
 )
 
@@ -255,7 +256,30 @@ func (k Keeper) EligibleBalance(ctx sdk.Context, addr sdk.AccAddress) math.Int {
 		total = total.Add(acct.LockedAtos)
 	}
 
-	return total.Add(k.stakedAtos(ctx, addr))
+	return total.Add(k.stakedAtos(ctx, addr)).Add(k.heldAtox(ctx, addr))
+}
+
+// heldAtox is the ATOX term of the eligibility sum.
+//
+// Added at face value, not weighted, because conversion makes the two denoms
+// interchangeable one-for-one over time: a holder's ATOX burns away exactly as
+// the ATOS it bought arrives, so
+//
+//	atox + atos = entitlement
+//
+// stays constant through the whole unlock. Weighting ATOX below par would make
+// a holder's energy capacity drop every time they claimed, which is the same
+// "penalty for using the system as intended" that LockedAtos exists to avoid.
+//
+// Both denoms carry 18 decimals (BaseDenomUnit == AtoxBaseDenomUnit), so the
+// amounts are directly addable with no scaling.
+//
+// Only the wallet balance counts. ATOX accrued as staking rewards sits in the
+// distribution module until withdrawn and belongs to nobody's account yet --
+// counting it would hand out energy against coins the holder cannot spend, and
+// would differ from how unwithdrawn ATOS rewards are already treated.
+func (k Keeper) heldAtox(ctx sdk.Context, addr sdk.AccAddress) math.Int {
+	return k.bankKeeper.GetBalance(ctx, addr, atoshitypes.AtoxBaseDenom).Amount
 }
 
 // stakedAtos returns bonded + unbonding ATOS for addr, or zero when no staking
