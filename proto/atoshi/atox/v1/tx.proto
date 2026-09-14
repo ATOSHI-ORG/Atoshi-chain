@@ -14,9 +14,13 @@ service Msg {
   option (cosmos.msg.v1.service) = true;
 
   // ClaimAtos settles the sender against the current index and pays out the
-  // full pending balance, ignoring min_auto_payout. Holders do not need this
-  // under normal operation — the EndBlocker sweep reaches every account — but
-  // it lets a holder convert immediately instead of waiting for the sweep.
+  // full pending balance, ignoring min_auto_payout.
+  //
+  // This is now the ONLY way a holder's ATOS arrives. The EndBlocker sweep that
+  // used to reach every account was switched off by governance
+  // (auto_settle_per_block = 0) because it scaled with the number of holders
+  // rather than the number who wanted their ATOS. Wallets must offer it, and
+  // must prompt: nothing else will move the money.
   rpc ClaimAtos(MsgClaimAtos) returns (MsgClaimAtosResponse);
 
   // UpdateParams updates module parameters via governance.
