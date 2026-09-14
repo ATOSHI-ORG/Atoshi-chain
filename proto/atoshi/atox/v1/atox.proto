@@ -129,10 +129,35 @@ message GlobalState {
   // unclaimed in the exchange pool, and the replacement ATOX minted later
   // starts at the current index and claims precisely that much.
   //
-  // Note this is unrelated to the settled question of whether CONVERSION should
-  // burn ATOX — it must not, since burning on conversion pays holders only
-  // 1-1/e of what they are owed. Only the fee is burned.
+  // Counted separately from total_burned: this is ATOX destroyed as a transfer
+  // toll (it buys nothing), while total_burned is ATOX destroyed BECAUSE it was
+  // converted into ATOS. Summing them would hide which of the two is draining
+  // supply.
   string total_fee_burned = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // total_burned is the cumulative ATOX destroyed BY CONVERSION, in aatox. One
+  // aatox is burned per liao paid out, so at full unlock this converges to the
+  // whole ATOX supply and the sum of all payouts equals it exactly.
+  //
+  // An earlier revision rejected burning on conversion, on the grounds that it
+  // pays holders only 1-1/e (~63.2%) of what they are owed. That objection is
+  // correct for a NAIVE burn, which accrues on the post-burn balance:
+  //
+  //	dB/di = -B      =>  B(i) = B0*e^-i    =>  paid out = B0*(1-1/e)
+  //
+  // ComputeOwed avoids it by accruing on the reconstructed entitlement
+  // B/(1-accountIndex) instead of on the raw balance:
+  //
+  //	dB/di = -B/(1-i)  =>  B(i) = B0*(1-i)  =>  paid out = B0
+  //
+  // so the burn destroys exactly as much ATOX as the ATOS it bought, and the
+  // total is independent of how often the holder claimed. See ComputeOwed and
+  // TestClaimTimingDoesNotChangeTotal.
+  string total_burned = 7 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true

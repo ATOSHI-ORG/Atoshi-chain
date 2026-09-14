@@ -14,6 +14,21 @@ import (
 // cap1T is the production ATOX supply cap: 1 trillion ATOX in aatox.
 var cap1T = math.NewIntWithDecimal(1, 30)
 
+// owedOf adapts the old two-argument call shape used throughout this file.
+//
+// The original signature took (balance, delta) and implicitly valued the span
+// against the raw balance. That is exactly ComputeOwed with accountIndex = 0,
+// where the entitlement denominator (1 - 0) is 1 -- so every assertion below
+// keeps its original meaning, and the new denominator is covered by its own
+// tests rather than silently reinterpreting these.
+func owedOf(bal math.Int, delta math.LegacyDec) math.Int {
+	if delta.IsNil() {
+		return math.ZeroInt()
+	}
+	owed, _ := types.ComputeOwed(bal, math.LegacyZeroDec(), delta)
+	return owed
+}
+
 func TestComputeIndexDelta_TierRelease(t *testing.T) {
 	// A tier release of 1 billion ATOS against a 1-trillion-ATOX cap must give
 	// every ATOX a claim on 1e9/1e12 = 0.001 ATOS.
@@ -25,7 +40,7 @@ func TestComputeIndexDelta_TierRelease(t *testing.T) {
 	require.True(t, rem.IsZero(), "exact division should leave no remainder")
 
 	// One ATOX (1e18 aatox) is therefore owed 0.001 ATOS (1e15 liao).
-	owed := types.ComputeOwed(math.NewIntWithDecimal(1, 18), delta)
+	owed := owedOf(math.NewIntWithDecimal(1, 18), delta)
 	require.Equal(t, math.NewIntWithDecimal(1, 15).String(), owed.String())
 }
 
@@ -66,16 +81,16 @@ func TestComputeOwed_TruncatesDown(t *testing.T) {
 	// delta small enough that balance*delta is fractional; must floor, never
 	// round up, or the sum of payouts can exceed what was released.
 	delta := math.LegacyMustNewDecFromStr("0.000000000000000001") // 1 tick
-	require.Equal(t, "0", types.ComputeOwed(math.NewInt(999_999_999_999_999_999), delta).String())
-	require.Equal(t, "1", types.ComputeOwed(math.NewIntWithDecimal(1, 18), delta).String())
+	require.Equal(t, "0", owedOf(math.NewInt(999_999_999_999_999_999), delta).String())
+	require.Equal(t, "1", owedOf(math.NewIntWithDecimal(1, 18), delta).String())
 }
 
 func TestComputeOwed_ZeroAndNegativeInputs(t *testing.T) {
 	delta := math.LegacyMustNewDecFromStr("0.5")
-	require.True(t, types.ComputeOwed(math.ZeroInt(), delta).IsZero())
-	require.True(t, types.ComputeOwed(math.Int{}, delta).IsZero())
-	require.True(t, types.ComputeOwed(math.NewInt(100), math.LegacyZeroDec()).IsZero())
-	require.True(t, types.ComputeOwed(math.NewInt(100), math.LegacyDec{}).IsZero())
+	require.True(t, owedOf(math.ZeroInt(), delta).IsZero())
+	require.True(t, owedOf(math.Int{}, delta).IsZero())
+	require.True(t, owedOf(math.NewInt(100), math.LegacyZeroDec()).IsZero())
+	require.True(t, owedOf(math.NewInt(100), math.LegacyDec{}).IsZero())
 }
 
 func TestComputeIndexDelta_RejectsBadInput(t *testing.T) {
@@ -112,7 +127,7 @@ func TestSolvency_TotalOwedNeverExceedsReleased(t *testing.T) {
 
 	totalOwed := math.ZeroInt()
 	for _, b := range balances {
-		totalOwed = totalOwed.Add(types.ComputeOwed(b, delta))
+		totalOwed = totalOwed.Add(owedOf(b, delta))
 	}
 
 	require.True(t, totalOwed.LTE(released),
@@ -138,7 +153,7 @@ func TestSolvency_RepeatedTransfersCannotInflate(t *testing.T) {
 	pot := cap1T.QuoRaw(100) // 1% of the cap changes hands
 
 	// Baseline: one holder never moves, settles once over the whole span.
-	baseline := types.ComputeOwed(pot, delta)
+	baseline := owedOf(pot, delta)
 
 	// Adversarial: the pot moves 90 times. Each hop settles the sender over the
 	// span accrued so far and hands the receiver a fresh index, so the receiver
@@ -147,7 +162,7 @@ func TestSolvency_RepeatedTransfersCannotInflate(t *testing.T) {
 	perHop := delta.QuoInt64(int64(hops))
 	totalExtracted := math.ZeroInt()
 	for i := 0; i < hops; i++ {
-		totalExtracted = totalExtracted.Add(types.ComputeOwed(pot, perHop))
+		totalExtracted = totalExtracted.Add(owedOf(pot, perHop))
 	}
 
 	require.True(t, totalExtracted.LTE(baseline),
@@ -169,7 +184,7 @@ func TestDefaultParams_Valid(t *testing.T) {
 	require.True(t, rem.IsZero())
 	require.Equal(t,
 		math.NewIntWithDecimal(1, 18).String(),
-		types.ComputeOwed(math.NewIntWithDecimal(1, 18), delta).String(),
+		owedOf(math.NewIntWithDecimal(1, 18), delta).String(),
 		"1 ATOX should convert to exactly 1 ATOS at full release")
 }
 
@@ -253,4 +268,82 @@ func TestGenesis_Validate(t *testing.T) {
 		gs.Accounts = []types.AtoxAccount{acct, acct}
 		require.ErrorContains(t, gs.Validate(), "duplicate address")
 	})
+}
+
+// TestClaimTimingDoesNotChangeTotal is the property the entitlement denominator
+// exists for: a holder must end up with the same ATOS whether they claim once at
+// the end, at every release, or anywhere in between.
+//
+// Without the denominator this fails badly — a naive 1:1 burn accrues on the
+// post-burn balance, which decays as e^-i and pays out only 1-1/e (~63%).
+func TestClaimTimingDoesNotChangeTotal(t *testing.T) {
+	cap := math.NewIntWithDecimal(1, 30)
+	start := math.NewIntWithDecimal(1, 24) // 1e24 aatox
+
+	// run claims in `steps` equal slices of the 0 -> 1.0 index range.
+	run := func(steps int) (paid, leftover math.Int) {
+		bal := start
+		paid = math.ZeroInt()
+		idx := math.LegacyZeroDec()
+		for s := 1; s <= steps; s++ {
+			next := math.LegacyNewDec(int64(s)).Quo(math.LegacyNewDec(int64(steps)))
+			owed, burn := types.ComputeOwed(bal, idx, next)
+			paid = paid.Add(owed)
+			bal = bal.Sub(burn)
+			idx = next
+		}
+		return paid, bal
+	}
+
+	for _, steps := range []int{1, 2, 3, 18, 90, 365} {
+		paid, leftover := run(steps)
+		// Truncation loses at most one liao per step.
+		diff := start.Sub(paid).Abs()
+		require.True(t, diff.LTE(math.NewInt(int64(steps))),
+			"%d steps paid %s, expected ~%s (diff %s)", steps, paid, start, diff)
+		require.True(t, leftover.LTE(math.NewInt(int64(steps))),
+			"%d steps left %s ATOX unburned, should be ~0", steps, leftover)
+	}
+	_ = cap
+}
+
+// TestComputeOwed_BurnEqualsOwed pins the 1:1 cap: every liao paid destroys
+// exactly one aatox. If these ever diverge the supply and the pool drift apart.
+func TestComputeOwed_BurnEqualsOwed(t *testing.T) {
+	for _, tc := range []struct{ bal, ai, gi string }{
+		{"1000000000000000000", "0", "0.5"},
+		{"1000000000000000000", "0.25", "0.75"},
+		{"7", "0.1", "0.9"},
+		{"1", "0", "1"},
+	} {
+		bal, _ := math.NewIntFromString(tc.bal)
+		ai := math.LegacyMustNewDecFromStr(tc.ai)
+		gi := math.LegacyMustNewDecFromStr(tc.gi)
+		owed, burn := types.ComputeOwed(bal, ai, gi)
+		require.Equal(t, owed.String(), burn.String(), "bal=%s ai=%s gi=%s", tc.bal, tc.ai, tc.gi)
+		require.True(t, burn.LTE(bal), "burn must never exceed the balance")
+	}
+}
+
+// TestComputeOwed_FullyDrawnAccountAccruesNothing covers the 1/(1-1) singularity.
+func TestComputeOwed_FullyDrawnAccountAccruesNothing(t *testing.T) {
+	bal := math.NewIntWithDecimal(1, 18)
+	one := math.LegacyOneDec()
+	owed, burn := types.ComputeOwed(bal, one, one)
+	require.True(t, owed.IsZero())
+	require.True(t, burn.IsZero())
+}
+
+// TestComputeOwed_NeverOverpaysTheSupply is the solvency bound: the sum a cohort
+// can extract over the whole range cannot exceed what they hold.
+func TestComputeOwed_NeverOverpaysTheSupply(t *testing.T) {
+	total := math.ZeroInt()
+	held := math.ZeroInt()
+	for i := 1; i <= 50; i++ {
+		bal := math.NewInt(int64(i)).Mul(math.NewIntWithDecimal(1, 18))
+		held = held.Add(bal)
+		owed, _ := types.ComputeOwed(bal, math.LegacyZeroDec(), math.LegacyOneDec())
+		total = total.Add(owed)
+	}
+	require.True(t, total.LTE(held), "cohort extracted %s from %s held", total, held)
 }
