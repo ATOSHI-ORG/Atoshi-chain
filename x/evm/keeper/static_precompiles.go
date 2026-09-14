@@ -12,6 +12,7 @@ import (
 
 	bankprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/bank"
 	"github.com/atoshi-chain/atoshi/v20/precompiles/bech32"
+	atoxprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/atox"
 	bridgeadapterprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/bridgeadapter"
 	distprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/distribution"
 	evidenceprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/evidence"
@@ -21,6 +22,7 @@ import (
 	slashingprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/slashing"
 	stakingprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/staking"
 	vestingprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/vesting"
+	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
 	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
 	erc20Keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/core/vm"
@@ -54,6 +56,7 @@ func NewAvailableStaticPrecompiles(
 	slashingKeeper slashingkeeper.Keeper,
 	evidenceKeeper evidencekeeper.Keeper,
 	bridgeAdapterKeeper bakeeper.Keeper,
+	atoxKeeper atoxkeeper.Keeper,
 ) map[common.Address]vm.PrecompiledContract {
 	// Clone the mapping from the latest EVM fork.
 	precompiles := maps.Clone(vm.PrecompiledContractsBerlin)
@@ -120,6 +123,11 @@ func NewAvailableStaticPrecompiles(
 		panic(fmt.Errorf("failed to instantiate bridgeadapter precompile: %w", err))
 	}
 
+	atoxPrecompile, err := atoxprecompile.NewPrecompile(atoxKeeper, authzKeeper)
+	if err != nil {
+		panic(fmt.Errorf("failed to instantiate atox precompile: %w", err))
+	}
+
 	// Stateless precompiles
 	precompiles[bech32Precompile.Address()] = bech32Precompile
 	precompiles[p256Precompile.Address()] = p256Precompile
@@ -134,6 +142,7 @@ func NewAvailableStaticPrecompiles(
 	precompiles[slashingPrecompile.Address()] = slashingPrecompile
 	precompiles[evidencePrecompile.Address()] = evidencePrecompile
 	precompiles[bridgeAdapterPrecompile.Address()] = bridgeAdapterPrecompile
+	precompiles[atoxPrecompile.Address()] = atoxPrecompile
 
 	return precompiles
 }
