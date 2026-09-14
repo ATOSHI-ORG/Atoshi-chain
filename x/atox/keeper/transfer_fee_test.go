@@ -149,8 +149,13 @@ func TestTransferFee_SettlementStillCorrectWithFee(t *testing.T) {
 	rel := math.NewIntWithDecimal(1, 28)
 	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, rel))
 
-	// Move as much as the fee allows.
-	send := types.MaxSendableWithFee(cap, k.GetParams(ctx).TransferFeeBps)
+	// Move as much as the fee allows -- out of what alice ACTUALLY holds.
+	// Settling burned the ATOX that bought her payout, so sizing the transfer
+	// against the original cap would overdraw her by exactly the burn.
+	_, serr := k.SettleAccount(ctx, alice, types.TriggerClaim)
+	require.NoError(t, serr)
+	live := k.AtoxBalance(ctx, alice)
+	send := types.MaxSendableWithFee(live, k.GetParams(ctx).TransferFeeBps)
 	require.NoError(t, bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, send))))
 
 	aP, aU := k.Claimable(ctx, alice)

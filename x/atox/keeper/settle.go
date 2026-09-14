@@ -57,7 +57,7 @@ func (k Keeper) SettleAccountWithBalance(
 	}
 
 	delta := gs.GlobalIndex.Sub(acct.Index)
-	owed := types.ComputeOwed(atoxBalance, delta)
+	owed, burn := types.ComputeOwed(atoxBalance, acct.Index, gs.GlobalIndex)
 
 	// Nothing accrued. Still persist when the record is new or its index moved:
 	// the sweep iterates stored records, so a holder who received ATOX before any
@@ -72,12 +72,31 @@ func (k Keeper) SettleAccountWithBalance(
 		return math.ZeroInt(), nil
 	}
 
+	// Burn HERE, not at payout.
+	//
+	// The debt is booked now but paid later (payout cannot run inline -- settle
+	// is driven from a bank SendRestriction). If the burn waited for the payout,
+	// a holder could settle, then transfer the ATOX away before claiming: the
+	// receiver would get tokens carrying a full entitlement while the sender
+	// still held a pending claim against the span those same tokens already
+	// earned. The pool would owe the span twice.
+	//
+	// Burning at settlement closes that window: the tokens backing `owed` are
+	// destroyed in the same state transition that books it, so nothing
+	// transferable remains to double-count.
+	if burn.IsPositive() {
+		if err := k.burnAtoxFor(ctx, addr, burn); err != nil {
+			return math.ZeroInt(), err
+		}
+	}
+
 	acct.Pending = acct.Pending.Add(owed)
 	acct.Index = gs.GlobalIndex
 	if err := k.SetAtoxAccount(ctx, acct); err != nil {
 		return math.ZeroInt(), err
 	}
 
+	gs.TotalBurned = gs.TotalBurned.Add(burn)
 	gs.TotalPending = gs.TotalPending.Add(owed)
 	if err := k.SetGlobalState(ctx, gs); err != nil {
 		return math.ZeroInt(), err
@@ -89,10 +108,28 @@ func (k Keeper) SettleAccountWithBalance(
 		sdk.NewAttribute(types.AttributeKeyAmount, owed.String()),
 		sdk.NewAttribute(types.AttributeKeyAtoxBalance, atoxBalance.String()),
 		sdk.NewAttribute(types.AttributeKeyIndexDelta, delta.String()),
+		sdk.NewAttribute(types.AttributeKeyBurned, burn.String()),
 		sdk.NewAttribute(types.AttributeKeyTrigger, trigger),
 	))
 
 	return owed, nil
+}
+
+// burnAtoxFor destroys `amount` aatox held by addr, as the conversion cost of
+// the ATOS booked in the same settlement.
+//
+// Routed through the module account because bank can only burn from a module:
+// pull first, then burn. The feeInProgress guard is reused so the SendRestriction
+// does not try to settle addr again while this very settlement is mid-write --
+// re-entering would read a half-updated account and double-book the span.
+func (k Keeper) burnAtoxFor(ctx sdk.Context, addr sdk.AccAddress, amount math.Int) error {
+	coins := sdk.NewCoins(sdk.NewCoin(k.atoxDenom, amount))
+	burnCtx := ctx.WithValue(feeInProgressKey{}, true)
+
+	if err := k.bankKeeper.SendCoinsFromAccountToModule(burnCtx, addr, types.ModuleName, coins); err != nil {
+		return err
+	}
+	return k.bankKeeper.BurnCoins(ctx, types.ModuleName, coins)
 }
 
 // Claimable is what MsgClaimAtos would pay addr right now: already-settled
@@ -112,7 +149,8 @@ func (k Keeper) Claimable(ctx sdk.Context, addr sdk.AccAddress) (pending, unsett
 	if acct.Index.GTE(gs.GlobalIndex) {
 		return pending, math.ZeroInt()
 	}
-	return pending, types.ComputeOwed(k.AtoxBalance(ctx, addr), gs.GlobalIndex.Sub(acct.Index))
+	owed, _ := types.ComputeOwed(k.AtoxBalance(ctx, addr), acct.Index, gs.GlobalIndex)
+	return pending, owed
 }
 
 // AddToExchangePool moves `amount` ATOS from fromModule into the exchange pool
