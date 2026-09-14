@@ -20,16 +20,39 @@ func (k Keeper) GetRateLimitState(ctx sdk.Context) types.RateLimitState {
 
 	bz := ctx.KVStore(k.storeKey).Get(types.KeyRateLimit)
 	if bz == nil {
-		return types.RateLimitState{Day: today, Used: math.ZeroInt(), UsedLarge: math.ZeroInt()}
+		return freshRateLimitState(today)
 	}
 	var s types.RateLimitState
 	if err := k.cdc.Unmarshal(bz, &s); err != nil {
 		panic(fmt.Errorf("failed to unmarshal bridge rate limit state: %w", err))
 	}
 	if s.Day != today {
-		return types.RateLimitState{Day: today, Used: math.ZeroInt(), UsedLarge: math.ZeroInt()}
+		return freshRateLimitState(today)
+	}
+
+	// UsedInbound is newer than the records already in the store: a state written
+	// before the field existed unmarshals it as a nil Int, and nil panics on the
+	// first Add. Normalising on read covers both that and a genesis import that
+	// omitted it, without needing a migration whose only job is to write zeros.
+	if s.UsedInbound.IsNil() {
+		s.UsedInbound = math.ZeroInt()
+	}
+	if s.Used.IsNil() {
+		s.Used = math.ZeroInt()
+	}
+	if s.UsedLarge.IsNil() {
+		s.UsedLarge = math.ZeroInt()
 	}
 	return s
+}
+
+func freshRateLimitState(day int64) types.RateLimitState {
+	return types.RateLimitState{
+		Day:         day,
+		Used:        math.ZeroInt(),
+		UsedLarge:   math.ZeroInt(),
+		UsedInbound: math.ZeroInt(),
+	}
 }
 
 func (k Keeper) setRateLimitState(ctx sdk.Context, s types.RateLimitState) error {
@@ -245,6 +268,26 @@ func (k Keeper) handleAssetTransfer(ctx sdk.Context, message util.HyperlaneMessa
 			types.ErrPoolInsufficient, atosAmount, available)
 	}
 
+	// Circuit breaker on the day's total payout. Checked before any coins move,
+	// so a rejection leaves no partial state.
+	//
+	// Rejecting returns an error, which leaves the Hyperlane message undelivered
+	// rather than consuming it -- the ERC20 is already locked on Ethereum, so
+	// dropping the message would strand it permanently. The relayer retries on a
+	// widening backoff and dry-runs first, so the wait costs no gas and a
+	// same-day retry lands once the counter rolls over at UTC midnight.
+	rl := k.GetRateLimitState(ctx)
+	if err := types.CheckInbound(k.Limits(ctx), atosAmount, rl.UsedInbound); err != nil {
+		ctx.EventManager().EmitEvent(sdk.NewEvent(
+			types.EventTypeInboundCapped,
+			sdk.NewAttribute(types.AttributeKeyAmount, atosAmount.String()),
+			sdk.NewAttribute(types.AttributeKeyUsedInbound, rl.UsedInbound.String()),
+			sdk.NewAttribute(types.AttributeKeyInboundCap, k.Limits(ctx).Inbound.String()),
+			sdk.NewAttribute(types.AttributeKeyMessageID, message.Id().String()),
+		))
+		return err
+	}
+
 	coins := sdk.NewCoins(sdk.NewCoin(k.tokenomicsKeeper.BaseDenom(), atosAmount))
 	if err := k.bankKeeper.SendCoinsFromModuleToAccount(
 		ctx, k.tokenomicsKeeper.MigrationPoolName(), recipient, coins,
@@ -255,6 +298,15 @@ func (k Keeper) handleAssetTransfer(ctx sdk.Context, message util.HyperlaneMessa
 	state := k.GetReceiptState(ctx)
 	state.TotalBridgedIn = state.TotalBridgedIn.Add(atosAmount)
 	if err := k.SetReceiptState(ctx, state); err != nil {
+		return err
+	}
+
+	// Re-read rather than reusing `rl`: GetRateLimitState rolls the day over
+	// lazily, and the coin movement above cannot change it, but re-reading keeps
+	// this correct if anything is ever inserted between the two.
+	rl = k.GetRateLimitState(ctx)
+	rl.UsedInbound = rl.UsedInbound.Add(atosAmount)
+	if err := k.setRateLimitState(ctx, rl); err != nil {
 		return err
 	}
 

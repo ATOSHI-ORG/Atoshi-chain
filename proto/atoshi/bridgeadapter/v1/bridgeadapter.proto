@@ -105,6 +105,32 @@ message Params {
   // here means a change to the mailbox default cannot silently weaken the
   // verification protecting tier releases.
   bytes ism_id = 5;
+
+  // inbound_daily_cap and inbound_daily_cap_bps_of_pool bound how much ATOS the
+  // migration pool may pay out to bridge-ins per UTC day. Effective cap is the
+  // SMALLER of the two, matching the outbound pair.
+  //
+  // This is a circuit breaker, not a throttle. The economics already balance --
+  // circulating ERC20 and the migration pool are both sized at the same 300
+  // billion ATOS -- so a legitimate day never approaches it. What it bounds is
+  // the damage from a fault: a bug on the Ethereum side, a compromised ISM, or
+  // our own code forging inbound messages. Capping the day's payout buys time to
+  // notice and flip bridge_enabled off.
+  //
+  // Deliberately NOT paired with a per-address limit. Addresses are free, so a
+  // per-address cap stops nobody who is actually attacking, while it does strand
+  // honest large transfers whose ERC20 is already locked on Ethereum.
+  //
+  // A rejected inbound message is deferred, not lost: Hyperlane keeps it
+  // deliverable and the relayer retries on a widening backoff that reaches ~16
+  // days before giving up, so a 24-hour stall is comfortably inside the budget.
+  // The relayer dry-runs before submitting, so a rejection costs no gas.
+  string inbound_daily_cap = 16 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint32 inbound_daily_cap_bps_of_pool = 17;
 }
 
 // ReceiptState tracks what Ethereum has confirmed, in ERC20 units.
@@ -184,6 +210,15 @@ message RateLimitState {
   // real: large transfers are bounded by (global - reserved) while small ones
   // are bounded by the global cap, so the reserve cannot be eaten by whales.
   string used_large = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // used_inbound is total ATOS paid out to bridge-ins today. Kept on the same
+  // record and the same day counter as the outbound figures so both roll over
+  // together and a reader cannot see a half-reset pair.
+  string used_inbound = 4 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true

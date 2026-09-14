@@ -76,6 +76,49 @@ message QueryAccountResponse {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+
+  // can_claim is whether MsgClaimAtos would succeed right now. False alone is
+  // ambiguous — see claim_blocked_reason for which of the several causes applies.
+  bool can_claim = 5;
+
+  // claim_blocked_reason explains a false can_claim in one machine-readable
+  // token, so a wallet can show the right message instead of "nothing to claim"
+  // for every cause:
+  //
+  //   ""                  can_claim is true
+  //   "module_disabled"   params.enabled is false
+  //   "module_account"    module accounts never accrue a conversion claim
+  //   "nothing_to_claim"  the holder genuinely has no ATOX and no pending
+  //   "pool_insufficient" the exchange pool cannot cover it yet — the claim is
+  //                       owed and will succeed once a tier release funds it
+  //
+  // "pool_insufficient" is the one that must never be reported as
+  // "nothing_to_claim": the holder IS owed, and telling them otherwise looks
+  // like the chain lost their money.
+  string claim_blocked_reason = 6;
+
+  // burn_on_settle is the aatox that settling right now would destroy. It equals
+  // `unsettled` by construction (one aatox per liao), and is surfaced separately
+  // because wallets need it to size a transfer.
+  string burn_on_settle = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // max_sendable is the largest ATOX transfer this account can sign right now,
+  // after both the conversion burn and the transfer fee.
+  //
+  // Wallets must not offer `atox_balance` as "send max". A transfer settles the
+  // sender first, which burns burn_on_settle aatox, and the fee is charged ON
+  // TOP of the transferred amount — so a send sized against the displayed
+  // balance fails with insufficient funds for a reason the user cannot see.
+  // The chain computes it here so every wallet gets the same answer.
+  string max_sendable = 8 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
 }
 
 message QueryExchangePoolRequest {}

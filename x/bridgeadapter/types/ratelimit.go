@@ -38,6 +38,10 @@ type Limits struct {
 	// CrisisMode is true when the pool has fallen below the crisis floor, in
 	// which case only small transfers are allowed at all.
 	CrisisMode bool
+	// Inbound is the day's ceiling on ATOS paid out to bridge-ins. Resolved the
+	// same way as Global -- the smaller of the fixed parameter and a fraction of
+	// the pool -- so it tightens on its own as the pool drains.
+	Inbound math.Int
 }
 
 // ResolveLimits computes the effective caps.
@@ -84,7 +88,18 @@ func ResolveLimits(p Params, poolBalance, poolTotal math.Int) Limits {
 		smallThreshold = math.ZeroInt()
 	}
 
+	inbound := p.InboundDailyCap
+	if inbound.IsNil() || inbound.IsNegative() {
+		inbound = math.ZeroInt()
+	}
+	if fromPool := bps(poolBalance, p.InboundDailyCapBpsOfPool); p.InboundDailyCapBpsOfPool > 0 {
+		if inbound.IsZero() || fromPool.LT(inbound) {
+			inbound = fromPool
+		}
+	}
+
 	return Limits{
+		Inbound:        inbound,
 		Global:         global,
 		LargeBudget:    largeBudget,
 		PerAddress:     bps(global, p.PerAddressDailyBps),
@@ -153,6 +168,36 @@ func CheckOutbound(
 			ErrAddressCapReached, addressUsed, l.PerAddress)
 	}
 
+	return nil
+}
+
+// CheckInbound applies the one inbound layer to a proposed bridge-in payout.
+//
+// Only a global daily total, deliberately. The pairing that makes the outbound
+// per-address cap useful -- a fixed set of holders competing for one day's
+// allowance -- does not exist inbound: addresses are free, so an attacker simply
+// splits across new ones, while an honest large transfer gets stranded with its
+// ERC20 already locked on Ethereum.
+//
+// A zero or unset cap means inbound is unlimited, not blocked. Outbound treats a
+// zero Global as "fully throttled" because a chain with no outbound cap
+// configured should not be paying out; inbound has the opposite default because
+// the migration pool balance is already a hard ceiling, and failing closed here
+// would strand every bridge-in on a chain that simply had not set the parameter.
+func CheckInbound(l Limits, amount, usedInbound math.Int) error {
+	if amount.IsNil() || !amount.IsPositive() {
+		return ErrInvalidAmount
+	}
+	if l.Inbound.IsNil() || !l.Inbound.IsPositive() {
+		return nil
+	}
+	if usedInbound.IsNil() {
+		usedInbound = math.ZeroInt()
+	}
+	if usedInbound.Add(amount).GT(l.Inbound) {
+		return fmt.Errorf("%w: %s of %s used today, %s more requested",
+			ErrInboundCapReached, usedInbound, l.Inbound, amount)
+	}
 	return nil
 }
 
