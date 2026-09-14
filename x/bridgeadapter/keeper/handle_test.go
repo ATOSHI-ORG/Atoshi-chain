@@ -474,3 +474,88 @@ func TestPendingConfirmation(t *testing.T) {
 	require.Equal(t, erc20(400).String(), bridge.String())
 	require.True(t, project.IsZero(), "fully confirmed shares report nothing pending")
 }
+
+// assetAppID is the recipient the asset (bridge-in) channel listens on.
+func assetAppID() util.HexAddress {
+	var a util.HexAddress
+	copy(a[:], []byte("atoshi-bridge-asset-app-------"))
+	return a
+}
+
+// inboundMsg builds a bridge-in delivering erc20Amount to a Cosmos recipient.
+func inboundMsg(t *testing.T, erc20Amount math.Int) util.HyperlaneMessage {
+	t.Helper()
+	recipient := make([]byte, types.HexAddressLen)
+	copy(recipient[12:], []byte("recipient-addr------")[:20])
+	body, err := types.BuildAssetPayload(recipient, erc20Amount)
+	require.NoError(t, err)
+
+	var sender util.HexAddress
+	copy(sender[:], vaultAddr().Bytes())
+	return util.HyperlaneMessage{
+		Origin:    ethDomain,
+		Sender:    sender,
+		Recipient: assetAppID(),
+		Body:      body,
+	}
+}
+
+// setupInbound wires the asset channel on top of the shared fixture.
+func setupInbound(t *testing.T) (keeper.Keeper, sdk.Context) {
+	t.Helper()
+	k, ctx, _, _ := setup(t, atosFor(1_000_000), atosFor(1_000_000))
+
+	p := k.GetParams(ctx)
+	p.BridgeEnabled = true
+	v := vaultAddr()
+	p.RemoteBridgeVault = v[:]
+	// Enabling the bridge requires both routing fields; validation rejects a
+	// half-configured bridge rather than letting it run and fail per-message.
+	mb := tierAppID()
+	p.MailboxId = mb[:]
+	require.NoError(t, k.SetParams(ctx, p))
+
+	st := k.GetReceiptState(ctx)
+	a := assetAppID()
+	st.AssetAppId = a[:]
+	require.NoError(t, k.SetReceiptState(ctx, st))
+	return k, ctx
+}
+
+// TestInboundCap_RejectsRatherThanDrops is the property the whole design rests
+// on: the ERC20 is already locked on Ethereum when this runs, so a capped
+// bridge-in must return an ERROR (leaving the Hyperlane message undelivered and
+// retryable) and must not silently consume it.
+func TestInboundCap_RejectsRatherThanDrops(t *testing.T) {
+	k, ctx := setupInbound(t)
+
+	p := k.GetParams(ctx)
+	p.InboundDailyCap = atosFor(10) // tiny, so the second transfer trips it
+	p.InboundDailyCapBpsOfPool = 0
+	require.NoError(t, k.SetParams(ctx, p))
+
+	// First one fits.
+	require.NoError(t, k.Handle(ctx, util.HexAddress{}, inboundMsg(t, erc20(6))))
+	require.Equal(t, atosFor(6).String(), k.GetRateLimitState(ctx).UsedInbound.String())
+
+	// Second one exceeds the day's cap.
+	err := k.Handle(ctx, util.HexAddress{}, inboundMsg(t, erc20(6)))
+	require.ErrorIs(t, err, types.ErrInboundCapReached)
+
+	// Nothing was recorded for the rejected message -- no partial state.
+	require.Equal(t, atosFor(6).String(), k.GetRateLimitState(ctx).UsedInbound.String(),
+		"a rejected bridge-in must not consume quota")
+}
+
+// TestInboundCap_UnsetMeansUnlimited: a chain that has not configured the cap
+// must still bridge in, since the pool balance is already a hard ceiling.
+func TestInboundCap_UnsetMeansUnlimited(t *testing.T) {
+	k, ctx := setupInbound(t)
+
+	p := k.GetParams(ctx)
+	p.InboundDailyCap = math.ZeroInt()
+	p.InboundDailyCapBpsOfPool = 0
+	require.NoError(t, k.SetParams(ctx, p))
+
+	require.NoError(t, k.Handle(ctx, util.HexAddress{}, inboundMsg(t, erc20(1_000_000))))
+}

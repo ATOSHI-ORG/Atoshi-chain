@@ -5,6 +5,9 @@ const (
 	EventTypeUpdateParams   = "bridge_adapter_update_params"
 	EventTypeBridgeOut      = "bridge_out"
 	EventTypeBridgeIn       = "bridge_in"
+	// EventTypeInboundCapped fires when the daily inbound circuit breaker
+	// rejects a bridge-in. The message is NOT lost -- Hyperlane retries it.
+	EventTypeInboundCapped = "bridge_in_capped"
 
 	AttributeKeyMessageID         = "message_id"
 	AttributeKeyBridgeDelta       = "bridge_delta_erc20"
@@ -17,4 +20,6 @@ const (
 	AttributeKeyRecipient         = "recipient"
 	AttributeKeyAmount            = "amount"
 	AttributeKeyErc20Amount       = "erc20_amount"
+	AttributeKeyUsedInbound = "used_inbound"
+	AttributeKeyInboundCap  = "inbound_cap"
 )

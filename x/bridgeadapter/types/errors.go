@@ -18,6 +18,7 @@ var (
 	ErrInvalidAmount     = errorsmod.Register(ModuleName, 12, "invalid amount")
 	ErrBelowMinimum      = errorsmod.Register(ModuleName, 13, "amount below the per-transfer minimum")
 	ErrDailyCapReached   = errorsmod.Register(ModuleName, 14, "global daily bridge cap reached")
+	ErrInboundCapReached = errorsmod.Register(ModuleName, 21, "inbound daily bridge cap reached")
 	ErrLargeQuotaReached = errorsmod.Register(ModuleName, 15, "large-transfer budget exhausted; remainder reserved for small transfers")
 	ErrAddressCapReached = errorsmod.Register(ModuleName, 16, "per-address daily bridge cap reached")
 	ErrCrisisMode        = errorsmod.Register(ModuleName, 17, "migration pool below crisis floor; small transfers only")
