@@ -99,3 +99,37 @@ func TestTransferFee_InstantiatedERC20PrecompileCarriesTheFeeServer(t *testing.T
 		"the instantiated ERC20 precompile (%s) has no fee-charging Msg server, "+
 			"so transfer() would move ATOX untaxed", pair.Denom)
 }
+
+// TestTransferFee_ERC20TransferEventReportsWhatArrived pins that the ERC20
+// Transfer event carries the delivered amount, not the requested one.
+//
+// With an inclusive fee those differ: transfer(to, 100) moves 100 out of the
+// sender and delivers 90. An event saying 100 tells every explorer, indexer and
+// exchange that 90 aatox arrived as 100 -- an exchange would credit a deposit it
+// never received.
+//
+// Asserted at the level the precompile computes it: the recipient's balance
+// delta across the send.
+func TestTransferFee_ERC20TransferEventReportsWhatArrived(t *testing.T) {
+	nw := network.NewUnitTestNetwork()
+	ctx := nw.GetContext()
+	k := nw.App.AtoxKeeper
+
+	denom := atoshitypes.AtoxBaseDenom
+	from, to := acc("evt-from"), acc("evt-to")
+	require.NoError(t, k.MintAtox(ctx, from, atox(100)))
+
+	before := nw.App.BankKeeper.GetBalance(ctx, to, denom).Amount
+
+	srv := nw.App.Erc20Keeper.BankMsgServer()
+	require.NotNil(t, srv)
+	_, err := srv.Send(ctx, banktypes.NewMsgSend(from, to,
+		sdk.NewCoins(sdk.NewCoin(denom, atox(100)))))
+	require.NoError(t, err)
+
+	delivered := nw.App.BankKeeper.GetBalance(ctx, to, denom).Amount.Sub(before)
+	require.Equal(t, atox(90).String(), delivered.String(),
+		"the delta the precompile puts in the Transfer event must be the net amount")
+	require.NotEqual(t, atox(100).String(), delivered.String(),
+		"emitting the requested amount would overstate the transfer by the fee")
+}
