@@ -10,9 +10,9 @@ import (
 
 	evidencekeeper "cosmossdk.io/x/evidence/keeper"
 
+	atoxprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/atox"
 	bankprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/bank"
 	"github.com/atoshi-chain/atoshi/v20/precompiles/bech32"
-	atoxprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/atox"
 	bridgeadapterprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/bridgeadapter"
 	distprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/distribution"
 	evidenceprecompile "github.com/atoshi-chain/atoshi/v20/precompiles/evidence"

@@ -541,9 +541,9 @@ func setDefaultTokenomicsGenesisState(_ *app.Atoshi, genesisState evmostypes.Gen
 	tokenomicsGen := tokenomicstypes.DefaultGenesisState()
 	tokenomicsGen.Params.ValidatorMinSelfDelegation = sdkmath.ZeroInt()
 
-	// Marshalled with encoding/json, NOT AppCodec().MustMarshalJSON, because
+	// Marshaled with encoding/json, NOT AppCodec().MustMarshalJSON, because
 	// x/tokenomics' own module.go uses encoding/json for both DefaultGenesis and
-	// InitGenesis. Proto3 JSON encodes int64 as a string, so codec-marshalled
+	// InitGenesis. Proto3 JSON encodes int64 as a string, so codec-marshaled
 	// bytes fail the module's plain json.Unmarshal with "cannot unmarshal string
 	// into Go struct field Params.params.halving_interval_blocks of type int64".
 	bz, err := json.Marshal(tokenomicsGen)

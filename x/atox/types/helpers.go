@@ -13,7 +13,7 @@ import (
 // and stall the chain.
 const MaxAutoSettlePerBlock = 1000
 
-// MaxTransferFeeBps caps Params.TransferFeeBps at 30%. The fee is a behavioural
+// MaxTransferFeeBps caps Params.TransferFeeBps at 30%. The fee is a behavioral
 // lever, not a safety control, so governance has no legitimate reason to push it
 // near 100% — and an unbounded value would let one proposal make ATOX
 // effectively untransferable, or make every transfer fail for lack of headroom.
@@ -213,7 +213,7 @@ func DefaultParams() Params {
 		// but skips the transfer, so dust payouts do not dominate block space.
 		MinAutoPayout: math.NewIntWithDecimal(1, 15),
 		// 10% on top of every account-to-account transfer, burned to recycle it
-		// into the mining pool. Governance-tunable so the rate can be dialled
+		// into the mining pool. Governance-tunable so the rate can be dialed
 		// back without a chain upgrade if 10% turns out to be too steep.
 		TransferFeeBps: 1000,
 	}
@@ -280,7 +280,7 @@ func (s GlobalState) Validate() error {
 	}
 	// Solvency: everything owed or already handed out must be covered by what
 	// tier releases actually paid into the pool. A genesis violating this starts
-	// the chain already unable to honour conversions.
+	// the chain already unable to honor conversions.
 	if booked := s.TotalPending.Add(s.TotalPaidOut); booked.GT(s.TotalReleasedToPool) {
 		return fmt.Errorf("total_pending + total_paid_out (%s) exceeds total_released_to_pool (%s)",
 			booked, s.TotalReleasedToPool)

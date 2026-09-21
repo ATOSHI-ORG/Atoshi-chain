@@ -319,8 +319,8 @@ func TestCheckInbound_GlobalCapOnly(t *testing.T) {
 func TestCheckInbound_UnsetCapMeansUnlimited(t *testing.T) {
 	for _, l := range []types.Limits{
 		{Inbound: math.ZeroInt()},
-		{},                             // nil Int
-		{Inbound: math.NewInt(-5)},     // negative
+		{},                         // nil Int
+		{Inbound: math.NewInt(-5)}, // negative
 	} {
 		require.NoError(t, types.CheckInbound(l, math.NewIntWithDecimal(1, 30), math.ZeroInt()))
 	}
@@ -332,7 +332,7 @@ func TestCheckInbound_RejectsNonPositive(t *testing.T) {
 	require.ErrorIs(t, types.CheckInbound(l, math.NewInt(-1), math.ZeroInt()), types.ErrInvalidAmount)
 }
 
-// TestResolveLimits_InboundTakesSmallerLeg mirrors the outbound behaviour: the
+// TestResolveLimits_InboundTakesSmallerLeg mirrors the outbound behavior: the
 // bps leg tightens the cap on its own as the pool drains, without a proposal.
 func TestResolveLimits_InboundTakesSmallerLeg(t *testing.T) {
 	p := types.DefaultParams()

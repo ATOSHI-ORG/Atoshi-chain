@@ -162,8 +162,8 @@ var _ = When("a user interact with the WEVMOS precompiled contract", func() {
 			is.network.App.BankKeeper,
 			is.network.App.AuthzKeeper,
 			is.network.App.TransferKeeper,
-				nil, // 无费率包装：这些测试不关心 ATOX 手续费
-	)
+			nil, // 无费率包装：这些测试不关心 ATOX 手续费
+		)
 		Expect(err).ToNot(HaveOccurred(), "failed to instantiate the werc20 precompile")
 		is.precompile = precompile
 

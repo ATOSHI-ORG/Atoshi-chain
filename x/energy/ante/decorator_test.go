@@ -61,6 +61,7 @@ func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom stri
 	}
 	return sdk.NewCoin(denom, v)
 }
+
 func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.AccAddress, module string, amt sdk.Coins) error {
 	b.lastFrom = sender
 	b.lastModule = module
@@ -72,6 +73,7 @@ func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.Ac
 	b.balances[sender.String()] = cur.Sub(amt.AmountOf(b.denom))
 	return nil
 }
+
 func (b *fakeBank) SendCoinsFromModuleToAccount(_ context.Context, _ string, recipient sdk.AccAddress, amt sdk.Coins) error {
 	cur := b.balances[recipient.String()]
 	if cur.IsNil() {
@@ -88,9 +90,11 @@ type fakeAccountKeeper struct {
 func (f fakeAccountKeeper) GetModuleAddress(name string) sdk.AccAddress {
 	return sdk.AccAddress([]byte("module/" + name))
 }
+
 func (f fakeAccountKeeper) GetModuleAccount(_ context.Context, _ string) sdk.ModuleAccountI {
 	return nil
 }
+
 func (f fakeAccountKeeper) GetAccount(_ context.Context, addr sdk.AccAddress) sdk.AccountI {
 	if f.exists[addr.String()] {
 		// return a non-nil minimal account; the decorator only checks != nil

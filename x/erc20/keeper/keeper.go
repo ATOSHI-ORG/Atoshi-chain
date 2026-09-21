@@ -38,7 +38,7 @@ type Keeper struct {
 	// service to a wrapper that charges the ATOX transfer fee, and a locally
 	// built server is the stock one -- which would make ERC20 transfer() a
 	// fee-free route for ATOX. app.go injects the real one with
-	// SetBankMsgServer; nil keeps the stock behaviour.
+	// SetBankMsgServer; nil keeps the stock behavior.
 	bankMsgServer banktypes.MsgServer
 }
 

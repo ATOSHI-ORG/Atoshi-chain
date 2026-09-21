@@ -142,11 +142,11 @@ func (s *PrecompileTestSuite) TestReadsAreZeroForAFreshAccount() {
 func (s *PrecompileTestSuite) TestGlobalIndexIsScaledBy1e18() {
 	ctx := s.ctx()
 
-	// Push the index to exactly 1% by funding the pool with 1% of the cap.
+	// Push the index to exactly 1% by funding the pool with 1% of the limitAmt.
 	// The ATOS has to exist first: AddToExchangePool moves coins between module
 	// accounts, it does not create them.
-	cap := s.network.App.AtoxKeeper.AtoxSupplyCap(ctx)
-	onePercent := cap.Quo(math.NewInt(100))
+	limitAmt := s.network.App.AtoxKeeper.AtoxSupplyCap(ctx)
+	onePercent := limitAmt.Quo(math.NewInt(100))
 	funding := sdk.NewCoins(sdk.NewCoin(s.network.App.AtoxKeeper.BaseDenom(), onePercent))
 	s.Require().NoError(s.network.App.BankKeeper.MintCoins(ctx, atoxtypes.ModuleName, funding))
 	s.Require().NoError(

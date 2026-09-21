@@ -1,8 +1,9 @@
 package keeper
 
 import (
-	"cosmossdk.io/math"
 	"context"
+
+	"cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"google.golang.org/grpc/codes"

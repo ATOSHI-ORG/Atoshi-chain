@@ -25,7 +25,7 @@ import (
 //
 // ATOX is a registered token pair (0xc2b6…), so that second one made ERC20
 // transfer() a fee-free route for ATOX, while transferFrom() -- which goes out
-// through authz and therefore the router -- did pay. Measured, not theorised:
+// through authz and therefore the router -- did pay. Measured, not theorized:
 // before the fix this test showed the receiver getting the full 100.
 //
 // Both ends are asserted because the bug lived in the seam between them: the

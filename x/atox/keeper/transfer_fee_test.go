@@ -14,7 +14,7 @@ import (
 
 func atox(n int64) math.Int { return math.NewIntWithDecimal(n, 18) }
 
-// TestTransferFee_ChargedOnTopAndBurned pins the headline behaviour: sending 100
+// TestTransferFee_ChargedOnTopAndBurned pins the headline behavior: sending 100
 // ATOX costs the sender 110, the receiver gets 100, and the 10 is destroyed.
 // TestTransferFee_TakenOutOfTheAmountAndBurned pins the fee model: inclusive.
 //
@@ -61,14 +61,14 @@ func TestTransferFee_AccountCanBeEmptied(t *testing.T) {
 func TestTransferFee_BurnRestoresMintHeadroom(t *testing.T) {
 	k, ctx, bank := setup(t)
 	alice, bob := acc("alice"), acc("bob")
-	cap := k.GetParams(ctx).SupplyCap
+	limitAmt := k.GetParams(ctx).SupplyCap
 
-	// Mine the entire cap, then confirm nothing more can be minted.
-	require.NoError(t, k.MintAtox(ctx, alice, cap))
+	// Mine the entire limitAmt, then confirm nothing more can be minted.
+	require.NoError(t, k.MintAtox(ctx, alice, limitAmt))
 	require.ErrorIs(t, k.MintAtox(ctx, acc("miner"), math.NewInt(1)), types.ErrSupplyCapReached)
 
 	// Alice moves some ATOX; the fee is burned.
-	send := cap.QuoRaw(100)
+	send := limitAmt.QuoRaw(100)
 	require.NoError(t, bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, send))))
 	burned := k.GetGlobalState(ctx).TotalFeeBurned
 	require.True(t, burned.IsPositive())
@@ -103,7 +103,7 @@ func TestTransferFee_ModuleAccountPathsAreFree(t *testing.T) {
 //
 // This replaces a test that asserted the opposite -- that sending the whole
 // balance must FAIL "because nothing is left for the fee". That was the on-top
-// model's behaviour and the reason a remainder could never be moved.
+// model's behavior and the reason a remainder could never be moved.
 func TestTransferFee_BoundaryIsTheBalance(t *testing.T) {
 	k, ctx, bank := setup(t)
 	alice, bob := acc("alice"), acc("bob")
@@ -183,17 +183,17 @@ func TestTransferFee_ZeroBpsDisables(t *testing.T) {
 func TestTransferFee_SettlementStillCorrectWithFee(t *testing.T) {
 	k, ctx, bank := setup(t)
 	alice, bob := acc("alice"), acc("bob")
-	cap := k.GetParams(ctx).SupplyCap
+	limitAmt := k.GetParams(ctx).SupplyCap
 
-	require.NoError(t, k.MintAtox(ctx, alice, cap))
+	require.NoError(t, k.MintAtox(ctx, alice, limitAmt))
 
-	// One release accrues entirely to alice, who holds the whole cap.
+	// One release accrues entirely to alice, who holds the whole limitAmt.
 	rel := math.NewIntWithDecimal(1, 28)
 	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, rel))
 
 	// Move as much as the fee allows -- out of what alice ACTUALLY holds.
 	// Settling burned the ATOX that bought her payout, so sizing the transfer
-	// against the original cap would overdraw her by exactly the burn.
+	// against the original limitAmt would overdraw her by exactly the burn.
 	_, serr := k.SettleAccount(ctx, alice, types.TriggerClaim)
 	require.NoError(t, serr)
 	live := k.AtoxBalance(ctx, alice)
@@ -202,7 +202,7 @@ func TestTransferFee_SettlementStillCorrectWithFee(t *testing.T) {
 
 	aP, aU := k.Claimable(ctx, alice)
 	require.Equal(t, rel.String(), aP.Add(aU).String(),
-		"alice held the whole cap for the whole span, so she is owed the whole release")
+		"alice held the whole limitAmt for the whole span, so she is owed the whole release")
 
 	bP, bU := k.Claimable(ctx, bob)
 	require.True(t, bP.Add(bU).IsZero(), "bob accrues only from now on, got %s", bP.Add(bU))

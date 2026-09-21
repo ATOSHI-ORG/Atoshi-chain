@@ -46,7 +46,7 @@ type AtoxKeeper interface {
 //
 // Module-internal movement is untouched: SendCoinsFromModuleToAccount and its
 // siblings call the concrete keeper's own SendCoins, not this one, so ATOX
-// travelling through fee_collector or distribution is never taxed -- which is
+// traveling through fee_collector or distribution is never taxed -- which is
 // the same exemption the restriction already applies.
 type FeeInclusiveBank struct {
 	bankkeeper.Keeper
@@ -154,4 +154,3 @@ func ChargeInclusiveFee(
 type feeRecorder interface {
 	RecordFeeBurn(ctx sdk.Context, from sdk.AccAddress, fee, moved math.Int) error
 }
-

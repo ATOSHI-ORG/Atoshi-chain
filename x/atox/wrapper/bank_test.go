@@ -63,8 +63,8 @@ type stubAtox struct {
 	modules map[string]bool
 }
 
-func (s stubAtox) AtoxDenom() string                  { return denom }
-func (s stubAtox) TransferFeeBps(sdk.Context) uint32  { return s.bps }
+func (s stubAtox) AtoxDenom() string                 { return denom }
+func (s stubAtox) TransferFeeBps(sdk.Context) uint32 { return s.bps }
 func (s stubAtox) IsModuleAccount(_ sdk.Context, a sdk.AccAddress) bool {
 	return s.modules[a.String()]
 }
@@ -95,7 +95,10 @@ func TestInclusiveFee_ModuleLegsAreExempt(t *testing.T) {
 	alice, mod := addr("alice"), addr("module")
 	mods := map[string]bool{mod.String(): true}
 
-	for _, tc := range []struct{ name string; from, to sdk.AccAddress }{
+	for _, tc := range []struct {
+		name     string
+		from, to sdk.AccAddress
+	}{
 		{"module sends", mod, alice},
 		{"module receives", alice, mod},
 	} {
@@ -143,6 +146,6 @@ func TestInclusiveFee_NonAtoxUntouched(t *testing.T) {
 // TestFeeInclusiveBank_SatisfiesBankKeeper pins that the wrapper can stand in
 // wherever a bankkeeper.Keeper is expected -- the property the whole
 // interception depends on.
-func TestFeeInclusiveBank_SatisfiesBankKeeper(t *testing.T) {
+func TestFeeInclusiveBank_SatisfiesBankKeeper(_ *testing.T) {
 	var _ bankkeeper.Keeper = wrapper.FeeInclusiveBank{}
 }

@@ -93,7 +93,6 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 // feeInProgressKey marks a context as being inside the fee collection send.
 type feeInProgressKey struct{}
 
-
 // RecordFeeBurn books a transfer fee that the bank wrapper has already collected
 // and burned.
 //
@@ -128,4 +127,3 @@ func (k Keeper) TransferFeeBps(ctx sdk.Context) uint32 { return k.GetParams(ctx)
 func (k Keeper) IsModuleAccount(ctx sdk.Context, addr sdk.AccAddress) bool {
 	return k.isModuleAccount(ctx, addr)
 }
-

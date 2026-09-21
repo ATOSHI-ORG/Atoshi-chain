@@ -254,7 +254,7 @@ func TestBondedRatio(t *testing.T) {
 
 			// x/tokenomics pre-mints the whole 10 trillion ATOS supply into its
 			// three pools at genesis, and StakingTokenSupply — what BondedRatio
-			// divides by — counts it. Modelled from the params rather than read
+			// divides by — counts it. Modeled from the params rather than read
 			// back off the chain so this still catches a wrong supply figure.
 			tokenomicsPreMint := tokenomicsPoolTotal()
 

@@ -85,9 +85,9 @@ func DefaultParams() Params {
 		// Minimum spacing between two tier samples, not an evaluation period.
 		// one_day / DefaultDailySamples = 17280 / 3, so the day's three samples
 		// cannot land closer together than 8h.
-		PriceCheckEpochBlocks:  17_280 / DefaultDailySamples,
-		DailySamples:           DefaultDailySamples,
-		DaySeconds:             DefaultDaySeconds,
+		PriceCheckEpochBlocks:       17_280 / DefaultDailySamples,
+		DailySamples:                DefaultDailySamples,
+		DaySeconds:                  DefaultDaySeconds,
 		MigrationRefillThresholdBps: DefaultMigrationRefillThresholdBps,
 
 		MigrationMerkleRoot:       "",

@@ -88,22 +88,25 @@ type testAccountKeeper struct{}
 func (testAccountKeeper) GetModuleAddress(name string) sdk.AccAddress {
 	return authtypes.NewModuleAddress(name)
 }
-func (testAccountKeeper) GetModuleAccount(ctx context.Context, moduleName string) sdk.ModuleAccountI {
+
+func (testAccountKeeper) GetModuleAccount(_ context.Context, _ string) sdk.ModuleAccountI {
 	return nil
 }
-func (testAccountKeeper) GetAccount(ctx context.Context, addr sdk.AccAddress) sdk.AccountI {
+
+func (testAccountKeeper) GetAccount(_ context.Context, _ sdk.AccAddress) sdk.AccountI {
 	return nil
 }
-func (testAccountKeeper) SetAccount(ctx context.Context, acc sdk.AccountI) {}
+func (testAccountKeeper) SetAccount(_ context.Context, _ sdk.AccountI) {}
 
 type testStakingKeeper struct {
 	totalBonded math.Int
 	validators  []stakingtypes.Validator
 }
 
-func (sk testStakingKeeper) TotalBondedTokens(ctx context.Context) (math.Int, error) {
+func (sk testStakingKeeper) TotalBondedTokens(_ context.Context) (math.Int, error) {
 	return sk.totalBonded, nil
 }
+
 func (sk testStakingKeeper) IterateBondedValidatorsByPower(ctx context.Context, fn func(index int64, validator stakingtypes.ValidatorI) bool) error {
 	for i, v := range sk.validators {
 		if fn(int64(i), v) {
@@ -112,9 +115,11 @@ func (sk testStakingKeeper) IterateBondedValidatorsByPower(ctx context.Context, 
 	}
 	return nil
 }
+
 func (sk testStakingKeeper) GetValidator(ctx context.Context, addr sdk.ValAddress) (stakingtypes.Validator, error) {
 	return stakingtypes.Validator{}, nil
 }
+
 func (sk testStakingKeeper) Validator(ctx context.Context, addr sdk.ValAddress) (stakingtypes.ValidatorI, error) {
 	return nil, nil
 }
@@ -306,7 +311,7 @@ func TestBeginBlocker_StopsAtAtoxCapWithoutErroring(t *testing.T) {
 }
 
 // TestTriggerRelease_RecordsWithoutMovingAtos pins the half of the round trip
-// that lives here: a tier judgment only authorises. The ATOS stays in the miner
+// that lives here: a tier judgment only authorizes. The ATOS stays in the miner
 // pool until x/bridgeadapter sees Ethereum confirm the matching ERC20, because
 // releasing first would let holders convert ATOX into ATOS nothing backs.
 func TestTriggerRelease_RecordsWithoutMovingAtos(t *testing.T) {
@@ -330,7 +335,7 @@ func TestTriggerRelease_RecordsWithoutMovingAtos(t *testing.T) {
 	expectMiner := quota.MulRaw(int64(params.MinerReleaseShareBps)).QuoRaw(10000)
 
 	require.Equal(t, expectMiner.String(), state.TotalMinerReleased.String(),
-		"the authorised figure is recorded")
+		"the authorized figure is recorded")
 	require.True(t, state.TotalProjectReleased.IsPositive())
 
 	require.Empty(t, xk.pooled,
@@ -352,7 +357,7 @@ func TestTriggerRelease_RecordsWithoutMovingAtos(t *testing.T) {
 }
 
 // TestTriggerRelease_AuthorizationCappedByPoolBalance — the quota is derived from
-// circulating supply, so authorising more than the pool holds would let a
+// circulating supply, so authorizing more than the pool holds would let a
 // receipt later demand ATOS that does not exist.
 func TestTriggerRelease_AuthorizationCappedByPoolBalance(t *testing.T) {
 	bk := newTestBankKeeper()
@@ -365,11 +370,11 @@ func TestTriggerRelease_AuthorizationCappedByPoolBalance(t *testing.T) {
 	require.NoError(t, k.TriggerRelease(ctx, &state, k.GetParams(ctx)))
 
 	require.Equal(t, "7", state.TotalMinerReleased.String(),
-		"cannot authorise more ATOS than the miner pool holds")
+		"cannot authorize more ATOS than the miner pool holds")
 }
 
 // TestTriggerReleaseCapsProjectAuthorisationToPoolBalance checks the cap on how
-// much a tier judgment may authorise.
+// much a tier judgment may authorize.
 //
 // It used to assert on ProjectClaimable, which TriggerRelease credited directly.
 // It no longer does: per the design doc the forward leg only books the
@@ -390,7 +395,7 @@ func TestTriggerReleaseCapsProjectAuthorisationToPoolBalance(t *testing.T) {
 
 	require.NoError(t, k.TriggerRelease(ctx, &state, params))
 	require.Equal(t, math.NewInt(10), state.TotalProjectReleased,
-		"cannot authorise more ATOS than the project pool holds")
+		"cannot authorize more ATOS than the project pool holds")
 	require.True(t, k.GetProjectClaimable(ctx).IsZero(),
 		"ProjectClaimable must stay untouched until the Ethereum receipt arrives")
 }
@@ -466,20 +471,16 @@ func (ok *mutableOracleKeeper) GetParams(sdk.Context) oracletypes.Params {
 func newKeeperWithOracleIface(t *testing.T, ok tokenomicstypes.OracleKeeper) (Keeper, sdk.Context) {
 	t.Helper()
 	bk := newTestBankKeeper()
-	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] =
-		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
-	bk.balances[authtypes.NewModuleAddress("tokenomics_project_pool").String()] =
-		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
+	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] = sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
+	bk.balances[authtypes.NewModuleAddress("tokenomics_project_pool").String()] = sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
 	sk := testStakingKeeper{totalBonded: math.NewInt(100)}
 	return newKeeperForTestIface(t, bk, sk, ok)
 }
 
 func newKeeperWithOracle(t *testing.T, ok testOracleKeeper) (Keeper, sdk.Context) {
 	bk := newTestBankKeeper()
-	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] =
-		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
-	bk.balances[authtypes.NewModuleAddress("tokenomics_project_pool").String()] =
-		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
+	bk.balances[authtypes.NewModuleAddress("tokenomics_miner_pool").String()] = sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
+	bk.balances[authtypes.NewModuleAddress("tokenomics_project_pool").String()] = sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(1, 24)))
 	sk := testStakingKeeper{totalBonded: math.NewInt(100)}
 	return newKeeperForTest(t, bk, sk, ok)
 }
@@ -815,13 +816,11 @@ func TestBeginBlocker_NoStateChangeWhenNoBondedValidators(t *testing.T) {
 // 必须有 Ethereum 已确认释放的 ERC20 做抵押，而 ProjectClaimable 就是那个
 // 抵押额度。搬了不扣额度，同一份抵押就能无限次补充。
 
-func refillFixture(t *testing.T, migrationBal, projectBal, authorised math.Int) (Keeper, sdk.Context, *testBankKeeper) {
+func refillFixture(t *testing.T, migrationBal, projectBal, authorized math.Int) (Keeper, sdk.Context, *testBankKeeper) {
 	t.Helper()
 	bk := newTestBankKeeper()
-	bk.balances[authtypes.NewModuleAddress(tokenomicstypes.MigrationPoolName).String()] =
-		sdk.NewCoins(sdk.NewCoin("liao", migrationBal))
-	bk.balances[authtypes.NewModuleAddress(tokenomicstypes.ProjectPoolName).String()] =
-		sdk.NewCoins(sdk.NewCoin("liao", projectBal))
+	bk.balances[authtypes.NewModuleAddress(tokenomicstypes.MigrationPoolName).String()] = sdk.NewCoins(sdk.NewCoin("liao", migrationBal))
+	bk.balances[authtypes.NewModuleAddress(tokenomicstypes.ProjectPoolName).String()] = sdk.NewCoins(sdk.NewCoin("liao", projectBal))
 	sk := testStakingKeeper{totalBonded: math.NewInt(100)}
 	k, ctx := newKeeperForTest(t, bk, sk, testOracleKeeper{})
 
@@ -829,11 +828,11 @@ func refillFixture(t *testing.T, migrationBal, projectBal, authorised math.Int) 
 	p.MigrationPoolTotal = math.NewInt(1_000)
 	p.MigrationRefillThresholdBps = 2_000 // 低于 20% 补
 	require.NoError(t, k.SetParams(ctx, p))
-	k.SetProjectClaimable(ctx, authorised)
+	k.SetProjectClaimable(ctx, authorized)
 	return k, ctx, bk
 }
 
-func migrationBalance(k Keeper, ctx sdk.Context, bk *testBankKeeper) math.Int {
+func migrationBalance(_ Keeper, ctx sdk.Context, bk *testBankKeeper) math.Int {
 	return bk.GetBalance(ctx,
 		authtypes.NewModuleAddress(tokenomicstypes.MigrationPoolName), "liao").Amount
 }

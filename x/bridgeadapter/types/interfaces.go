@@ -16,18 +16,18 @@ type AtoxKeeper interface {
 	AddToExchangePool(ctx sdk.Context, fromModule string, amount math.Int) error
 }
 
-// TokenomicsKeeper supplies what tier judgments authorised and receives the
+// TokenomicsKeeper supplies what tier judgments authorized and receives the
 // project share of a confirmed release.
 //
-// The authorised totals are read to cross-check receipts: Ethereum can only
-// release what Atoshi's tier engine authorised, so a receipt claiming more means
+// The authorized totals are read to cross-check receipts: Ethereum can only
+// release what Atoshi's tier engine authorized, so a receipt claiming more means
 // either a bug or a forged message, and is rejected rather than trusted.
 type TokenomicsKeeper interface {
 	// AuthorizedReleases returns the cumulative miner and project shares that
-	// tier judgments have authorised, in ATOS.
+	// tier judgments have authorized, in ATOS.
 	AuthorizedReleases(ctx sdk.Context) (miner, project math.Int)
 
-	// GetProjectClaimable / SetProjectClaimable carry the counter authorising
+	// GetProjectClaimable / SetProjectClaimable carry the counter authorizing
 	// migration-pool top-ups out of the project pool.
 	GetProjectClaimable(ctx sdk.Context) math.Int
 	SetProjectClaimable(ctx sdk.Context, amount math.Int)
@@ -67,13 +67,13 @@ type CoreKeeper interface {
 	// DispatchMessage sends an outbound message through the mailbox.
 	DispatchMessage(
 		ctx sdk.Context,
-		originMailboxId util.HexAddress,
+		originMailboxID util.HexAddress,
 		sender util.HexAddress,
 		maxFee sdk.Coins,
 		destinationDomain uint32,
 		recipient util.HexAddress,
 		body []byte,
 		metadata util.StandardHookMetadata,
-		postDispatchHookId *util.HexAddress,
+		postDispatchHookID *util.HexAddress,
 	) (util.HexAddress, error)
 }

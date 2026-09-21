@@ -20,6 +20,6 @@ const (
 	AttributeKeyRecipient         = "recipient"
 	AttributeKeyAmount            = "amount"
 	AttributeKeyErc20Amount       = "erc20_amount"
-	AttributeKeyUsedInbound = "used_inbound"
-	AttributeKeyInboundCap  = "inbound_cap"
+	AttributeKeyUsedInbound       = "used_inbound"
+	AttributeKeyInboundCap        = "inbound_cap"
 )

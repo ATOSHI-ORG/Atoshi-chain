@@ -34,14 +34,14 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 		return nil
 	}
 
-	// Clamp against the ATOX cap held by x/atox, which is the authoritative
+	// Clamp against the ATOX limitAmt held by x/atox, which is the authoritative
 	// ceiling and is immutable there. Clamping rather than letting MintAtox
 	// reject matters: an error here propagates into FinalizeBlock, so once the
-	// cap were reached every block on every node would fail and the chain would
+	// limitAmt were reached every block on every node would fail and the chain would
 	// halt. Emission must simply stop.
 	supply := k.atoxKeeper.AtoxSupply(ctx)
-	cap := k.atoxKeeper.AtoxSupplyCap(ctx)
-	if remaining := cap.Sub(supply); remaining.LT(currentReward) {
+	limitAmt := k.atoxKeeper.AtoxSupplyCap(ctx)
+	if remaining := limitAmt.Sub(supply); remaining.LT(currentReward) {
 		if !remaining.IsPositive() {
 			return nil
 		}
@@ -100,7 +100,7 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 // The chain records outcomes, it does not choose when to look. A chain-chosen
 // instant is a publicly known block height, so anyone wanting the release to
 // fire would know exactly when the price has to hold and could arrange for it
-// to hold only then. Randomising off-chain makes that unprofitable, at the cost
+// to hold only then. Randomizing off-chain makes that unprofitable, at the cost
 // of trusting the feeder about *when* -- which the sample cap and the spacing
 // floor below bound.
 //
@@ -113,7 +113,7 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 // readings of each day are consumed, and PriceCheckEpochBlocks enforces a
 // minimum gap between them so they cannot all land in the same few seconds.
 //
-// # What changed from the previous behaviour
+// # What changed from the previous behavior
 //
 // This used to evaluate once every PriceCheckEpochBlocks against whatever the
 // latest report happened to be. That is a different rule -- it samples at a
@@ -139,7 +139,7 @@ func (k Keeper) EndBlocker(ctx sdk.Context) error {
 	today := now / daySeconds
 
 	// Keep the user bridge liquid before doing anything else. Independent of the
-	// tier machinery: it moves already-authorised ATOS between two pools and does
+	// tier machinery: it moves already-authorized ATOS between two pools and does
 	// not change any cumulative total, so a failure here should not stop the
 	// sampling below.
 	if err := k.RefillMigrationPool(ctx); err != nil {
@@ -294,13 +294,10 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	//
 	// Releasing here instead would let holders convert ATOX into ATOS that
 	// nothing backs, for as long as the Ethereum side lagged or failed — which is
-	// the exact failure the receipt round-trip exists to prevent. The authorised
-	// figure is capped to the miner pool's balance so it can never authorise more
+	// the exact failure the receipt round-trip exists to prevent. The authorized
+	// figure is capped to the miner pool's balance so it can never authorize more
 	// ATOS than exists to release.
-	actualMinerRelease, err := k.authorizeMinerRelease(ctx, minerTarget)
-	if err != nil {
-		return err
-	}
+	actualMinerRelease := k.authorizeMinerRelease(ctx, minerTarget)
 	actualProjectRelease := projectTarget
 	if actualMinerRelease.LT(minerTarget) {
 		actualProjectRelease = actualProjectRelease.Add(minerTarget.Sub(actualMinerRelease))
@@ -315,7 +312,7 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	// KNOWN GAP, needs review: the capacity cap below still measures headroom
 	// against ProjectClaimable, which now lags this authorisation by one round
 	// trip. Between step 1 and step 4 the cap cannot see the in-flight
-	// authorisation, so consecutive tier releases could over-authorise by up to
+	// authorisation, so consecutive tier releases could over-authorize by up to
 	// the in-flight amount. Bounded by one release (release_percentage_bps of
 	// circulating supply), and the ATOX side is still protected by the
 	// ERC20-lands-first invariant, but the accounting wants a pending-authorisation
@@ -365,35 +362,40 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 }
 
 // authorizeMinerRelease records how much of the miner pool a tier judgment has
-// authorised for release, without moving any ATOS.
+// authorized for release, without moving any ATOS.
 //
 // Under the ATOX model the miner share is not owed to specific validators — it
 // backs every ATOX holder pro rata, and x/atox's index apportions it — so there
 // is no per-validator accounting to do here. What remains is to cap the
 // authorisation at the pool's actual balance, so a mis-specified release
-// percentage can never authorise more ATOS than exists.
+// percentage can never authorize more ATOS than exists.
 //
 // x/bridgeadapter does the moving, when Ethereum confirms the matching ERC20.
-func (k Keeper) authorizeMinerRelease(ctx sdk.Context, target math.Int) (math.Int, error) {
+//
+// No error return: every branch is a plain comparison against a balance the
+// bank keeper always answers. A nil error that can never be non-nil invites a
+// caller to skip checking it, and then to keep skipping it after someone adds a
+// failure path.
+func (k Keeper) authorizeMinerRelease(ctx sdk.Context, target math.Int) math.Int {
 	if !target.IsPositive() {
-		return math.ZeroInt(), nil
+		return math.ZeroInt()
 	}
 
 	poolAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.MinerPoolName)
 	available := k.bankKeeper.GetBalance(ctx, poolAddr, k.baseDenom()).Amount
 	if !available.IsPositive() {
-		return math.ZeroInt(), nil
+		return math.ZeroInt()
 	}
 
 	if target.GT(available) {
-		return available, nil
+		return available
 	}
-	return target, nil
+	return target
 }
 
 // AuthorizedReleases returns the cumulative miner and project shares that tier
-// judgments have authorised, in ATOS. x/bridgeadapter reads these to reject a
-// receipt claiming more than the chain ever authorised.
+// judgments have authorized, in ATOS. x/bridgeadapter reads these to reject a
+// receipt claiming more than the chain ever authorized.
 func (k Keeper) AuthorizedReleases(ctx sdk.Context) (miner, project math.Int) {
 	state := k.GetReleaseState(ctx)
 	return state.TotalMinerReleased, state.TotalProjectReleased
@@ -403,7 +405,7 @@ func (k Keeper) AuthorizedReleases(ctx sdk.Context) (miner, project math.Int) {
 func (k Keeper) MinerPoolName() string { return tokenomicstypes.MinerPoolName }
 
 // GetCirculatingSupply is the ATOS actually in circulation: the migration pool
-// plus everything tier releases have authorised.
+// plus everything tier releases have authorized.
 //
 // Block rewards contribute nothing — they are ATOX, and ATOX is not ATOS. The
 // old immediate-reward term is gone with the field it read.
@@ -441,7 +443,7 @@ func (k Keeper) BaseDenom() string { return k.baseDenom() }
 // migration_pool is the reserve behind the ordinary user bridge: every bridge-in
 // releases ATOS from it, and every bridge-out returns ATOS to it. If it empties,
 // inbound transfers stop -- even though project_pool holds trillions of ATOS
-// that tier releases have already authorised. Design doc 1.4 calls the fix
+// that tier releases have already authorized. Design doc 1.4 calls the fix
 // "半自动补充（低于阈值自动补，从 project_pool 补充）".
 //
 // # What bounds the transfer
@@ -461,7 +463,7 @@ func (k Keeper) BaseDenom() string { return k.baseDenom() }
 // # Why it is not an error to be unable to refill
 //
 // A short pool with no authorisation left is a legitimate state: it means the
-// bridge has drained faster than tier releases have authorised. The right
+// bridge has drained faster than tier releases have authorized. The right
 // response is to stop refilling, not to halt the chain, so this returns nil and
 // leaves the bridge's own rate limiting to reject transfers it cannot fund.
 func (k Keeper) RefillMigrationPool(ctx sdk.Context) error {
@@ -483,8 +485,8 @@ func (k Keeper) RefillMigrationPool(ctx sdk.Context) error {
 		return nil
 	}
 
-	authorised := k.GetProjectClaimable(ctx)
-	if !authorised.IsPositive() {
+	authorized := k.GetProjectClaimable(ctx)
+	if !authorized.IsPositive() {
 		return nil
 	}
 
@@ -492,8 +494,8 @@ func (k Keeper) RefillMigrationPool(ctx sdk.Context) error {
 	// actually holds. Refilling to the threshold instead would re-trigger on
 	// almost every block once the pool hovered near it.
 	want := total.Sub(balance)
-	if want.GT(authorised) {
-		want = authorised
+	if want.GT(authorized) {
+		want = authorized
 	}
 
 	projectAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.ProjectPoolName)
@@ -514,13 +516,13 @@ func (k Keeper) RefillMigrationPool(ctx sdk.Context) error {
 
 	// Spend the authorisation. Without this the same permission would fund an
 	// unlimited number of refills.
-	k.SetProjectClaimable(ctx, authorised.Sub(want))
+	k.SetProjectClaimable(ctx, authorized.Sub(want))
 
 	ctx.EventManager().EmitEvent(sdk.NewEvent(
 		tokenomicstypes.EventTypeMigrationPoolRefilled,
 		sdk.NewAttribute(tokenomicstypes.AttributeKeyAmount, want.String()),
 		sdk.NewAttribute(tokenomicstypes.AttributeKeyRemainingAuthorisation,
-			authorised.Sub(want).String()),
+			authorized.Sub(want).String()),
 	))
 	return nil
 }

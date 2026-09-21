@@ -82,7 +82,7 @@ func (b *fakeBank) SendCoinsFromAccountToModule(ctx context.Context, from sdk.Ac
 // send mirrors the Evmos ordering AND the tx-level atomicity that baseapp
 // provides in production.
 //
-// The atomicity has to be modelled here rather than with ctx.CacheContext(),
+// The atomicity has to be modeled here rather than with ctx.CacheContext(),
 // because these balances live in a Go map that a cache-wrapped store does not
 // isolate. It matters: bank does not undo the debit it already made when the
 // restriction returns an error, so without a rollback a failed transfer would
@@ -195,9 +195,11 @@ type rawSender struct{ b *fakeBank }
 func (r rawSender) SendCoins(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) error {
 	return r.b.send(ctx, from, to, amt)
 }
+
 func (r rawSender) SendCoinsFromAccountToModule(ctx context.Context, from sdk.AccAddress, m string, amt sdk.Coins) error {
 	return r.b.SendCoinsFromAccountToModule(ctx, from, m, amt)
 }
+
 func (r rawSender) BurnCoins(ctx context.Context, m string, amt sdk.Coins) error {
 	return r.b.BurnCoins(ctx, m, amt)
 }
@@ -283,10 +285,10 @@ func acc(name string) sdk.AccAddress {
 
 func TestMintAtox_RespectsSupplyCap(t *testing.T) {
 	k, ctx, _ := setup(t)
-	cap := k.GetParams(ctx).SupplyCap
+	limitAmt := k.GetParams(ctx).SupplyCap
 
-	require.NoError(t, k.MintAtox(ctx, acc("alice"), cap))
-	require.Equal(t, cap.String(), k.AtoxSupply(ctx).String())
+	require.NoError(t, k.MintAtox(ctx, acc("alice"), limitAmt))
+	require.Equal(t, limitAmt.String(), k.AtoxSupply(ctx).String())
 
 	require.ErrorIs(t, k.MintAtox(ctx, acc("bob"), math.NewInt(1)), types.ErrSupplyCapReached)
 }
@@ -365,8 +367,8 @@ func TestPayoutPending_HonoursMinPayout(t *testing.T) {
 	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, math.NewIntWithDecimal(1, 18)))
 
 	// 1 ATOX out of a 1e30 cap earns 1e-12 of the release: well under the dust bar.
-	min := math.NewIntWithDecimal(1, 15)
-	paid, err := k.PayoutPending(ctx, alice, min, types.TriggerSweep)
+	minAmt := math.NewIntWithDecimal(1, 15)
+	paid, err := k.PayoutPending(ctx, alice, minAmt, types.TriggerSweep)
 	require.NoError(t, err)
 	require.True(t, paid.IsZero(), "below min_auto_payout must not transfer")
 
@@ -766,7 +768,6 @@ func TestGenesis_SweptIndexRoundTrip(t *testing.T) {
 	require.ErrorContains(t, bad.Validate(), "exceeds global_index")
 }
 
-
 // TestConversionBurnDoesNotFreeMintHeadroom is the 1-trillion peg guard.
 //
 // Both burns lower live supply, but only the transfer fee may be re-mined. If
@@ -778,9 +779,9 @@ func TestConversionBurnDoesNotFreeMintHeadroom(t *testing.T) {
 	disableTransferFee(t, k, ctx)
 	alice := acc("alice")
 
-	cap := k.GetParams(ctx).SupplyCap
-	require.NoError(t, k.MintAtox(ctx, alice, cap))
-	require.True(t, k.MintedAgainstCap(ctx).Equal(cap), "at the cap after minting it all")
+	limitAmt := k.GetParams(ctx).SupplyCap
+	require.NoError(t, k.MintAtox(ctx, alice, limitAmt))
+	require.True(t, k.MintedAgainstCap(ctx).Equal(limitAmt), "at the limitAmt after minting it all")
 
 	// A release converts part of alice's holding; settling burns the ATOX.
 	require.NoError(t, k.AddToExchangePool(ctx, sourceModule, math.NewIntWithDecimal(1, 28)))
@@ -789,12 +790,12 @@ func TestConversionBurnDoesNotFreeMintHeadroom(t *testing.T) {
 
 	burned := k.GetGlobalState(ctx).TotalBurned
 	require.True(t, burned.IsPositive(), "conversion must have burned something")
-	require.True(t, k.AtoxSupply(ctx).LT(cap), "live supply dropped")
+	require.True(t, k.AtoxSupply(ctx).LT(limitAmt), "live supply dropped")
 
 	// The headroom must NOT have opened up.
-	require.True(t, k.MintedAgainstCap(ctx).Equal(cap),
+	require.True(t, k.MintedAgainstCap(ctx).Equal(limitAmt),
 		"conversion burn freed %s of mint headroom; it must free none",
-		cap.Sub(k.MintedAgainstCap(ctx)))
+		limitAmt.Sub(k.MintedAgainstCap(ctx)))
 	require.ErrorIs(t, k.MintAtox(ctx, alice, math.NewInt(1)), types.ErrSupplyCapReached)
 }
 
@@ -804,19 +805,19 @@ func TestTransferFeeBurnDoesFreeMintHeadroom(t *testing.T) {
 	k, ctx, bank := setup(t)
 	alice, bob := acc("alice"), acc("bob")
 
-	cap := k.GetParams(ctx).SupplyCap
-	require.NoError(t, k.MintAtox(ctx, alice, cap))
-	require.True(t, k.MintedAgainstCap(ctx).Equal(cap))
+	limitAmt := k.GetParams(ctx).SupplyCap
+	require.NoError(t, k.MintAtox(ctx, alice, limitAmt))
+	require.True(t, k.MintedAgainstCap(ctx).Equal(limitAmt))
 
 	// No release yet, so nothing converts -- this isolates the fee burn.
-	send := types.MaxSendableWithFee(cap, k.GetParams(ctx).TransferFeeBps)
+	send := types.MaxSendableWithFee(limitAmt, k.GetParams(ctx).TransferFeeBps)
 	require.NoError(t, bank.SendCoins(ctx, alice, bob, sdk.NewCoins(sdk.NewCoin(atoxDenom, send))))
 
 	fee := k.GetGlobalState(ctx).TotalFeeBurned
 	require.True(t, fee.IsPositive(), "the transfer must have burned a fee")
 	require.True(t, k.GetGlobalState(ctx).TotalBurned.IsZero(), "no conversion happened")
 
-	freed := cap.Sub(k.MintedAgainstCap(ctx))
+	freed := limitAmt.Sub(k.MintedAgainstCap(ctx))
 	require.Equal(t, fee.String(), freed.String(),
 		"fee burn must free exactly its own amount of headroom")
 	require.NoError(t, k.MintAtox(ctx, bob, fee), "the recycled fee is mintable again")

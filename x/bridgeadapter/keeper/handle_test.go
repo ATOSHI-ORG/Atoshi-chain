@@ -70,6 +70,7 @@ func (t *fakeTokenomics) MigrationPoolName() string                     { return
 func (t *fakeTokenomics) MigrationPoolBalance(_ sdk.Context) math.Int {
 	return math.NewIntWithDecimal(3, 29)
 }
+
 func (t *fakeTokenomics) MigrationPoolTotal(_ sdk.Context) math.Int {
 	return math.NewIntWithDecimal(3, 29)
 }
@@ -81,6 +82,7 @@ type fakeBank struct{}
 func (fakeBank) SendCoinsFromAccountToModule(_ context.Context, _ sdk.AccAddress, _ string, _ sdk.Coins) error {
 	return nil
 }
+
 func (fakeBank) SendCoinsFromModuleToAccount(_ context.Context, _ string, _ sdk.AccAddress, _ sdk.Coins) error {
 	return nil
 }
@@ -316,8 +318,8 @@ func TestHandle_MonotonicSequenceAccumulates(t *testing.T) {
 
 // ---------- authorization bound ----------
 
-// TestHandle_RejectsMoreThanAuthorized is the last line of defence. Ethereum can
-// only release what Atoshi's tier engine authorised, so a larger figure is a bug
+// TestHandle_RejectsMoreThanAuthorized is the last line of defense. Ethereum can
+// only release what Atoshi's tier engine authorized, so a larger figure is a bug
 // or a forgery either way — and acting on it would put ATOS into the conversion
 // pool with no ERC20 behind it.
 func TestHandle_RejectsMoreThanAuthorized(t *testing.T) {
@@ -327,7 +329,7 @@ func TestHandle_RejectsMoreThanAuthorized(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrExceedsAuthorized)
 	require.Empty(t, xk.pooled)
 
-	// Exactly at the authorised figure is fine.
+	// Exactly at the authorized figure is fine.
 	require.NoError(t, k.Handle(ctx, util.HexAddress{},
 		receipt(t, ethDomain, vaultAddr(), erc20(500), erc20(500))))
 	require.Equal(t, atosFor(500).String(), xk.pooled[minerPool].String())
@@ -387,7 +389,7 @@ func TestHandle_NothingIsAppliedWhenTheReleaseFails(t *testing.T) {
 	require.True(t, k.GetReceiptState(ctx).AppliedToBridge.IsZero(),
 		"applied totals must not advance past a failed release")
 	require.True(t, tk.claimable.IsZero(),
-		"the project share must not be authorised when the bridge share failed")
+		"the project share must not be authorized when the bridge share failed")
 }
 
 // ---------- app identity ----------
@@ -464,7 +466,7 @@ func TestPendingConfirmation(t *testing.T) {
 
 	bridge, project := k.PendingConfirmation(ctx)
 	require.Equal(t, erc20(1_000).String(), bridge.String(),
-		"everything authorised is pending until a receipt arrives")
+		"everything authorized is pending until a receipt arrives")
 	require.Equal(t, erc20(400).String(), project.String())
 
 	require.NoError(t, k.Handle(ctx, util.HexAddress{},

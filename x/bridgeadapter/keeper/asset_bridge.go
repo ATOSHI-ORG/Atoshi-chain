@@ -225,7 +225,7 @@ func (k Keeper) ExecuteBridgeOut(
 // in the Ethereum contract, where a rejection costs the sender nothing.
 //
 // A pool that cannot cover the transfer is the one case that does return an
-// error, and that is the right behaviour rather than a partial release:
+// error, and that is the right behavior rather than a partial release:
 // Hyperlane keeps the message deliverable, so the transfer completes once the
 // pool is topped up from the project pool. Deferring is recoverable; a partial
 // release is not.
