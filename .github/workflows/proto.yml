@@ -33,6 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: bufbuild/buf-setup-action@v1.50.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
       - uses: bufbuild/buf-lint-action@v1
         with:
           input: "proto"
@@ -41,7 +43,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # buf-setup-action resolves its release through the GitHub API.
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: bufbuild/buf-setup-action@v1.50.0
+        with:
+          # Without a token these calls are anonymous, and anonymous calls are
+          # rate limited per SOURCE IP -- 60/hour shared across every
+          # GitHub-hosted runner on the planet. The job then fails with
+          # "API rate limit exceeded for <some Azure IP>", which has nothing to
+          # do with the code and passes or fails on luck. With the token the
+          # limit is 5000/hour and is counted against this repository.
+          #
+          # GITHUB_TOKEN is minted automatically for every run; nothing has to
+          # be created or stored for this to work.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
       - uses: bufbuild/buf-breaking-action@v1
         with:
           input: "proto"
