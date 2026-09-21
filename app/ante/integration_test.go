@@ -124,7 +124,7 @@ var _ = Describe("when sending a Cosmos transaction", Label("AnteHandler"), Orde
 			addr, priv = testutiltx.NewAccAddressAndKey()
 
 			// this is a new address that does not exist on chain.
-			// Transfer 1 aatos to this account so it is
+			// Transfer 1 liao to this account so it is
 			// added on chain
 			err := s.factory.FundAccount(
 				s.keyring.GetKey(0),

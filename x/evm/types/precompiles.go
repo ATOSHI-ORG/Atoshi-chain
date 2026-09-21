@@ -17,6 +17,23 @@ const (
 	GovPrecompileAddress          = "0x0000000000000000000000000000000000000805"
 	SlashingPrecompileAddress     = "0x0000000000000000000000000000000000000806"
 	EvidencePrecompileAddress     = "0x0000000000000000000000000000000000000807"
+	// BridgeAdapterPrecompileAddress exposes MsgBridgeOut to the EVM.
+	//
+	// Without it, bridging out is unreachable from MetaMask and every other EVM
+	// wallet: MsgBridgeOut is a Cosmos message and those wallets only sign EVM
+	// transactions. Staking is usable from a wallet because it has a precompile;
+	// the bridge did not.
+	BridgeAdapterPrecompileAddress = "0x0000000000000000000000000000000000000808"
+
+	// AtoxPrecompileAddress exposes ATOX -> ATOS conversion to the EVM.
+	//
+	// Same gap as the bridge: MsgClaimAtos is a Cosmos message and EVM wallets
+	// only sign EVM transactions. It went unnoticed while an EndBlocker swept
+	// every account after each tier release -- conversion happened whether or not
+	// anyone could ask for it. That sweep was removed because it scales with the
+	// number of holders rather than the number who want their ATOS, so asking is
+	// now the only way, and this is the only door an EVM wallet can use.
+	AtoxPrecompileAddress = "0x0000000000000000000000000000000000000809"
 )
 
 // AvailableStaticPrecompiles defines the full list of all available EVM extension addresses.
@@ -34,4 +51,6 @@ var AvailableStaticPrecompiles = []string{
 	GovPrecompileAddress,
 	SlashingPrecompileAddress,
 	EvidencePrecompileAddress,
+	BridgeAdapterPrecompileAddress,
+	AtoxPrecompileAddress,
 }

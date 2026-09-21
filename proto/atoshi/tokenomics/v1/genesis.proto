@@ -12,7 +12,9 @@ message GenesisState {
   Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
   ReleaseState release_state = 2 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
   BlockRewardState block_reward_state = 3 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
-  repeated MinerLockedBalance miner_locked_balances = 4 [(gogoproto.nullable) = false];
+  // 4 held miner_locked_balances, the per-validator lockup table. Block rewards
+  // are ATOX and fully immediate now, so nothing feeds it.
+  reserved 4;
   // project_claimable is the math.Int amount of project pool currently claimable.
   string project_claimable = 5 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",

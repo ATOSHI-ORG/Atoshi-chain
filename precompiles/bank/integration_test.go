@@ -110,12 +110,28 @@ var _ = Describe("Bank Extension -", func() {
 		contractData ContractData
 		passCheck    testutil.LogCheckArgs
 
-		evmosTotalSupply, _ = new(big.Int).SetString("200003000000000000000000", 10)
-		xmplTotalSupply, _  = new(big.Int).SetString("200000000000000000000000", 10)
+		// The bond-denom supply is read from the bank keeper rather than
+		// hardcoded. It used to be the literal 200,003 ATOS -- everything the
+		// test harness pre-funds -- which held while genesis minted nothing
+		// else. It no longer does: x/tokenomics mints the miner, project and
+		// migration pools at genesis, putting the real supply ~10 trillion ATOS
+		// higher. Restating the pool totals here would duplicate tokenomics
+		// params and go stale again the next time they are tuned; what this test
+		// is actually for is that the precompile reports the same number the
+		// bank keeper does.
+		evmosTotalSupply *big.Int
+		// XMPL is a plain test token, untouched by tokenomics, so its supply is
+		// still exactly what the harness mints. Left as a literal on purpose:
+		// deriving it would read 1e18 high, because SetupTest's mint has not yet
+		// been converted to its ERC20 representation at the point BeforeEach
+		// runs.
+		xmplTotalSupply, _ = new(big.Int).SetString("200000000000000000000000", 10)
 	)
 
 	BeforeEach(func() {
 		is.SetupTest()
+
+		evmosTotalSupply = is.network.App.BankKeeper.GetSupply(is.network.GetContext(), is.bondDenom).Amount.BigInt()
 
 		// Default sender, amount
 		sender = is.keyring.GetKey(0)

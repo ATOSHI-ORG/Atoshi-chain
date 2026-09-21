@@ -439,12 +439,12 @@ func TestUndelegate_PreventsConsumedEnergyReuseAcrossLoops(t *testing.T) {
 // EligibleBalance count bank + LockedAtos, the per-tx accounting
 // must satisfy:
 //
-//   1. After Delegate, the snapshot equals (post-send bank balance)
-//      + (new LockedAtos counter) — the user's TOTAL stake, not
-//      just liquid bank.
-//   2. The hook's cap-down on TxEnergyAccrued sees the SUM, not the
-//      bank-only value. With balance preservation, cap-down only
-//      shaves above the natural ceiling for the user's full stake.
+//  1. After Delegate, the snapshot equals (post-send bank balance)
+//     + (new LockedAtos counter) — the user's TOTAL stake, not
+//     just liquid bank.
+//  2. The hook's cap-down on TxEnergyAccrued sees the SUM, not the
+//     bank-only value. With balance preservation, cap-down only
+//     shaves above the natural ceiling for the user's full stake.
 //
 // Setup: bank = 60k ATOS, TxEnergyAccrued inflated to 200k. Delegate
 // 50k energy locks 30k ATOS. After the bank send:
@@ -536,6 +536,7 @@ func TestDelegate_TwoBackToBackKeepsLockedAtosConsistent(t *testing.T) {
 //   - LockedAtos correctly rose to 60k (sum of both locks)
 //   - BUT EligibleBalance (= LastBalanceSnapshot via Q2 path) ended
 //     up at 270k, not the expected 300k
+//
 // The user observed this as "5万能量凭空消失" — capacity dropped one
 // threshold (50k) due to the snapshot being off by exactly
 // `lockedATOS` (= 30k = one delegation's lock).
@@ -581,7 +582,7 @@ func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
 
 	// After 1st delegate: bank 270k, locked 30k, eligible should be
 	// unchanged at 300k.
-	bank1 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	bank1 := bank.GetBalance(ctx, delegator, "liao").Amount
 	require.True(t, bank1.Equal(math.NewIntWithDecimal(270_000, 18)),
 		"after 1st delegate bank should be 270k, got %s", bank1)
 	acct1 := k.GetEnergyAccount(ctx, delegator)
@@ -603,7 +604,7 @@ func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
 	// After 2nd delegate: bank 240k, locked 60k, eligible should STILL
 	// be 300k. This is where the production testnet account diverges —
 	// it shows snapshot = bank + 30k (only one lock counted).
-	bank2 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	bank2 := bank.GetBalance(ctx, delegator, "liao").Amount
 	require.True(t, bank2.Equal(math.NewIntWithDecimal(240_000, 18)),
 		"after 2nd delegate bank should be 240k, got %s", bank2)
 	acct2 := k.GetEnergyAccount(ctx, delegator)
@@ -618,26 +619,26 @@ func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
 
 	// EXTENDED REPRO: simulate the fee-paying tx that happened AFTER
 	// the 2nd delegate on the user's testnet account 0x30F288... — bank
-	// dropped by ~245194 aatos (one 245k-gas MsgSend at 1 gwei). This
+	// dropped by ~245194 liao (one 245k-gas MsgSend at 1 gwei). This
 	// fee deduction goes through SendCoinsFromAccountToModule(payer,
 	// FeeCollectorName, fee) which DOES fire SendRestriction, so
 	// snapshot should be re-projected.
 	feeAmount := math.NewInt(245_194_000_000_000) // ≈ 0.000245194 ATOS
 	err = bank.SendCoinsFromAccountToModule(ctx, delegator, "fee_collector",
-		sdk.NewCoins(sdk.NewCoin("aatos", feeAmount)))
+		sdk.NewCoins(sdk.NewCoin("liao", feeAmount)))
 	require.NoError(t, err)
 
-	bank3 := bank.GetBalance(ctx, delegator, "aatos").Amount
+	bank3 := bank.GetBalance(ctx, delegator, "liao").Amount
 	expectedBank3 := math.NewIntWithDecimal(240_000, 18).Sub(feeAmount)
 	require.True(t, bank3.Equal(expectedBank3),
-		"after fee tx bank should be 240k - 245194_aatos, got %s", bank3)
+		"after fee tx bank should be 240k - 245194_liao, got %s", bank3)
 
 	acct3 := k.GetEnergyAccount(ctx, delegator)
 	require.True(t, acct3.LockedAtos.Equal(math.NewIntWithDecimal(60_000, 18)),
 		"LockedAtos unchanged by fee tx (still 60k), got %s", acct3.LockedAtos)
 
 	// AT THIS POINT — this is exactly the user's chain state shape.
-	// Expected snapshot: bank_post + LockedAtos = (240k - 245194_aatos) + 60k
+	// Expected snapshot: bank_post + LockedAtos = (240k - 245194_liao) + 60k
 	//                  = 299_999.999754806 ATOS
 	// Actual on testnet:  248_999.999754806 ATOS  ← 30k short
 	expectedSnapshot := expectedBank3.Add(math.NewIntWithDecimal(60_000, 18))
@@ -655,7 +656,7 @@ func TestDelegate_SequentialDelegatesPreserveSnapshot(t *testing.T) {
 //   - 1st delegate 30k energy (locks 30k ATOS) → expect snapshot 308999.999754806
 //   - 2nd delegate 30k energy (locks 30k more) → expect snapshot 308999.999754806
 //   - MsgSend 30k ATOS to another account     → expect snapshot 278999.999754806
-//                                                 (= bank_post_after_msgsend + 60k locked)
+//     (= bank_post_after_msgsend + 60k locked)
 //
 // Chain shows snapshot = 248999.999754806 (= bank_post + only_30k_locked).
 // 30,000 ATOS of EligibleBalance is missing from snapshot.
@@ -669,11 +670,11 @@ func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
 	k, ctx, bank := newKeeperForTest(t)
 	delegator := addr("delegator_______________")
 	delegatee := addr("delegatee_______________")
-	recipient := addr("recipient_______________")  // for the final MsgSend
+	recipient := addr("recipient_______________") // for the final MsgSend
 
 	// Match production initial state: bank ≈ 309000 ATOS (with .999754806
 	// fractional from a prior EVM tx).
-	priorEVMFee := math.NewInt(245_194_000_000_000)  // 0.000245194 ATOS net loss
+	priorEVMFee := math.NewInt(245_194_000_000_000) // 0.000245194 ATOS net loss
 	initialBank := math.NewIntWithDecimal(309_000, 18).Sub(priorEVMFee)
 	bank.balances[delegator.String()] = initialBank
 	bank.balances[delegatee.String()] = math.NewIntWithDecimal(60_000, 18)
@@ -684,7 +685,7 @@ func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
 
 	// Initial snapshot via Settle (first touch)
 	a := k.Settle(ctx, delegator)
-	a.TxEnergyAccrued = 500_000   // full cap
+	a.TxEnergyAccrued = 500_000 // full cap
 	k.SetEnergyAccount(ctx, a)
 	// snapshot at this point: 308999.999754806 ATOS, capacity = 500k
 
@@ -692,7 +693,7 @@ func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
 	_, _, err := k.Delegate(ctx, delegator, delegatee, 50_000, 24*3600)
 	require.NoError(t, err)
 	mid := k.GetEnergyAccount(ctx, delegator)
-	mid.TxEnergyAccrued = 500_000  // refill to full (simulating natural accrual)
+	mid.TxEnergyAccrued = 500_000 // refill to full (simulating natural accrual)
 	k.SetEnergyAccount(ctx, mid)
 
 	// === 2nd delegate (matches h=218269) ===
@@ -716,11 +717,11 @@ func TestDelegate_ExactChainReproducer_0x30F288(t *testing.T) {
 	// restriction. Modeling as send-to-module captures the SendRestriction
 	// invocation faithfully.
 	err = bank.SendCoinsFromAccountToModule(ctx, delegator, "external_recipient_module",
-		sdk.NewCoins(sdk.NewCoin("aatos", math.NewIntWithDecimal(30_000, 18))))
+		sdk.NewCoins(sdk.NewCoin("liao", math.NewIntWithDecimal(30_000, 18))))
 	require.NoError(t, err)
 
 	final := k.GetEnergyAccount(ctx, delegator)
-	finalBank := bank.GetBalance(ctx, delegator, "aatos").Amount
+	finalBank := bank.GetBalance(ctx, delegator, "liao").Amount
 	t.Logf("After MsgSend: bank=%s, locked=%s, snapshot=%s",
 		finalBank, final.LockedAtos, final.LastBalanceSnapshot)
 
@@ -778,7 +779,7 @@ func TestDelegate_IsCapNeutralOnEligibleBalance(t *testing.T) {
 
 	// Cross-check the components: bank dropped by 30k, LockedAtos rose
 	// by 30k, sum unchanged.
-	bankAmt := bank.GetBalance(ctx, delegator, "aatos").Amount
+	bankAmt := bank.GetBalance(ctx, delegator, "liao").Amount
 	require.True(t, bankAmt.Equal(math.NewIntWithDecimal(60_000, 18)),
 		"bank balance must drop by lockedATOS=30k")
 	acct := k.GetEnergyAccount(ctx, delegator)
@@ -824,7 +825,7 @@ func TestDelegateUndelegate_RoundTripPreservesEligibleBalance(t *testing.T) {
 	acct := k.GetEnergyAccount(ctx, delegator)
 	require.True(t, acct.LockedAtos.IsZero(),
 		"LockedAtos counter returns to zero after full undelegate")
-	require.True(t, bank.GetBalance(ctx, delegator, "aatos").Amount.Equal(math.NewIntWithDecimal(90_000, 18)),
+	require.True(t, bank.GetBalance(ctx, delegator, "liao").Amount.Equal(math.NewIntWithDecimal(90_000, 18)),
 		"bank balance fully restored")
 }
 

@@ -1,0 +1,269 @@
+syntax = "proto3";
+package atoshi.bridgeadapter.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types";
+
+// Params holds the governance-tunable parameters of the bridge adapter.
+message Params {
+  // enabled is the kill-switch. When false, incoming receipts are rejected
+  // rather than silently dropped, so a paused adapter cannot lose a release —
+  // Hyperlane will keep the message deliverable for a later retry.
+  bool enabled = 1;
+
+  // ethereum_domain is Ethereum's Hyperlane domain id, conventionally its chain
+  // id. Hyperlane is permissionless, so this is configuration rather than
+  // something granted by anyone — but it is protocol-level provenance carried in
+  // every message header, and checking it is what stops a contract on some other
+  // connected chain from forging a release.
+  uint32 ethereum_domain = 2;
+
+  // tier_release_vault is the 32-byte Hyperlane address of the Ethereum contract
+  // allowed to send receipts.
+  //
+  // This check is the one the ISM cannot make. A multisig ISM proves a message
+  // really came from the origin chain; it says nothing about WHICH contract
+  // there sent it. Without this, any contract on Ethereum could claim a release
+  // and the ISM would happily sign for it.
+  bytes tier_release_vault = 3;
+
+  // atos_per_erc20 converts the ERC20 amounts a receipt reports into ATOS.
+  //
+  // Receipts speak in ERC20 units because that is what Ethereum knows. This is
+  // the peg itself — 10 trillion ATOS against 100 billion ERC20 — so
+  // MsgUpdateParams rejects any change to it: raising it would release ATOS with
+  // nothing behind it, lowering it would strand ATOS that is already backed.
+  uint64 atos_per_erc20 = 4;
+
+  // ----- asset bridge -----
+
+  // bridge_enabled gates the ATOS <-> ERC20 asset bridge independently of the
+  // tier-release channel, so one can be paused without stopping the other.
+  bool bridge_enabled = 6;
+
+  // mailbox_id is the Hyperlane mailbox outbound transfers dispatch through.
+  bytes mailbox_id = 7;
+
+  // remote_bridge_vault is the Ethereum contract that receives outbound
+  // transfers and originates inbound ones.
+  bytes remote_bridge_vault = 8;
+
+  // ----- rate limiting -----
+  //
+  // Outbound only. Inbound cannot be rate limited by rejection: the ERC20 is
+  // already locked on Ethereum by the time the message arrives, so refusing it
+  // would strand the user's funds rather than delay them. Inbound volume is
+  // limited at the source instead, in the Ethereum contract.
+
+  // global_daily_cap and global_daily_cap_bps_of_pool bound outbound volume per
+  // day. The effective cap is the SMALLER of the two, so a shrinking migration
+  // pool tightens the limit automatically instead of waiting for a proposal.
+  string global_daily_cap = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint32 global_daily_cap_bps_of_pool = 10;
+
+  // per_address_daily_bps caps one address at this fraction of the global daily
+  // cap, so a single actor cannot consume the day's whole allowance.
+  uint32 per_address_daily_bps = 11;
+
+  // min_transfer_out keeps dust out of the bridge, where each transfer costs a
+  // cross-chain message regardless of size.
+  string min_transfer_out = 12 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // small_transfer_threshold and small_quota_bps reserve part of the daily cap
+  // for transfers at or below the threshold.
+  //
+  // This is the layer that matters most for users. Without it a few large exits
+  // consume the whole daily allowance in the first minutes and ordinary holders
+  // are locked out for the rest of the day — which is precisely when they are
+  // most likely to want out. Large transfers may only use
+  // (global - reserved); small ones may use the whole cap.
+  string small_transfer_threshold = 13 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint32 small_quota_bps = 14;
+
+  // crisis_pool_bps puts the bridge into small-transfers-only mode once the
+  // migration pool falls below this fraction of its configured total, so the
+  // remaining liquidity serves many small holders rather than one large exit.
+  uint32 crisis_pool_bps = 15;
+
+  // ism_id optionally pins a specific interchain security module for messages
+  // addressed to this app. Empty falls back to the mailbox default ISM, which is
+  // acceptable only if that default is already the 5-of-7 multisig; pinning it
+  // here means a change to the mailbox default cannot silently weaken the
+  // verification protecting tier releases.
+  bytes ism_id = 5;
+
+  // inbound_daily_cap and inbound_daily_cap_bps_of_pool bound how much ATOS the
+  // migration pool may pay out to bridge-ins per UTC day. Effective cap is the
+  // SMALLER of the two, matching the outbound pair.
+  //
+  // This is a circuit breaker, not a throttle. The economics already balance --
+  // circulating ERC20 and the migration pool are both sized at the same 300
+  // billion ATOS -- so a legitimate day never approaches it. What it bounds is
+  // the damage from a fault: a bug on the Ethereum side, a compromised ISM, or
+  // our own code forging inbound messages. Capping the day's payout buys time to
+  // notice and flip bridge_enabled off.
+  //
+  // Deliberately NOT paired with a per-address limit. Addresses are free, so a
+  // per-address cap stops nobody who is actually attacking, while it does strand
+  // honest large transfers whose ERC20 is already locked on Ethereum.
+  //
+  // A rejected inbound message is deferred, not lost: Hyperlane keeps it
+  // deliverable and the relayer retries on a widening backoff that reaches ~16
+  // days before giving up, so a 24-hour stall is comfortably inside the budget.
+  // The relayer dry-runs before submitting, so a rejection costs no gas.
+  string inbound_daily_cap = 16 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint32 inbound_daily_cap_bps_of_pool = 17;
+
+  // rate_limits_disabled is the master switch for every throttle, both
+  // directions: the minimum transfer, the crisis floor, the global daily cap,
+  // the large-transfer reservation, the per-address allowance and the inbound
+  // cap. True lets every otherwise-valid transfer through.
+  //
+  // # Why a switch at all
+  //
+  // "No limits" cannot be expressed by zeroing the fields. A global_daily_cap
+  // of 0 means the opposite of unlimited -- CheckOutbound rejects with
+  // "outbound bridging is fully throttled" -- so a proposal written to remove
+  // the limits would shut the bridge down instead. And zeroing the rest throws
+  // away numbers that took tuning. One flag keeps every value in place while it
+  // is not enforced, so turning the limits back on is a single proposal rather
+  // than a rediscovery of six figures.
+  //
+  // # Why the negative name
+  //
+  // A bool's zero value is false, and a Params record written before this field
+  // existed unmarshals with the zero value. Phrased as rate_limits_ENABLED,
+  // every pre-upgrade chain would come back up with false -- every throttle
+  // silently off, no error, no log. This chain upgrades by swapping binaries
+  // rather than through x/upgrade, so a store migration would not run to repair
+  // it.
+  //
+  // Phrased as DISABLED, that same zero value means "limits enforced", which is
+  // the safe side of the accident. The double negative reads worse and is worth
+  // it.
+  //
+  // This is NOT the bridge kill switch -- bridge_enabled is. Disabling the rate
+  // limits leaves every other check (authorisation, solvency, denom, message
+  // source) exactly where it was.
+  bool rate_limits_disabled = 18;
+}
+
+// ReceiptState tracks what Ethereum has confirmed, in ERC20 units.
+//
+// Both figures are CUMULATIVE totals, not per-release deltas, and that is what
+// makes the channel safe without any replay bookkeeping:
+//
+//   - a duplicate receipt computes a delta of zero and does nothing
+//   - a lost receipt is repaired by the next one, which carries the full total
+//   - a reordered receipt reports less than what was applied and is rejected
+//
+// Nonces, dedup tables and retry logic all become unnecessary.
+message ReceiptState {
+  // applied_to_bridge is the cumulative ERC20 confirmed into the Ethereum bridge
+  // vault, whose ATOS counterpart has been moved into the ATOX conversion pool.
+  string applied_to_bridge = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // applied_to_project is the cumulative ERC20 confirmed as sent to the project
+  // cold wallet, whose ATOS counterpart has been authorised as claimable.
+  string applied_to_project = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // app_id is this app's 32-byte Hyperlane recipient address, assigned at
+  // genesis from the core app router. Ethereum addresses receipts to it.
+  bytes app_id = 3;
+
+  // last_message_id is the id of the most recently applied receipt, for
+  // operators correlating chain state with Hyperlane's message log.
+  bytes last_message_id = 4;
+
+  // asset_app_id is the recipient address inbound asset transfers are sent to.
+  //
+  // Separate from app_id so the two channels cannot be confused: a message
+  // addressed to one is never parsed as the other, which means a malformed or
+  // hostile asset transfer can never be read as a tier release.
+  bytes asset_app_id = 5;
+
+  // total_bridged_out / total_bridged_in are lifetime ATOS volumes, for
+  // reconciling against the Ethereum vault.
+  string total_bridged_out = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string total_bridged_in = 7 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// RateLimitState is the global outbound usage for one day.
+//
+// Counters reset lazily: a stored day that is not today reads as zero, so no
+// EndBlocker sweep is needed to roll them over.
+message RateLimitState {
+  // day is the UTC day number the counters belong to (unix seconds / 86400).
+  int64 day = 1;
+
+  // used is total outbound ATOS today, from transfers of every size.
+  string used = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // used_large counts only transfers above small_transfer_threshold.
+  //
+  // Tracking large usage separately is what makes the small-transfer reserve
+  // real: large transfers are bounded by (global - reserved) while small ones
+  // are bounded by the global cap, so the reserve cannot be eaten by whales.
+  string used_large = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // used_inbound is total ATOS paid out to bridge-ins today. Kept on the same
+  // record and the same day counter as the outbound figures so both roll over
+  // together and a reader cannot see a half-reset pair.
+  string used_inbound = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// AddressUsage is one address's outbound usage for one day.
+message AddressUsage {
+  int64 day = 1;
+  string used = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

@@ -74,6 +74,7 @@ func (s *PrecompileUnitTestSuite) SetupTest(chainID string) {
 		s.network.App.BankKeeper,
 		s.network.App.AuthzKeeper,
 		s.network.App.TransferKeeper,
+		nil, // 无费率包装：这些测试不关心 ATOX 手续费
 	)
 	s.Require().NoError(err, "failed to instantiate the werc20 precompile")
 	s.Require().NotNil(precompile)

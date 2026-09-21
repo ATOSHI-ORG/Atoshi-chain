@@ -9,7 +9,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/client/tx"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/spf13/cobra"
 
 	"github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
@@ -25,65 +24,16 @@ func NewTxCmd() *cobra.Command {
 		RunE:                       client.ValidateCmd,
 	}
 	txCmd.AddCommand(
-		NewClaimMinerLockedRewardCmd(),
-		NewClaimProjectTreasuryRewardCmd(),
 		NewClaimMigrationTokensCmd(),
 	)
 	return txCmd
 }
 
-// NewClaimMinerLockedRewardCmd lets a validator claim its unlocked locked-pool share.
-func NewClaimMinerLockedRewardCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "claim-miner-locked-reward",
-		Short: "Claim unlocked locked-pool mining rewards (signer must be the validator's account key)",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cliCtx, err := client.GetClientTxContext(cmd)
-			if err != nil {
-				return err
-			}
-			from := cliCtx.GetFromAddress()
-			msg := &types.MsgClaimMinerLockedReward{
-				// Validators sign from their operator account key; the val-bech32
-				// address shares the same bytes.
-				ValidatorAddress: sdk.ValAddress(from).String(),
-			}
-			return tx.GenerateOrBroadcastTxCLI(cliCtx, cmd.Flags(), msg)
-		},
-	}
-	flags.AddTxFlagsToCmd(cmd)
-	return cmd
-}
-
-// NewClaimProjectTreasuryRewardCmd lets the configured project treasury claim
-// unlocked project-pool funds.
-func NewClaimProjectTreasuryRewardCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "claim-project-treasury-reward",
-		Short: "Claim unlocked project-pool funds (signer must be params.ProjectTreasuryAddress)",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cliCtx, err := client.GetClientTxContext(cmd)
-			if err != nil {
-				return err
-			}
-			msg := &types.MsgClaimProjectTreasuryReward{
-				Authority: cliCtx.GetFromAddress().String(),
-			}
-			return tx.GenerateOrBroadcastTxCLI(cliCtx, cmd.Flags(), msg)
-		},
-	}
-	flags.AddTxFlagsToCmd(cmd)
-	return cmd
-}
-
-// NewClaimMigrationTokensCmd redeems pre-mine migration ATOS via Merkle proof.
 func NewClaimMigrationTokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claim-migration-tokens AMOUNT PROOF_HEX[,PROOF_HEX...]",
 		Short: "Redeem pre-mine migration ATOS using a Merkle proof",
-		Long: `AMOUNT is the integer aatos amount allocated to your address in the snapshot.
+		Long: `AMOUNT is the integer liao amount allocated to your address in the snapshot.
 PROOF_HEX is a comma-separated list of sibling node hashes (hex, no 0x), in
 order from leaf to root. The leaf hash is computed on-chain from the signer
 address and amount.`,

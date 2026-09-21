@@ -116,7 +116,7 @@ func (s *IntegrationTestSuite) proposeUpgrade(name, target string) {
 		s.upgradeParams.ChainID,
 		s.upgradeManager.UpgradeHeight,
 		proposalVersion,
-		"--fees=10000000000000000aatos",
+		"--fees=10000000000000000liao",
 		"--gas=500000",
 	)
 	s.Require().NoErrorf(
@@ -148,7 +148,7 @@ func (s *IntegrationTestSuite) proposeUpgrade(name, target string) {
 func (s *IntegrationTestSuite) voteForProposal(id int) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	exec, err := s.upgradeManager.CreateVoteProposalExec(s.upgradeParams.ChainID, id, "--fees=10000000000000000aatos", "--gas=500000")
+	exec, err := s.upgradeManager.CreateVoteProposalExec(s.upgradeParams.ChainID, id, "--fees=10000000000000000liao", "--gas=500000")
 	s.Require().NoError(err, "can't create vote for proposal exec")
 	outBuf, errBuf, err := s.upgradeManager.RunExec(ctx, exec)
 	s.Require().NoErrorf(

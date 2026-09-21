@@ -10,16 +10,16 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
+	commonfactory "github.com/atoshi-chain/atoshi/v20/testutil/integration/common/factory"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/factory"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/network"
+	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	abcitypes "github.com/cometbft/cometbft/abci/types"
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	govv1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1"
 	govv1beta1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1beta1"
-	commonfactory "github.com/atoshi-chain/atoshi/v20/testutil/integration/common/factory"
-	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/factory"
-	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/network"
-	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 )
 
 // SubmitProposal is a helper function to submit a governance proposal and
@@ -63,6 +63,7 @@ func SubmitLegacyProposal(tf factory.TxFactory, network network.Network, propose
 
 	txArgs := commonfactory.CosmosTxArgs{
 		Msgs: []sdk.Msg{msgSubmitProposal},
+		Gas:  &govTxGas,
 	}
 
 	return submitProposal(tf, network, proposerPriv, txArgs)
@@ -82,6 +83,7 @@ func VoteOnProposal(tf factory.TxFactory, voterPriv cryptotypes.PrivKey, proposa
 
 	res, err := tf.CommitCosmosTx(voterPriv, commonfactory.CosmosTxArgs{
 		Msgs: []sdk.Msg{msgVote},
+		Gas:  &govTxGas,
 	})
 
 	return res, err
@@ -91,8 +93,15 @@ func VoteOnProposal(tf factory.TxFactory, voterPriv cryptotypes.PrivKey, proposa
 // for it and wait till it passes.
 func ApproveProposal(tf factory.TxFactory, network network.Network, proposerPriv cryptotypes.PrivKey, proposalID uint64) error {
 	// Vote on proposal
-	if _, err := VoteOnProposal(tf, proposerPriv, proposalID, govv1.OptionYes); err != nil {
+	voteRes, err := VoteOnProposal(tf, proposerPriv, proposalID, govv1.OptionYes)
+	if err != nil {
 		return errorsmod.Wrap(err, "failed to vote on proposal")
+	}
+	// Same reason as in submitProposal: a vote that failed on-chain returns
+	// err == nil, so without this the proposal is simply tallied with no votes and
+	// the failure appears as PROPOSAL_STATUS_REJECTED with no clue why.
+	if voteRes.Code != 0 {
+		return fmt.Errorf("vote tx failed with code %d: %s", voteRes.Code, voteRes.Log)
 	}
 
 	if err := waitVotingPeriod(network); err != nil {
@@ -142,10 +151,27 @@ func getProposalIDFromEvents(events []abcitypes.Event) (uint64, error) {
 	return proposalID, nil
 }
 
+// govTxGas is an explicit gas limit for governance transactions.
+//
+// Estimation is no longer the problem it was: the energy decorator now performs
+// its accounting during simulation too, which took a simulated MsgVote from
+// 63,088 gas to 132,708 against an observed delivery cost of 110,284. A fixed
+// limit is still used here so these tests do not depend on the precision of gas
+// estimation — they reach module params through governance, they do not test the
+// estimator.
+var govTxGas uint64 = 1_000_000
+
 func submitProposal(tf factory.TxFactory, network network.Network, proposerPriv cryptotypes.PrivKey, txArgs commonfactory.CosmosTxArgs) (uint64, error) {
 	res, err := tf.CommitCosmosTx(proposerPriv, txArgs)
 	if err != nil {
 		return 0, err
+	}
+	// CommitCosmosTx returns the tx result without inspecting Code, so a tx that
+	// failed on-chain comes back with err == nil. Check it here: otherwise the
+	// only symptom is the proposal never leaving deposit period, surfacing much
+	// later as an unexplained status mismatch.
+	if res.Code != 0 {
+		return 0, fmt.Errorf("proposal submission failed with code %d: %s", res.Code, res.Log)
 	}
 
 	proposalID, err := getProposalIDFromEvents(res.Events)

@@ -34,9 +34,9 @@ HOME_DIR="${HOME_DIR:-$HOME/.atoshid}"
 # Token configuration
 # Total Supply: 10,000,000,000,000 ATOS (10 trillion)
 # Pre-mine: 70,000,000,000 ATOS (70 billion)
-# Base denom: aatos (1 ATOS = 10^18 aatos)
-PREMINED_AMOUNT="70000000000000000000000000000aatos"  # 70 billion ATOS in aatos
-BASE_DENOM="aatos"
+# Base denom: liao (1 ATOS = 10^18 liao)
+PREMINED_AMOUNT="70000000000000000000000000000liao"  # 70 billion ATOS in liao
+BASE_DENOM="liao"
 
 # Build flag
 DO_BUILD=true
@@ -177,19 +177,19 @@ echo -e "${BLUE}Step 6: Updating genesis parameters...${NC}"
 GENESIS_FILE="$HOME_DIR/config/genesis.json"
 
 # Update staking params
-jq '.app_state.staking.params.bond_denom = "aatos"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
+jq '.app_state.staking.params.bond_denom = "liao"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
 
 # Update crisis params
-jq '.app_state.crisis.constant_fee.denom = "aatos"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
+jq '.app_state.crisis.constant_fee.denom = "liao"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
 
 # Update gov params
-jq '.app_state.gov.params.min_deposit[0].denom = "aatos"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
+jq '.app_state.gov.params.min_deposit[0].denom = "liao"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
 
 # Update evm params
-jq '.app_state.evm.params.evm_denom = "aatos"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
+jq '.app_state.evm.params.evm_denom = "liao"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
 
 # Update inflation params
-jq '.app_state.inflation.params.mint_denom = "aatos"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
+jq '.app_state.inflation.params.mint_denom = "liao"' "$GENESIS_FILE" > tmp.json && mv tmp.json "$GENESIS_FILE"
 
 echo -e "${GREEN}Genesis parameters updated!${NC}"
 
@@ -213,7 +213,7 @@ echo "  2. Fund the validator account:"
 echo "     (Transfer tokens from preminer account)"
 echo ""
 echo "  3. Generate gentx:"
-echo "     atoshid genesis gentx validator <stake-amount>aatos \\"
+echo "     atoshid genesis gentx validator <stake-amount>liao \\"
 echo "       --chain-id $CHAIN_ID \\"
 echo "       --keyring-backend $KEYRING_BACKEND \\"
 echo "       --home $HOME_DIR"

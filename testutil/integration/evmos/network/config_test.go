@@ -33,7 +33,7 @@ func TestWithChainID(t *testing.T) {
 		{
 			name:            "18 decimals",
 			chainID:         utils.MainnetChainID + "-1",
-			denom:           "aatos",
+			denom:           "liao",
 			expBaseFee:      math.LegacyNewDec(875_000_000),
 			expCosmosAmount: network.GetInitialAmount(evmtypes.EighteenDecimals),
 		},

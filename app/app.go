@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 
 	autocliv1 "cosmossdk.io/api/cosmos/autocli/v1"
 	reflectionv1 "cosmossdk.io/api/cosmos/reflection/v1"
@@ -157,12 +158,23 @@ import (
 	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 	"github.com/atoshi-chain/atoshi/v20/x/staking"
 	stakingkeeper "github.com/atoshi-chain/atoshi/v20/x/staking/keeper"
-	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
-	tokenomicskeeper "github.com/atoshi-chain/atoshi/v20/x/tokenomics/keeper"
-	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
+	hlcore "github.com/bcp-innovations/hyperlane-cosmos/x/core"
+	hlcorekeeper "github.com/bcp-innovations/hyperlane-cosmos/x/core/keeper"
+	hlcoretypes "github.com/bcp-innovations/hyperlane-cosmos/x/core/types"
+
+	atox "github.com/atoshi-chain/atoshi/v20/x/atox"
+	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
+	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
+	atoxwrapper "github.com/atoshi-chain/atoshi/v20/x/atox/wrapper"
+	bridgeadapter "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter"
+	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
+	batypes "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types"
 	energy "github.com/atoshi-chain/atoshi/v20/x/energy"
 	energykeeper "github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
 	energytypes "github.com/atoshi-chain/atoshi/v20/x/energy/types"
+	tokenomics "github.com/atoshi-chain/atoshi/v20/x/tokenomics"
+	tokenomicskeeper "github.com/atoshi-chain/atoshi/v20/x/tokenomics/keeper"
+	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 	"github.com/atoshi-chain/atoshi/v20/x/vesting"
 	vestingkeeper "github.com/atoshi-chain/atoshi/v20/x/vesting/keeper"
 	vestingtypes "github.com/atoshi-chain/atoshi/v20/x/vesting/types"
@@ -203,25 +215,33 @@ var (
 
 	// module account permissions
 	maccPerms = map[string][]string{
-		authtypes.FeeCollectorName:     {authtypes.Burner},
-		distrtypes.ModuleName:          nil,
-		stakingtypes.BondedPoolName:    {authtypes.Burner, authtypes.Staking},
-		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
-		govtypes.ModuleName:            {authtypes.Burner},
-		ibctransfertypes.ModuleName:    {authtypes.Minter, authtypes.Burner},
-		icatypes.ModuleName:            nil,
-		evmtypes.ModuleName:            {authtypes.Minter, authtypes.Burner}, // used for secure addition and subtraction of balance using module account
-		inflationtypes.ModuleName:      {authtypes.Minter},
-		erc20types.ModuleName:          {authtypes.Minter, authtypes.Burner},
-		oracletypes.ModuleName:         nil,
-		tokenomicstypes.ModuleName:     {authtypes.Minter},
-		tokenomicstypes.MinerPoolName:       {authtypes.Minter},
-		tokenomicstypes.ProjectPoolName:     {authtypes.Minter},
-		tokenomicstypes.MigrationPoolName:   {authtypes.Minter},
-		tokenomicstypes.MinerLockedPoolName: {authtypes.Minter},
-		energytypes.ModuleName:              nil,
-		energytypes.LockedEnergyPoolName:    nil,
-		ratelimittypes.ModuleName:      nil,
+		authtypes.FeeCollectorName:        {authtypes.Burner},
+		distrtypes.ModuleName:             nil,
+		stakingtypes.BondedPoolName:       {authtypes.Burner, authtypes.Staking},
+		stakingtypes.NotBondedPoolName:    {authtypes.Burner, authtypes.Staking},
+		govtypes.ModuleName:               {authtypes.Burner},
+		ibctransfertypes.ModuleName:       {authtypes.Minter, authtypes.Burner},
+		icatypes.ModuleName:               nil,
+		evmtypes.ModuleName:               {authtypes.Minter, authtypes.Burner}, // used for secure addition and subtraction of balance using module account
+		inflationtypes.ModuleName:         {authtypes.Minter},
+		erc20types.ModuleName:             {authtypes.Minter, authtypes.Burner},
+		oracletypes.ModuleName:            nil,
+		tokenomicstypes.ModuleName:        {authtypes.Minter},
+		tokenomicstypes.MinerPoolName:     {authtypes.Minter},
+		tokenomicstypes.ProjectPoolName:   {authtypes.Minter},
+		tokenomicstypes.MigrationPoolName: {authtypes.Minter},
+		// Minter to emit ATOX as block rewards; Burner because the ATOX transfer
+		// fee is burned, which is what recycles it back into the mining pool.
+		atoxtypes.ModuleName:       {authtypes.Minter, authtypes.Burner},
+		atoxtypes.ExchangePoolName: nil,
+		// No permissions on purpose. x/core never mints or burns; the account
+		// only holds interchain gas-paymaster fees that relayers pay in and the
+		// IGP owner claims out. Granting Minter to a bridge module would let a
+		// compromised mailbox print the gas token.
+		hlcoretypes.ModuleName:           nil,
+		energytypes.ModuleName:           nil,
+		energytypes.LockedEnergyPoolName: nil,
+		ratelimittypes.ModuleName:        nil,
 	}
 )
 
@@ -278,13 +298,16 @@ type Atoshi struct {
 	FeeMarketKeeper feemarketkeeper.Keeper
 
 	// Evmos keepers
-	InflationKeeper inflationkeeper.Keeper
-	Erc20Keeper     erc20keeper.Keeper
-	EpochsKeeper    epochskeeper.Keeper
-	VestingKeeper   vestingkeeper.Keeper
-	OracleKeeper    oraclekeeper.Keeper
-	TokenomicsKeeper tokenomicskeeper.Keeper
-	EnergyKeeper    energykeeper.Keeper
+	InflationKeeper     inflationkeeper.Keeper
+	Erc20Keeper         erc20keeper.Keeper
+	EpochsKeeper        epochskeeper.Keeper
+	VestingKeeper       vestingkeeper.Keeper
+	OracleKeeper        oraclekeeper.Keeper
+	TokenomicsKeeper    tokenomicskeeper.Keeper
+	AtoxKeeper          atoxkeeper.Keeper
+	HyperlaneKeeper     *hlcorekeeper.Keeper
+	BridgeAdapterKeeper bakeeper.Keeper
+	EnergyKeeper        energykeeper.Keeper
 
 	// the module manager
 	mm                 *module.Manager
@@ -427,7 +450,7 @@ func NewAtoshi(
 		sdk.GetConfig().GetBech32AccountAddrPrefix(),
 		authAddr,
 	)
-	app.BankKeeper = bankkeeper.NewBaseKeeper(
+	baseBankKeeper := bankkeeper.NewBaseKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[banktypes.StoreKey]),
 		app.AccountKeeper,
@@ -435,6 +458,7 @@ func NewAtoshi(
 		authAddr,
 		logger,
 	)
+	app.BankKeeper = baseBankKeeper
 
 	// optional: enable sign mode textual by overwriting the default tx config (after setting the bank keeper)
 	enabledSignModes := append(authtx.DefaultSignModes, sigtypes.SignMode_SIGN_MODE_TEXTUAL) //nolint:gocritic
@@ -527,6 +551,27 @@ func NewAtoshi(
 		authtypes.NewModuleAddress(govtypes.ModuleName),
 	)
 
+	hyperlaneKeeper := hlcorekeeper.NewKeeper(
+		appCodec,
+		authcodec.NewBech32Codec(sdk.GetConfig().GetBech32AccountAddrPrefix()),
+		runtime.NewKVStoreService(keys[hlcoretypes.ModuleName]),
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		app.BankKeeper,
+	)
+	app.HyperlaneKeeper = &hyperlaneKeeper
+
+	// Constructed before tokenomics: block rewards are ATOX and tier releases
+	// fund the ATOX conversion pool, so the tokenomics keeper needs this one.
+	app.AtoxKeeper = atoxkeeper.NewKeeper(
+		appCodec,
+		keys[atoxtypes.StoreKey],
+		app.AccountKeeper,
+		app.BankKeeper,
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		atoshitypes.BaseDenom,
+		atoshitypes.AtoxBaseDenom,
+	)
+
 	app.TokenomicsKeeper = tokenomicskeeper.NewKeeper(
 		keys[tokenomicstypes.StoreKey],
 		appCodec,
@@ -537,13 +582,42 @@ func NewAtoshi(
 		stakingKeeper,
 		app.DistrKeeper,
 		app.OracleKeeper,
+		app.AtoxKeeper,
 	)
+
+	// After atox and tokenomics: the adapter releases into the ATOX conversion
+	// pool and reads what tier judgments authorized.
+	app.BridgeAdapterKeeper = bakeeper.NewKeeper(
+		appCodec,
+		keys[batypes.StoreKey],
+		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
+		app.AtoxKeeper,
+		app.TokenomicsKeeper,
+		app.HyperlaneKeeper,
+		app.BankKeeper,
+	)
+
+	// Close the tier-release round trip: x/bridgeadapter already holds the
+	// tokenomics keeper, so the forward-dispatch dependency is injected the other
+	// way after construction rather than through NewKeeper, which would be an
+	// import cycle.
+	app.TokenomicsKeeper.SetTierDispatcher(app.BridgeAdapterKeeper)
+
+	// Register as a Hyperlane app so the mailbox can route verified receipts
+	// here. The router keys on the recipient address's type field, and this
+	// module id is what distinguishes our receipts from a warp transfer.
+	app.HyperlaneKeeper.AppRouter().RegisterModule(batypes.AppModuleID, &app.BridgeAdapterKeeper)
 
 	app.EnergyKeeper = energykeeper.NewKeeper(
 		appCodec,
 		keys[energytypes.StoreKey],
 		app.AccountKeeper,
 		app.BankKeeper,
+		// Staked and unbonding ATOS count toward energy eligibility, so the
+		// energy module needs aggregate delegation reads. app.StakingKeeper is
+		// only assigned below (it needs hooks from modules built after this
+		// one), so pass the local pointer created above.
+		stakingKeeper,
 		// Adapter shim: x/energy's FeemarketKeeper interface exposes
 		// just GetMinGasPrice(ctx) so it doesn't need to import
 		// x/feemarket/types. x/feemarket's keeper provides the full
@@ -551,7 +625,20 @@ func NewAtoshi(
 		// module decoupled from feemarket internals.
 		feemarketKeeperShim{k: app.FeeMarketKeeper},
 		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
-		atoshitypes.BaseDenom,
+		// Take the denom from the same source the EVM uses, not the compile-time
+		// constant. Energy decides fee eligibility and charges the ATOS shortfall
+		// in this denom, so if it ever diverged from the chain's actual fee denom
+		// the module would bill users in a coin they do not hold — which is
+		// exactly what happens on the inherited six-decimal chain configs, where
+		// the fee denom is asatos. Reading it here makes the two agree by
+		// construction for every registered chain id.
+		//
+		// Passed as a getter, NOT called here. atoshiAppOptions does populate the
+		// coin info at line ~400, but it is not always the real one: cmd/atoshid's
+		// NewRootCmd builds a throwaway app with NoOpAtoshiOptions just to read
+		// the encoding config, leaving the global nil. Calling it here therefore
+		// panicked on every atoshid invocation, including `atoshid version`.
+		evmtypes.GetEVMCoinDenom,
 	)
 
 	// Wire the energy snapshot updater into bank's send restriction chain.
@@ -562,6 +649,13 @@ func NewAtoshi(
 	// in delegation flows, so receiving wallets accrue energy against a stale
 	// (often zero) snapshot.
 	app.BankKeeper.AppendSendRestriction(app.EnergyKeeper.SendRestriction)
+
+	// The atox restriction settles both parties' conversion index before their
+	// ATOX balances move, and collects the transfer fee. Registering it on bank
+	// rather than behind a dedicated message is deliberate: MsgSend, IBC, Authz
+	// and the ERC20 precompile that EVM wallets use all funnel through
+	// bank.SendCoins, so none of them can route around the index or the fee.
+	app.BankKeeper.AppendSendRestriction(app.AtoxKeeper.SendRestriction)
 
 	// register the staking hooks
 	// NOTE: stakingKeeper above is passed by reference, so that it will contain these hooks
@@ -585,6 +679,19 @@ func NewAtoshi(
 		app.AccountKeeper, app.BankKeeper, app.EvmKeeper, app.StakingKeeper,
 		app.AuthzKeeper, &app.TransferKeeper,
 	)
+
+	// The token-pair precompiles must move coins through the fee-inclusive Msg
+	// server, the same one the Msg router is bound to below.
+	//
+	// Left alone, precompiles/erc20 builds its own with
+	// bankkeeper.NewMsgServerImpl(bankKeeper) -- the stock server, no fee. ATOX
+	// is a registered token pair, so that made ERC20 transfer() a fee-free way
+	// to move it, while transferFrom() went out through authz and therefore the
+	// router and did pay. Pinned by
+	// x/atox/keeper.TestTransferFee_BothMsgSendPaths.
+	app.Erc20Keeper.SetBankMsgServer(atoxwrapper.NewMsgServer(
+		bankkeeper.NewMsgServerImpl(baseBankKeeper), baseBankKeeper, app.AtoxKeeper,
+	))
 
 	// Create the rate limit keeper
 	app.RateLimitKeeper = *ratelimitkeeper.NewKeeper(
@@ -634,6 +741,8 @@ func NewAtoshi(
 			app.GovKeeper,
 			app.SlashingKeeper,
 			app.EvidenceKeeper,
+			app.BridgeAdapterKeeper,
+			app.AtoxKeeper,
 		),
 	)
 
@@ -710,7 +819,16 @@ func NewAtoshi(
 			app, app.txConfig,
 		),
 		auth.NewAppModule(appCodec, app.AccountKeeper, authsims.RandomGenesisAccounts, app.GetSubspace(authtypes.ModuleName)),
-		bank.NewAppModule(appCodec, app.BankKeeper, app.AccountKeeper, app.GetSubspace(banktypes.ModuleName)),
+		// Bank's Msg server is bound to the fee-inclusive wrapper while its store
+		// migrations keep the concrete keeper they type-assert for. Using plain
+		// bank.NewAppModule here would either panic at startup or leave MsgSend
+		// untaxed while the erc20 precompile was taxed.
+		atoxwrapper.NewBankAppModule(
+			bank.NewAppModule(appCodec, baseBankKeeper, app.AccountKeeper, app.GetSubspace(banktypes.ModuleName)),
+			baseBankKeeper,
+			app.AtoxKeeper,
+			app.GetSubspace(banktypes.ModuleName),
+		),
 		capability.NewAppModule(appCodec, *app.CapabilityKeeper, false),
 		gov.NewAppModule(appCodec, &app.GovKeeper, app.AccountKeeper, app.BankKeeper, app.GetSubspace(govtypes.ModuleName)),
 		slashing.NewAppModule(appCodec, app.SlashingKeeper, app.AccountKeeper, app.BankKeeper, app.StakingKeeper, app.GetSubspace(slashingtypes.ModuleName), app.interfaceRegistry),
@@ -741,6 +859,9 @@ func NewAtoshi(
 		vesting.NewAppModule(app.VestingKeeper, app.AccountKeeper, app.BankKeeper, *app.StakingKeeper.Keeper),
 		oracle.NewAppModule(app.OracleKeeper),
 		tokenomics.NewAppModule(app.TokenomicsKeeper),
+		atox.NewAppModule(app.AtoxKeeper),
+		hlcore.NewAppModule(appCodec, app.HyperlaneKeeper),
+		bridgeadapter.NewAppModule(app.BridgeAdapterKeeper),
 		energy.NewAppModule(app.EnergyKeeper),
 	)
 
@@ -798,6 +919,9 @@ func NewAtoshi(
 		stakingtypes.ModuleName,
 		oracletypes.ModuleName,
 		tokenomicstypes.ModuleName,
+		// After tokenomics: its EndBlocker is what advances tier release state, so
+		// the conversion sweep sees the current index in the same block.
+		atoxtypes.ModuleName,
 		energytypes.ModuleName,
 		evmtypes.ModuleName,
 		feemarkettypes.ModuleName,
@@ -838,7 +962,12 @@ func NewAtoshi(
 		ratelimittypes.ModuleName,
 		oracletypes.ModuleName,
 		tokenomicstypes.ModuleName,
+		atoxtypes.ModuleName,
 		energytypes.ModuleName,
+		hlcoretypes.ModuleName,
+		// After hyperlane: genesis draws this app's recipient address from the
+		// core app router's sequence.
+		batypes.ModuleName,
 	)
 
 	app.configurator = module.NewConfigurator(app.appCodec, app.MsgServiceRouter(), app.GRPCQueryRouter())
@@ -974,6 +1103,7 @@ func (app *Atoshi) setAnteHandler(txConfig client.TxConfig, maxGasWanted uint64)
 		MaxTxGasWanted:         maxGasWanted,
 		TxFeeChecker:           ethante.NewDynamicFeeChecker(app.FeeMarketKeeper),
 		EnergyKeeper:           &app.EnergyKeeper,
+		TokenomicsKeeper:       app.TokenomicsKeeper,
 	}
 
 	if err := options.Validate(); err != nil {
@@ -1120,9 +1250,135 @@ func (app *Atoshi) AppCodec() codec.Codec {
 	return app.appCodec
 }
 
-// DefaultGenesis returns a default genesis from the registered AppModuleBasic's.
+// DefaultGenesis returns a default genesis from the registered AppModuleBasic's,
+// with bank denom metadata for the native coin filled in.
 func (app *Atoshi) DefaultGenesis() atoshitypes.GenesisState {
-	return app.BasicModuleManager.DefaultGenesis(app.appCodec)
+	gen := app.BasicModuleManager.DefaultGenesis(app.appCodec)
+	WithNativeDenomMetadata(app.appCodec, gen, app.ChainID())
+	return gen
+}
+
+// WithNativeDenomMetadata adds bank denom metadata for both native coins --
+// ATOS and ATOX -- to a default genesis, skipping any the operator already
+// supplied an entry for.
+//
+// x/bank's default genesis carries no metadata, and nothing registers any for
+// the native denom afterwards -- SetDenomMetaData is only reached when
+// governance registers an ERC20 token pair. So `atoshid init` produced a
+// genesis whose denom_metadata was an empty list.
+//
+// That is not cosmetic. erc20's default genesis already registers a token pair
+// for the native denom, and the ERC20 precompile answers decimals(), name() and
+// symbol() from bank metadata; with none present it falls back to inferring the
+// unit from the denom's leading SI prefix, and "liao" has none, so all three
+// revert. Wallets, explorers and DEXes read decimals(). See
+// precompiles/erc20/query.go.
+//
+// Kept as a genesis default rather than an InitGenesis side effect so that the
+// value stays visible and editable in genesis.json, and so exported state
+// round-trips unchanged.
+// WithNativeDenomMetadataOf is the value-returning form, for the genesis
+// producers in cmd/atoshid that build from module.BasicManager.DefaultGenesis
+// and never reach (*Atoshi).DefaultGenesis.
+func WithNativeDenomMetadataOf(gen map[string]json.RawMessage, cdc codec.Codec, chainID string) map[string]json.RawMessage {
+	WithNativeDenomMetadata(cdc, gen, chainID)
+	return gen
+}
+
+// WithNativeDenomMetadata adds the native coin's bank denom metadata to a
+// default genesis, unless the operator already supplied an entry for it.
+//
+// x/bank's default genesis carries no metadata, and nothing registers any for
+// the native denom afterwards -- SetDenomMetaData is only reached when
+// governance registers an ERC20 token pair. So `atoshid init` produced a
+// genesis whose denom_metadata was an empty list.
+//
+// That is not cosmetic. erc20's default genesis already registers a token pair
+// for the native denom, and the ERC20 precompile answers decimals(), name() and
+// symbol() from bank metadata; with none present it falls back to inferring the
+// unit from the denom's leading SI prefix, and "liao" has none, so all three
+// revert. Wallets, explorers and DEXes read decimals(). See
+// precompiles/erc20/query.go.
+//
+// The denom comes from ChainsCoinInfo keyed on the chain id -- the same table
+// AtoshiAppOptions uses -- and NOT from evmtypes.GetEVMCoinDenom(). That global
+// is populated by the configurator during app construction and is still nil
+// while `atoshid init` runs, so reading it here panicked before the command
+// could write a genesis at all. An unknown chain id is left alone rather than
+// guessed at: the operator gets a genesis with no metadata, which
+// docs/check_genesis.py reports, instead of one silently carrying the wrong
+// denom.
+//
+// Kept as a genesis default rather than an InitGenesis side effect so that the
+// value stays visible and editable in genesis.json, and so exported state
+// round-trips unchanged.
+func WithNativeDenomMetadata(cdc codec.Codec, gen atoshitypes.GenesisState, chainID string) {
+	raw, ok := gen[banktypes.ModuleName]
+	if !ok {
+		return
+	}
+
+	coinInfo, found := evmtypes.ChainsCoinInfo[strings.Split(chainID, "-")[0]]
+	if !found {
+		return
+	}
+
+	var bankGen banktypes.GenesisState
+	cdc.MustUnmarshalJSON(raw, &bankGen)
+
+	// Keyed on the display denom, not the base denom: BaseDenom and
+	// BaseDenomTestnet are both "liao", so comparing base denoms matches every
+	// chain and would label mainnet ATOX as ATOXtest.
+	atoxDisplay := atoshitypes.AtoxDisplayDenom
+	if coinInfo.DisplayDenom == atoshitypes.DisplayDenomTestnet {
+		atoxDisplay = atoshitypes.AtoxDisplayDenomTestnet
+	}
+
+	wanted := []banktypes.Metadata{
+		{
+			Description: fmt.Sprintf("The native staking and gas token of the Atoshi chain. 1 %s = 10^%d %s.",
+				coinInfo.DisplayDenom, coinInfo.Decimals, coinInfo.Denom),
+			Base: coinInfo.Denom,
+			// NOTE: denom units MUST be in increasing exponent order.
+			DenomUnits: []*banktypes.DenomUnit{
+				{Denom: coinInfo.Denom, Exponent: 0},
+				{Denom: coinInfo.DisplayDenom, Exponent: uint32(coinInfo.Decimals)},
+			},
+			Name:    coinInfo.DisplayDenom,
+			Symbol:  coinInfo.DisplayDenom,
+			Display: coinInfo.DisplayDenom,
+		},
+		// ATOX needs an entry just as much as ATOS does. It is the coin staking
+		// rewards are actually paid in -- x/tokenomics mints it per block into the
+		// fee collector and x/distribution splits it among validators and
+		// delegators -- so every wallet and explorer that renders a reward balance
+		// reads this. Without it they cannot know ATOX has 18 decimals and would
+		// show the raw aatox integer instead of an ATOX amount.
+		{
+			Description: fmt.Sprintf("The mining-reward token of the Atoshi chain, convertible to %s as tier releases land. 1 %s = 10^%d %s.",
+				coinInfo.DisplayDenom, atoxDisplay, atoshitypes.AtoxBaseDenomUnit, atoshitypes.AtoxBaseDenom),
+			Base: atoshitypes.AtoxBaseDenom,
+			DenomUnits: []*banktypes.DenomUnit{
+				{Denom: atoshitypes.AtoxBaseDenom, Exponent: 0},
+				{Denom: atoxDisplay, Exponent: atoshitypes.AtoxBaseDenomUnit},
+			},
+			Name:    atoxDisplay,
+			Symbol:  atoxDisplay,
+			Display: atoxDisplay,
+		},
+	}
+
+	present := make(map[string]bool, len(bankGen.DenomMetadata))
+	for _, md := range bankGen.DenomMetadata {
+		present[md.Base] = true
+	}
+	for _, md := range wanted {
+		if !present[md.Base] {
+			bankGen.DenomMetadata = append(bankGen.DenomMetadata, md)
+		}
+	}
+
+	gen[banktypes.ModuleName] = cdc.MustMarshalJSON(&bankGen)
 }
 
 // InterfaceRegistry returns Evmos's InterfaceRegistry

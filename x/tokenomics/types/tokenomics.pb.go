@@ -33,12 +33,6 @@ type Params struct {
 	ProjectPoolTotal cosmossdk_io_math.Int `protobuf:"bytes,2,opt,name=project_pool_total,json=projectPoolTotal,proto3,customtype=cosmossdk.io/math.Int" json:"project_pool_total"`
 	// migration_pool_total is the cap of the pre-mine migration pool (1% of supply).
 	MigrationPoolTotal cosmossdk_io_math.Int `protobuf:"bytes,3,opt,name=migration_pool_total,json=migrationPoolTotal,proto3,customtype=cosmossdk.io/math.Int" json:"migration_pool_total"`
-	// immediate_reward_bps is the share of each block reward paid out immediately
-	// through x/distribution (basis points, default 2000 = 20%).
-	ImmediateRewardBps uint32 `protobuf:"varint,4,opt,name=immediate_reward_bps,json=immediateRewardBps,proto3" json:"immediate_reward_bps,omitempty"`
-	// locked_reward_bps is the share of each block reward locked per validator
-	// (basis points, default 8000 = 80%). immediate + locked must equal 10000.
-	LockedRewardBps uint32 `protobuf:"varint,5,opt,name=locked_reward_bps,json=lockedRewardBps,proto3" json:"locked_reward_bps,omitempty"`
 	// halving_interval_blocks is the number of blocks between block-reward halvings.
 	HalvingIntervalBlocks int64 `protobuf:"varint,6,opt,name=halving_interval_blocks,json=halvingIntervalBlocks,proto3" json:"halving_interval_blocks,omitempty"`
 	// initial_block_reward is the per-block miner reward before any halvings.
@@ -58,17 +52,83 @@ type Params struct {
 	// project_release_share_bps is the share that comes from the project pool.
 	// miner + project share must equal 10000.
 	ProjectReleaseShareBps uint32 `protobuf:"varint,14,opt,name=project_release_share_bps,json=projectReleaseShareBps,proto3" json:"project_release_share_bps,omitempty"`
-	// project_treasury_address is the bech32 address that receives project releases.
-	// Mutable via gov MsgUpdateParams.
+	// project_treasury_address is unused.
+	//
+	// It used to be the only address allowed to withdraw against ProjectClaimable.
+	// That withdrawal is gone -- the project's share of a tier release arrives as
+	// ERC20 on Ethereum, and ProjectClaimable is the ceiling for refilling
+	// migration_pool out of project_pool, not a balance anyone may draw. Kept as a
+	// reserved field rather than removed so existing genesis files still parse.
 	ProjectTreasuryAddress string `protobuf:"bytes,15,opt,name=project_treasury_address,json=projectTreasuryAddress,proto3" json:"project_treasury_address,omitempty"`
-	// price_check_epoch_blocks is how often (in blocks) the EndBlocker evaluates the
-	// price/volume streak. Defaults to ~24h.
+	// price_check_epoch_blocks is the MINIMUM number of blocks between two tier
+	// samples.
+	//
+	// It used to mean "how often the EndBlocker evaluates the streak", i.e. the
+	// chain picked the sampling instants. Under the daily-sampling rule the feeder
+	// picks them, so this became a spacing floor instead: it stops a feeder from
+	// spending the whole day's sample quota inside a few seconds, which would
+	// collapse "three readings spread across 24h" into "three readings at one
+	// instant" and let a momentary spike satisfy the day.
+	//
+	// Set it to roughly one_day / daily_samples. At 5s blocks and 3 samples that
+	// is 5760 blocks (8h).
 	PriceCheckEpochBlocks int64 `protobuf:"varint,16,opt,name=price_check_epoch_blocks,json=priceCheckEpochBlocks,proto3" json:"price_check_epoch_blocks,omitempty"`
+	// day_seconds is how long a sampling "day" lasts.
+	//
+	// The release rule counts CONSECUTIVE DAYS, and a day is settled at the
+	// boundary of this window, so the real time to a release is
+	// consecutive_days_required * day_seconds. On mainnet this must be 86400 --
+	// the rule is specified in calendar days.
+	//
+	// It is a parameter only so a test network can compress it. With the mainnet
+	// value a testnet needs 30 real days to see one release, and even the reduced
+	// consecutive_days_required used for testing still needs that many real day
+	// boundaries, which makes the whole cross-chain path untestable in an
+	// afternoon. Set it to a few minutes there.
+	//
+	// ⚠️ Changing it on a live chain rescales the streak: days already counted
+	// were measured against the old window, and the ones after against the new
+	// one, so "30 consecutive days" stops meaning one thing. Change it only
+	// alongside a fresh genesis, or accept that the streak in progress is
+	// meaningless.
+	DaySeconds int64 `protobuf:"varint,22,opt,name=day_seconds,json=daySeconds,proto3" json:"day_seconds,omitempty"`
+	// migration_refill_threshold_bps triggers a migration_pool refill.
+	//
+	// When migration_pool's balance drops below this fraction of
+	// migration_pool_total, the EndBlocker moves ATOS in from project_pool, capped
+	// by the ProjectClaimable authorisation. Design doc 1.4 calls this "半自动补充".
+	//
+	// The refill exists because migration_pool is the reserve behind the ordinary
+	// user bridge: every bridge-in draws from it, and if it empties the bridge
+	// stops accepting inbound transfers even though project_pool holds 8.7
+	// trillion ATOS that tier releases have already authorised.
+	//
+	// Zero disables the refill.
+	MigrationRefillThresholdBps uint32 `protobuf:"varint,21,opt,name=migration_refill_threshold_bps,json=migrationRefillThresholdBps,proto3" json:"migration_refill_threshold_bps,omitempty"`
+	// daily_samples is how many readings per UTC day count as tier samples.
+	//
+	// Under ANY-of-N semantics this is the number of chances the price gets each
+	// day, so it directly sets how permissive the rule is: raising it makes the
+	// threshold easier to clear, not harder. Default 3.
+	DailySamples int64 `protobuf:"varint,20,opt,name=daily_samples,json=dailySamples,proto3" json:"daily_samples,omitempty"`
 	// migration_merkle_root is the hex-encoded Merkle root of the migration airdrop.
 	MigrationMerkleRoot string `protobuf:"bytes,17,opt,name=migration_merkle_root,json=migrationMerkleRoot,proto3" json:"migration_merkle_root,omitempty"`
 	// migration_claim_end_time_unix is the unix-time deadline after which migration
 	// claims are rejected.
 	MigrationClaimEndTimeUnix int64 `protobuf:"varint,18,opt,name=migration_claim_end_time_unix,json=migrationClaimEndTimeUnix,proto3" json:"migration_claim_end_time_unix,omitempty"`
+	// validator_min_self_delegation is the chain-wide floor, in the base denom, on
+	// a validator's own stake.
+	//
+	// The SDK's per-validator min_self_delegation cannot express this: a validator
+	// declares its own value in MsgCreateValidator and the SDK only enforces that
+	// its self-stake stays at or above whatever it declared, so declaring 1 opts
+	// out entirely. This param is checked in the AnteHandler against both the
+	// declared min_self_delegation and the initial self-stake, which makes the
+	// SDK's existing machinery enforce the floor from then on: it unbonds any
+	// validator whose self-stake falls below its declared minimum.
+	//
+	// Zero disables the check.
+	ValidatorMinSelfDelegation cosmossdk_io_math.Int `protobuf:"bytes,19,opt,name=validator_min_self_delegation,json=validatorMinSelfDelegation,proto3,customtype=cosmossdk.io/math.Int" json:"validator_min_self_delegation"`
 }
 
 func (m *Params) Reset()         { *m = Params{} }
@@ -103,20 +163,6 @@ func (m *Params) XXX_DiscardUnknown() {
 }
 
 var xxx_messageInfo_Params proto.InternalMessageInfo
-
-func (m *Params) GetImmediateRewardBps() uint32 {
-	if m != nil {
-		return m.ImmediateRewardBps
-	}
-	return 0
-}
-
-func (m *Params) GetLockedRewardBps() uint32 {
-	if m != nil {
-		return m.LockedRewardBps
-	}
-	return 0
-}
 
 func (m *Params) GetHalvingIntervalBlocks() int64 {
 	if m != nil {
@@ -167,6 +213,27 @@ func (m *Params) GetPriceCheckEpochBlocks() int64 {
 	return 0
 }
 
+func (m *Params) GetDaySeconds() int64 {
+	if m != nil {
+		return m.DaySeconds
+	}
+	return 0
+}
+
+func (m *Params) GetMigrationRefillThresholdBps() uint32 {
+	if m != nil {
+		return m.MigrationRefillThresholdBps
+	}
+	return 0
+}
+
+func (m *Params) GetDailySamples() int64 {
+	if m != nil {
+		return m.DailySamples
+	}
+	return 0
+}
+
 func (m *Params) GetMigrationMerkleRoot() string {
 	if m != nil {
 		return m.MigrationMerkleRoot
@@ -181,72 +248,39 @@ func (m *Params) GetMigrationClaimEndTimeUnix() int64 {
 	return 0
 }
 
-// MinerLockedBalance tracks a validator's locked mining rewards.
-type MinerLockedBalance struct {
-	ValidatorAddress  string                `protobuf:"bytes,1,opt,name=validator_address,json=validatorAddress,proto3" json:"validator_address,omitempty"`
-	LockedAccrued     cosmossdk_io_math.Int `protobuf:"bytes,2,opt,name=locked_accrued,json=lockedAccrued,proto3,customtype=cosmossdk.io/math.Int" json:"locked_accrued"`
-	LockedClaimable   cosmossdk_io_math.Int `protobuf:"bytes,3,opt,name=locked_claimable,json=lockedClaimable,proto3,customtype=cosmossdk.io/math.Int" json:"locked_claimable"`
-	LockedClaimed     cosmossdk_io_math.Int `protobuf:"bytes,4,opt,name=locked_claimed,json=lockedClaimed,proto3,customtype=cosmossdk.io/math.Int" json:"locked_claimed"`
-	ImmediateReceived cosmossdk_io_math.Int `protobuf:"bytes,5,opt,name=immediate_received,json=immediateReceived,proto3,customtype=cosmossdk.io/math.Int" json:"immediate_received"`
-}
-
-func (m *MinerLockedBalance) Reset()         { *m = MinerLockedBalance{} }
-func (m *MinerLockedBalance) String() string { return proto.CompactTextString(m) }
-func (*MinerLockedBalance) ProtoMessage()    {}
-func (*MinerLockedBalance) Descriptor() ([]byte, []int) {
-	return fileDescriptor_e53295d10b300f5a, []int{1}
-}
-func (m *MinerLockedBalance) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *MinerLockedBalance) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_MinerLockedBalance.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *MinerLockedBalance) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_MinerLockedBalance.Merge(m, src)
-}
-func (m *MinerLockedBalance) XXX_Size() int {
-	return m.Size()
-}
-func (m *MinerLockedBalance) XXX_DiscardUnknown() {
-	xxx_messageInfo_MinerLockedBalance.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_MinerLockedBalance proto.InternalMessageInfo
-
-func (m *MinerLockedBalance) GetValidatorAddress() string {
-	if m != nil {
-		return m.ValidatorAddress
-	}
-	return ""
-}
-
 // ReleaseState tracks the global price-unlock state machine.
 type ReleaseState struct {
-	CurrentTier               uint32                `protobuf:"varint,1,opt,name=current_tier,json=currentTier,proto3" json:"current_tier,omitempty"`
-	ConsecutiveDays           uint32                `protobuf:"varint,2,opt,name=consecutive_days,json=consecutiveDays,proto3" json:"consecutive_days,omitempty"`
-	LastCheckBlock            int64                 `protobuf:"varint,3,opt,name=last_check_block,json=lastCheckBlock,proto3" json:"last_check_block,omitempty"`
-	LastCheckTimeUnix         int64                 `protobuf:"varint,4,opt,name=last_check_time_unix,json=lastCheckTimeUnix,proto3" json:"last_check_time_unix,omitempty"`
-	TotalMinerReleased        cosmossdk_io_math.Int `protobuf:"bytes,5,opt,name=total_miner_released,json=totalMinerReleased,proto3,customtype=cosmossdk.io/math.Int" json:"total_miner_released"`
-	TotalProjectReleased      cosmossdk_io_math.Int `protobuf:"bytes,6,opt,name=total_project_released,json=totalProjectReleased,proto3,customtype=cosmossdk.io/math.Int" json:"total_project_released"`
-	TotalImmediateDistributed cosmossdk_io_math.Int `protobuf:"bytes,7,opt,name=total_immediate_distributed,json=totalImmediateDistributed,proto3,customtype=cosmossdk.io/math.Int" json:"total_immediate_distributed"`
-	TotalMinerLocked          cosmossdk_io_math.Int `protobuf:"bytes,8,opt,name=total_miner_locked,json=totalMinerLocked,proto3,customtype=cosmossdk.io/math.Int" json:"total_miner_locked"`
+	CurrentTier          uint32                `protobuf:"varint,1,opt,name=current_tier,json=currentTier,proto3" json:"current_tier,omitempty"`
+	ConsecutiveDays      uint32                `protobuf:"varint,2,opt,name=consecutive_days,json=consecutiveDays,proto3" json:"consecutive_days,omitempty"`
+	LastCheckBlock       int64                 `protobuf:"varint,3,opt,name=last_check_block,json=lastCheckBlock,proto3" json:"last_check_block,omitempty"`
+	LastCheckTimeUnix    int64                 `protobuf:"varint,4,opt,name=last_check_time_unix,json=lastCheckTimeUnix,proto3" json:"last_check_time_unix,omitempty"`
+	TotalMinerReleased   cosmossdk_io_math.Int `protobuf:"bytes,5,opt,name=total_miner_released,json=totalMinerReleased,proto3,customtype=cosmossdk.io/math.Int" json:"total_miner_released"`
+	TotalProjectReleased cosmossdk_io_math.Int `protobuf:"bytes,6,opt,name=total_project_released,json=totalProjectReleased,proto3,customtype=cosmossdk.io/math.Int" json:"total_project_released"`
+	// current_sample_day is the UTC day index (unix / 86400) being sampled.
+	CurrentSampleDay int64 `protobuf:"varint,9,opt,name=current_sample_day,json=currentSampleDay,proto3" json:"current_sample_day,omitempty"`
+	// samples_today counts the readings consumed as tier samples today, capped at
+	// params.daily_samples. The cap matters under ANY-of-N semantics: without it,
+	// a feeder reporting continuously would turn "the price held on three random
+	// checks" into "the price touched the threshold at least once today", which is
+	// a far weaker condition.
+	SamplesToday uint32 `protobuf:"varint,10,opt,name=samples_today,json=samplesToday,proto3" json:"samples_today,omitempty"`
+	// day_qualified is true once any sample today has cleared both thresholds.
+	DayQualified bool `protobuf:"varint,11,opt,name=day_qualified,json=dayQualified,proto3" json:"day_qualified,omitempty"`
+	// last_sampled_price_time is the timestamp of the oracle report last consumed
+	// as a sample. A report is only sampled once -- without this the same report
+	// would be re-counted every block until the next one arrived, burning the
+	// day's quota in three consecutive blocks.
+	LastSampledPriceTime int64 `protobuf:"varint,12,opt,name=last_sampled_price_time,json=lastSampledPriceTime,proto3" json:"last_sampled_price_time,omitempty"`
+	// last_sample_block is the height at which the previous sample was taken, used
+	// to enforce params.price_check_epoch_blocks as a minimum spacing.
+	LastSampleBlock int64 `protobuf:"varint,13,opt,name=last_sample_block,json=lastSampleBlock,proto3" json:"last_sample_block,omitempty"`
 }
 
 func (m *ReleaseState) Reset()         { *m = ReleaseState{} }
 func (m *ReleaseState) String() string { return proto.CompactTextString(m) }
 func (*ReleaseState) ProtoMessage()    {}
 func (*ReleaseState) Descriptor() ([]byte, []int) {
-	return fileDescriptor_e53295d10b300f5a, []int{2}
+	return fileDescriptor_e53295d10b300f5a, []int{1}
 }
 func (m *ReleaseState) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -303,6 +337,41 @@ func (m *ReleaseState) GetLastCheckTimeUnix() int64 {
 	return 0
 }
 
+func (m *ReleaseState) GetCurrentSampleDay() int64 {
+	if m != nil {
+		return m.CurrentSampleDay
+	}
+	return 0
+}
+
+func (m *ReleaseState) GetSamplesToday() uint32 {
+	if m != nil {
+		return m.SamplesToday
+	}
+	return 0
+}
+
+func (m *ReleaseState) GetDayQualified() bool {
+	if m != nil {
+		return m.DayQualified
+	}
+	return false
+}
+
+func (m *ReleaseState) GetLastSampledPriceTime() int64 {
+	if m != nil {
+		return m.LastSampledPriceTime
+	}
+	return 0
+}
+
+func (m *ReleaseState) GetLastSampleBlock() int64 {
+	if m != nil {
+		return m.LastSampleBlock
+	}
+	return 0
+}
+
 // BlockRewardState tracks how much of the miner pool has already been distributed.
 type BlockRewardState struct {
 	TotalDistributed cosmossdk_io_math.Int `protobuf:"bytes,1,opt,name=total_distributed,json=totalDistributed,proto3,customtype=cosmossdk.io/math.Int" json:"total_distributed"`
@@ -313,7 +382,7 @@ func (m *BlockRewardState) Reset()         { *m = BlockRewardState{} }
 func (m *BlockRewardState) String() string { return proto.CompactTextString(m) }
 func (*BlockRewardState) ProtoMessage()    {}
 func (*BlockRewardState) Descriptor() ([]byte, []int) {
-	return fileDescriptor_e53295d10b300f5a, []int{3}
+	return fileDescriptor_e53295d10b300f5a, []int{2}
 }
 func (m *BlockRewardState) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -351,7 +420,6 @@ func (m *BlockRewardState) GetCurrentPeriod() uint64 {
 
 func init() {
 	proto.RegisterType((*Params)(nil), "atoshi.tokenomics.v1.Params")
-	proto.RegisterType((*MinerLockedBalance)(nil), "atoshi.tokenomics.v1.MinerLockedBalance")
 	proto.RegisterType((*ReleaseState)(nil), "atoshi.tokenomics.v1.ReleaseState")
 	proto.RegisterType((*BlockRewardState)(nil), "atoshi.tokenomics.v1.BlockRewardState")
 }
@@ -361,69 +429,73 @@ func init() {
 }
 
 var fileDescriptor_e53295d10b300f5a = []byte{
-	// 991 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x56, 0x4d, 0x6f, 0x1b, 0x45,
-	0x18, 0xce, 0x36, 0x21, 0x90, 0x49, 0xec, 0xd8, 0x83, 0x93, 0x6c, 0x5a, 0xe1, 0x86, 0x48, 0x95,
-	0x42, 0x11, 0x71, 0x5b, 0x28, 0x5f, 0x27, 0xea, 0xa4, 0x42, 0x96, 0x62, 0xd5, 0x5d, 0x8c, 0x84,
-	0xb8, 0xac, 0xc6, 0xb3, 0xaf, 0xec, 0xc1, 0xbb, 0x3b, 0xcb, 0xcc, 0xac, 0x89, 0xff, 0x02, 0x27,
-	0xfe, 0x00, 0x9c, 0x39, 0xf2, 0x33, 0x7a, 0xec, 0x11, 0x71, 0xa8, 0x50, 0x72, 0xe0, 0x37, 0x70,
-	0xab, 0xe6, 0x63, 0xd7, 0xdb, 0xf4, 0x62, 0x5f, 0x2c, 0xef, 0x3c, 0xef, 0xf3, 0xcc, 0xcc, 0x3b,
-	0xef, 0xf3, 0xce, 0xa0, 0x7b, 0x44, 0x71, 0x39, 0x61, 0x1d, 0xc5, 0xa7, 0x90, 0xf2, 0x84, 0x51,
-	0xd9, 0x99, 0x3d, 0xac, 0x7c, 0x9d, 0x66, 0x82, 0x2b, 0x8e, 0x5b, 0x36, 0xec, 0xb4, 0x02, 0xcc,
-	0x1e, 0xde, 0x6e, 0x92, 0x84, 0xa5, 0xbc, 0x63, 0x7e, 0x6d, 0xe0, 0xed, 0xd6, 0x98, 0x8f, 0xb9,
-	0xf9, 0xdb, 0xd1, 0xff, 0xec, 0xe8, 0xf1, 0x1f, 0x5b, 0x68, 0x73, 0x40, 0x04, 0x49, 0x24, 0xbe,
-	0x40, 0x8d, 0x84, 0xa5, 0x20, 0xc2, 0x8c, 0xf3, 0x38, 0x54, 0x5c, 0x91, 0xd8, 0xf7, 0x8e, 0xbc,
-	0x93, 0xad, 0xee, 0xf1, 0x8b, 0x57, 0x77, 0xd7, 0xfe, 0x79, 0x75, 0x77, 0x8f, 0x72, 0x99, 0x70,
-	0x29, 0xa3, 0xe9, 0x29, 0xe3, 0x9d, 0x84, 0xa8, 0xc9, 0x69, 0x2f, 0x55, 0x7f, 0xfe, 0xf7, 0xd7,
-	0x7d, 0x2f, 0xa8, 0x1b, 0xee, 0x80, 0xf3, 0x78, 0xa8, 0x99, 0x78, 0x80, 0x70, 0x26, 0xf8, 0x4f,
-	0x40, 0x55, 0x55, 0xef, 0xd6, 0xd2, 0x7a, 0x0d, 0xc7, 0x5e, 0x28, 0x0e, 0x51, 0x2b, 0x61, 0x63,
-	0x41, 0x14, 0xe3, 0x69, 0x55, 0x73, 0x7d, 0x69, 0x4d, 0x5c, 0xf2, 0x17, 0xaa, 0x0f, 0x50, 0x8b,
-	0x25, 0x09, 0x44, 0x8c, 0x28, 0x08, 0x05, 0xfc, 0x42, 0x44, 0x14, 0x8e, 0x32, 0xe9, 0x6f, 0x1c,
-	0x79, 0x27, 0xb5, 0x00, 0x97, 0x58, 0x60, 0xa0, 0x6e, 0x26, 0xf1, 0x7d, 0xd4, 0x8c, 0x39, 0x9d,
-	0x42, 0x54, 0x0d, 0x7f, 0xc7, 0x84, 0xef, 0x5a, 0x60, 0x11, 0xfb, 0x39, 0x3a, 0x98, 0x90, 0x78,
-	0xc6, 0xd2, 0x71, 0xc8, 0x52, 0x05, 0x62, 0x46, 0xe2, 0x70, 0xa4, 0x83, 0xa4, 0xbf, 0x79, 0xe4,
-	0x9d, 0xac, 0x07, 0x7b, 0x0e, 0xee, 0x39, 0xb4, 0x6b, 0x40, 0xbd, 0x57, 0x96, 0x32, 0xc5, 0x8a,
-	0x70, 0x37, 0x95, 0xff, 0xee, 0xf2, 0x7b, 0x75, 0x7c, 0x23, 0x68, 0x17, 0x84, 0xbf, 0x45, 0x28,
-	0x13, 0x8c, 0x42, 0x38, 0x22, 0x12, 0xfc, 0xf7, 0x8c, 0xd6, 0x89, 0xd3, 0xba, 0xf3, 0xb6, 0xd6,
-	0x05, 0x8c, 0x09, 0x9d, 0x9f, 0x03, 0xb5, 0x8a, 0x5b, 0x86, 0xdb, 0x25, 0x12, 0x70, 0x0f, 0x6d,
-	0xcf, 0x78, 0x9c, 0x27, 0x4e, 0x69, 0x6b, 0x45, 0x25, 0x64, 0xc9, 0x46, 0xea, 0x39, 0xda, 0x55,
-	0x0c, 0x44, 0x98, 0xe4, 0xb1, 0x62, 0x59, 0xcc, 0x40, 0xf8, 0x68, 0x45, 0xb9, 0xba, 0x16, 0xe8,
-	0x97, 0x7c, 0xfc, 0x35, 0x3a, 0xa4, 0x3c, 0x95, 0x40, 0x73, 0xc5, 0x66, 0x10, 0x46, 0x64, 0x2e,
-	0x43, 0x01, 0x3f, 0xe7, 0x4c, 0x40, 0xe4, 0x6f, 0x9b, 0x83, 0x3a, 0xa8, 0x04, 0x9c, 0x93, 0xb9,
-	0x0c, 0x1c, 0x8c, 0x3f, 0x43, 0xfb, 0x02, 0x62, 0x20, 0x12, 0xc2, 0x0c, 0x04, 0x85, 0x54, 0x91,
-	0x31, 0x98, 0x13, 0xde, 0x31, 0xc4, 0x96, 0x43, 0x07, 0x25, 0xa8, 0x8f, 0xf9, 0x31, 0x3a, 0xb0,
-	0xd6, 0x29, 0xb8, 0x72, 0x42, 0x84, 0xa5, 0xd5, 0x2c, 0xcd, 0xc0, 0x81, 0x45, 0xbf, 0xd3, 0xa0,
-	0xa6, 0x7d, 0x85, 0x0e, 0x0b, 0x8f, 0xbc, 0x4d, 0xac, 0x1b, 0xe2, 0xbe, 0x0b, 0xb8, 0x49, 0xfd,
-	0x12, 0xf9, 0x05, 0x55, 0x09, 0x20, 0x32, 0x17, 0xf3, 0x90, 0x44, 0x91, 0x00, 0x29, 0xfd, 0x5d,
-	0x9d, 0xbf, 0x92, 0x39, 0x74, 0xf0, 0x13, 0x8b, 0xe2, 0x2f, 0x34, 0x53, 0x17, 0x01, 0x9d, 0x00,
-	0x9d, 0x86, 0x90, 0x71, 0x3a, 0x29, 0x6a, 0xb2, 0x61, 0x6b, 0xd2, 0xe0, 0x67, 0x1a, 0x7e, 0xaa,
-	0x51, 0x57, 0x93, 0x8f, 0xd0, 0xde, 0xc2, 0x7f, 0x09, 0x88, 0x69, 0x0c, 0xa1, 0xe0, 0x5c, 0xf9,
-	0x4d, 0x33, 0xdf, 0xfb, 0x25, 0xd8, 0x37, 0x58, 0xc0, 0xb9, 0xc2, 0xdf, 0xa0, 0x0f, 0x16, 0x1c,
-	0x1a, 0x13, 0x96, 0x84, 0x90, 0x46, 0xa1, 0x62, 0x09, 0x84, 0x79, 0xca, 0x2e, 0x7d, 0x6c, 0x66,
-	0x3c, 0x2c, 0x83, 0xce, 0x74, 0xcc, 0xd3, 0x34, 0x1a, 0xb2, 0x04, 0xbe, 0x4f, 0xd9, 0xe5, 0xf1,
-	0xff, 0xb7, 0x10, 0xee, 0xeb, 0xe4, 0x5d, 0x18, 0x6b, 0x75, 0x49, 0x4c, 0x52, 0x0a, 0xf8, 0x63,
-	0xd4, 0x9c, 0x91, 0x98, 0x45, 0x44, 0x71, 0x51, 0x6e, 0xdc, 0x74, 0xab, 0xa0, 0x51, 0x02, 0xc5,
-	0x96, 0x7b, 0xa8, 0xee, 0x1c, 0x4b, 0x28, 0x15, 0x39, 0x44, 0x2b, 0xf4, 0xa1, 0x9a, 0x65, 0x3e,
-	0xb1, 0x44, 0xdc, 0x47, 0x0d, 0x27, 0x65, 0x76, 0x43, 0x46, 0x31, 0xac, 0xd0, 0x80, 0x5c, 0x7f,
-	0x38, 0x2b, 0xa8, 0x95, 0x95, 0x19, 0x39, 0x88, 0x4c, 0xdf, 0x59, 0x69, 0x65, 0x67, 0x96, 0x88,
-	0x9f, 0x23, 0x5c, 0x6d, 0x64, 0x14, 0xd8, 0x0c, 0x22, 0xd3, 0x97, 0x96, 0x93, 0x6b, 0x56, 0x5a,
-	0x9d, 0x25, 0x1f, 0xff, 0xbe, 0x81, 0x76, 0x8a, 0xc2, 0x53, 0x44, 0x01, 0xfe, 0x10, 0xed, 0xd0,
-	0x5c, 0x08, 0x48, 0x55, 0xa8, 0x3d, 0x67, 0x12, 0x5e, 0x0b, 0xb6, 0xdd, 0xd8, 0x50, 0x9b, 0xef,
-	0x23, 0xd4, 0xb8, 0x69, 0x3e, 0x93, 0xed, 0x5a, 0xb0, 0x7b, 0xc3, 0x73, 0xf8, 0x04, 0x35, 0x62,
-	0x22, 0x95, 0x2b, 0x44, 0x53, 0x82, 0x26, 0x97, 0xeb, 0x41, 0x5d, 0x8f, 0x9b, 0x02, 0x34, 0xb5,
-	0x87, 0x3b, 0xa8, 0x55, 0x89, 0x5c, 0x54, 0xcf, 0x86, 0x89, 0x6e, 0x96, 0xd1, 0x45, 0xd5, 0xe8,
-	0xfe, 0x69, 0x2e, 0x87, 0xf0, 0x0d, 0x5b, 0xae, 0x92, 0x0e, 0x6c, 0xf8, 0xfd, 0x8a, 0x6d, 0x23,
-	0xfc, 0x03, 0xda, 0xb7, 0xaa, 0x37, 0x5c, 0x1b, 0x99, 0x66, 0xbe, 0x9c, 0xae, 0x5d, 0xd7, 0xe0,
-	0x0d, 0x57, 0x47, 0x78, 0x84, 0xee, 0x58, 0xe5, 0xc5, 0x11, 0x46, 0x4c, 0x2a, 0xc1, 0x46, 0xb9,
-	0x82, 0x55, 0xda, 0xfe, 0xa1, 0x91, 0xe9, 0x15, 0x2a, 0xe7, 0x0b, 0x11, 0x7d, 0x23, 0x57, 0x73,
-	0x62, 0xab, 0xc7, 0xdd, 0x02, 0x4b, 0xdd, 0xc8, 0x8b, 0x8c, 0x58, 0x2f, 0x1e, 0xff, 0xea, 0xa1,
-	0x46, 0xe5, 0x7e, 0xb1, 0x35, 0xf2, 0x0c, 0x35, 0xed, 0x34, 0xd5, 0x0d, 0x78, 0x2b, 0xce, 0x52,
-	0x5d, 0xf7, 0x3d, 0x54, 0x2f, 0x8a, 0x2e, 0x03, 0xc1, 0xb8, 0x75, 0xef, 0x46, 0x50, 0x73, 0xa3,
-	0x03, 0x33, 0xd8, 0x7d, 0xf6, 0xe2, 0xaa, 0xed, 0xbd, 0xbc, 0x6a, 0x7b, 0xff, 0x5e, 0xb5, 0xbd,
-	0xdf, 0xae, 0xdb, 0x6b, 0x2f, 0xaf, 0xdb, 0x6b, 0x7f, 0x5f, 0xb7, 0xd7, 0x7e, 0x7c, 0x3c, 0x66,
-	0x6a, 0x92, 0x8f, 0x4e, 0x29, 0x4f, 0x3a, 0xf6, 0xb5, 0xf4, 0x09, 0x9d, 0x10, 0x96, 0xba, 0x8f,
-	0xce, 0xec, 0xd1, 0x83, 0xce, 0x65, 0xf5, 0x9d, 0xa5, 0xe6, 0x19, 0xc8, 0xd1, 0xa6, 0x79, 0x21,
-	0x7d, 0xfa, 0x3a, 0x00, 0x00, 0xff, 0xff, 0xc3, 0x4f, 0xc8, 0x97, 0x89, 0x09, 0x00, 0x00,
+	// 1045 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x56, 0xcf, 0x4e, 0x1b, 0x47,
+	0x18, 0xc7, 0xc5, 0x10, 0x33, 0x60, 0x58, 0x26, 0x06, 0x16, 0xa2, 0x18, 0x4a, 0x15, 0x89, 0x46,
+	0x2d, 0x6e, 0xd2, 0xa6, 0xff, 0x4e, 0x2d, 0x10, 0x55, 0xa0, 0xa0, 0x38, 0x8b, 0x2b, 0x55, 0xbd,
+	0x8c, 0xc6, 0x3b, 0x1f, 0xf6, 0x94, 0xd9, 0x9d, 0xcd, 0xcc, 0xd8, 0x65, 0x5f, 0xa1, 0xa7, 0x3e,
+	0x46, 0x8f, 0x7d, 0x82, 0x9e, 0x73, 0xaa, 0x72, 0xac, 0x7a, 0x88, 0x2a, 0x38, 0xf4, 0x35, 0xa2,
+	0x99, 0x59, 0xaf, 0x1d, 0x72, 0x31, 0x17, 0xcb, 0xfe, 0x7e, 0x7f, 0x66, 0xe7, 0x9b, 0xdf, 0x7c,
+	0x5e, 0xf4, 0x80, 0x1a, 0xa9, 0xfb, 0xbc, 0x65, 0xe4, 0x05, 0xa4, 0x32, 0xe1, 0xb1, 0x6e, 0x0d,
+	0x1f, 0x4d, 0xfc, 0xda, 0xcf, 0x94, 0x34, 0x12, 0x37, 0x3c, 0x6d, 0x7f, 0x02, 0x18, 0x3e, 0xda,
+	0x5a, 0xa5, 0x09, 0x4f, 0x65, 0xcb, 0x7d, 0x7a, 0xe2, 0x56, 0xa3, 0x27, 0x7b, 0xd2, 0x7d, 0x6d,
+	0xd9, 0x6f, 0xbe, 0xba, 0xfb, 0x17, 0x42, 0xf3, 0x6d, 0xaa, 0x68, 0xa2, 0xf1, 0x33, 0x14, 0x24,
+	0x3c, 0x05, 0x45, 0x32, 0x29, 0x05, 0x31, 0xd2, 0x50, 0x11, 0x56, 0x76, 0x2a, 0x7b, 0x0b, 0x07,
+	0xbb, 0xaf, 0xde, 0x6c, 0xcf, 0xfc, 0xfb, 0x66, 0x7b, 0x2d, 0x96, 0x3a, 0x91, 0x5a, 0xb3, 0x8b,
+	0x7d, 0x2e, 0x5b, 0x09, 0x35, 0xfd, 0xfd, 0xe3, 0xd4, 0xfc, 0xf1, 0xff, 0x9f, 0x0f, 0x2b, 0xd1,
+	0xb2, 0xd3, 0xb6, 0xa5, 0x14, 0x1d, 0xab, 0xc4, 0x6d, 0x84, 0x33, 0x25, 0x7f, 0x81, 0xd8, 0x4c,
+	0xfa, 0x7d, 0x30, 0xb5, 0x5f, 0x50, 0xa8, 0xc7, 0x8e, 0x1d, 0xd4, 0x48, 0x78, 0x4f, 0x51, 0xc3,
+	0x65, 0x3a, 0xe9, 0x39, 0x3b, 0xb5, 0x27, 0x2e, 0xf5, 0x63, 0xd7, 0x2f, 0xd1, 0x46, 0x9f, 0x8a,
+	0x21, 0x4f, 0x7b, 0x84, 0xa7, 0x06, 0xd4, 0x90, 0x0a, 0xd2, 0x15, 0x32, 0xbe, 0xd0, 0xe1, 0xfc,
+	0x4e, 0x65, 0x6f, 0x36, 0x5a, 0x2b, 0xe0, 0xe3, 0x02, 0x3d, 0x70, 0xa0, 0x7d, 0x1a, 0x9e, 0x72,
+	0xc3, 0x47, 0x74, 0xa2, 0xe0, 0x57, 0xaa, 0x58, 0x78, 0x67, 0xfa, 0xa7, 0x29, 0xf4, 0xce, 0x30,
+	0x72, 0x6a, 0xfc, 0x03, 0x42, 0x99, 0xe2, 0x31, 0x90, 0x2e, 0xd5, 0x10, 0xd6, 0x9c, 0xd7, 0x5e,
+	0xe1, 0x75, 0xef, 0x7d, 0xaf, 0x67, 0xd0, 0xa3, 0x71, 0x7e, 0x04, 0xb1, 0x77, 0x5c, 0x70, 0xda,
+	0x03, 0xaa, 0x01, 0x1f, 0xa3, 0xc5, 0xa1, 0x14, 0x83, 0xa4, 0x70, 0x5a, 0xb8, 0xa5, 0x13, 0xf2,
+	0x62, 0x67, 0xf5, 0x02, 0xad, 0x18, 0x0e, 0x8a, 0x24, 0x03, 0x61, 0x78, 0x26, 0x38, 0xa8, 0x10,
+	0xdd, 0xd2, 0x6e, 0xd9, 0x1a, 0x9c, 0x96, 0x7a, 0xfc, 0x2d, 0xda, 0x8c, 0x65, 0xaa, 0x21, 0x1e,
+	0x18, 0x3e, 0x04, 0xc2, 0x68, 0xae, 0x89, 0x82, 0x97, 0x03, 0xae, 0x80, 0x85, 0x8b, 0x3b, 0x95,
+	0xbd, 0x7a, 0xb4, 0x31, 0x41, 0x38, 0xa2, 0xb9, 0x8e, 0x0a, 0x18, 0x7f, 0x81, 0xd6, 0x15, 0x08,
+	0xa0, 0x1a, 0x48, 0x06, 0x2a, 0x86, 0xd4, 0xd0, 0x1e, 0x90, 0x6e, 0xa6, 0xc3, 0x25, 0x27, 0x6c,
+	0x14, 0x68, 0xbb, 0x04, 0x0f, 0x32, 0x8d, 0x9f, 0xa0, 0x0d, 0x1f, 0xee, 0x91, 0x56, 0xf7, 0xa9,
+	0xf2, 0xb2, 0xba, 0x97, 0x39, 0x38, 0xf2, 0xe8, 0x99, 0x05, 0xad, 0xec, 0x1b, 0xb4, 0x39, 0x4a,
+	0xf1, 0xfb, 0xc2, 0x65, 0x27, 0x5c, 0x2f, 0x08, 0x37, 0xa5, 0x5f, 0xa3, 0x70, 0x24, 0x35, 0x0a,
+	0xa8, 0x1e, 0xa8, 0x9c, 0x50, 0xc6, 0x14, 0x68, 0x1d, 0xae, 0xd8, 0xfe, 0x95, 0xca, 0x4e, 0x01,
+	0x7f, 0xef, 0x51, 0xfc, 0x95, 0x55, 0xda, 0x10, 0xc4, 0x7d, 0x88, 0x2f, 0x08, 0x64, 0x32, 0xee,
+	0x8f, 0x32, 0x19, 0xf8, 0x4c, 0x3a, 0xfc, 0xd0, 0xc2, 0x4f, 0x2d, 0x5a, 0x64, 0x72, 0x1b, 0x2d,
+	0x32, 0x9a, 0x13, 0x0d, 0xb1, 0x4c, 0x99, 0x0e, 0xd7, 0x1d, 0x17, 0x31, 0x9a, 0x9f, 0xf9, 0x0a,
+	0x3e, 0x44, 0xcd, 0xf1, 0x15, 0x52, 0x70, 0xce, 0x85, 0x20, 0xa6, 0xaf, 0x40, 0xf7, 0xa5, 0x60,
+	0x6e, 0x4f, 0x6b, 0x6e, 0x4f, 0xf7, 0x4a, 0x56, 0xe4, 0x48, 0x9d, 0x11, 0xc7, 0x6e, 0xec, 0x23,
+	0x54, 0x67, 0x94, 0x8b, 0x9c, 0x68, 0x9a, 0x64, 0x02, 0x74, 0xd8, 0x70, 0xeb, 0x2c, 0xb9, 0xe2,
+	0x99, 0xaf, 0xe1, 0xc7, 0x68, 0x6d, 0xbc, 0x52, 0x02, 0xea, 0x42, 0x00, 0x51, 0x52, 0x9a, 0x70,
+	0xd5, 0x6d, 0xfd, 0x6e, 0x09, 0x9e, 0x3a, 0x2c, 0x92, 0xd2, 0xe0, 0xef, 0xd0, 0xfd, 0xb1, 0x26,
+	0x16, 0x94, 0x27, 0x04, 0x52, 0x46, 0x0c, 0x4f, 0x80, 0x0c, 0x52, 0x7e, 0x19, 0x62, 0xb7, 0xd0,
+	0x66, 0x49, 0x3a, 0xb4, 0x9c, 0xa7, 0x29, 0xeb, 0xf0, 0x04, 0x7e, 0x4c, 0xf9, 0x25, 0x06, 0x74,
+	0x7f, 0x48, 0x05, 0x67, 0xd4, 0x48, 0x45, 0x12, 0x9e, 0x12, 0x0d, 0xe2, 0x9c, 0x30, 0x10, 0xd0,
+	0x73, 0x82, 0xf0, 0xee, 0xd4, 0xb7, 0x73, 0xab, 0x34, 0x3a, 0xe5, 0xe9, 0x19, 0x88, 0xf3, 0xa3,
+	0xd2, 0xe5, 0xa4, 0x5a, 0xab, 0x06, 0x73, 0x27, 0xd5, 0xda, 0x5c, 0x30, 0xbf, 0xfb, 0x77, 0x15,
+	0x2d, 0x8d, 0x8e, 0xde, 0x50, 0x03, 0xf8, 0x43, 0xb4, 0x14, 0x0f, 0x94, 0x82, 0xd4, 0x10, 0x9b,
+	0x7a, 0x37, 0x42, 0xeb, 0xd1, 0x62, 0x51, 0xeb, 0xd8, 0xf8, 0x7f, 0x8c, 0x82, 0x9b, 0xf1, 0x77,
+	0x93, 0xb1, 0x1e, 0xad, 0xdc, 0x48, 0x3d, 0xde, 0x43, 0x81, 0xa0, 0xda, 0x14, 0x51, 0x70, 0x21,
+	0x70, 0x03, 0x6f, 0x36, 0x5a, 0xb6, 0x75, 0x17, 0x01, 0x77, 0xfa, 0xb8, 0x85, 0x1a, 0x13, 0xcc,
+	0x71, 0xd3, 0xaa, 0x8e, 0xbd, 0x5a, 0xb2, 0xcb, 0x66, 0x75, 0x50, 0xc3, 0x0d, 0x50, 0xf2, 0xce,
+	0xc5, 0x60, 0xe1, 0xdc, 0xf4, 0x13, 0xcc, 0xe9, 0x4f, 0x27, 0x2e, 0x0e, 0xc3, 0x3f, 0xa1, 0x75,
+	0xef, 0x7a, 0xe3, 0xde, 0x30, 0x37, 0x4e, 0xa7, 0xf3, 0xf5, 0xcf, 0xd5, 0x7e, 0xe7, 0x5e, 0x31,
+	0xfc, 0x09, 0xc2, 0xa3, 0xc6, 0xfa, 0xe4, 0xd9, 0xc6, 0xb9, 0xc9, 0x36, 0x1b, 0x05, 0x05, 0xe2,
+	0xe3, 0x77, 0x44, 0x73, 0x9b, 0xd2, 0x22, 0x9f, 0xc4, 0x48, 0x4b, 0x44, 0xae, 0xc1, 0x4b, 0x45,
+	0xb1, 0x63, 0x6b, 0x3e, 0xca, 0x39, 0x79, 0x39, 0xa0, 0x82, 0x9f, 0xf3, 0x62, 0xf6, 0xd4, 0x6c,
+	0x94, 0xf3, 0x17, 0xa3, 0x9a, 0x1d, 0x1d, 0xae, 0xb1, 0x5e, 0xc9, 0x88, 0xbf, 0x9b, 0xb6, 0xc1,
+	0x6e, 0xe2, 0xcc, 0x46, 0xae, 0xef, 0x7e, 0x65, 0xd6, 0xb6, 0xa0, 0x6d, 0x31, 0x7e, 0x88, 0x56,
+	0x27, 0x64, 0xc5, 0xd1, 0xd5, 0x9d, 0x60, 0x65, 0x2c, 0x70, 0x67, 0x77, 0x52, 0xad, 0xdd, 0x09,
+	0x6a, 0x27, 0xd5, 0x5a, 0x2d, 0x58, 0xd8, 0xfd, 0xad, 0x82, 0x82, 0x89, 0xbf, 0x04, 0x1f, 0xaa,
+	0xe7, 0x68, 0xd5, 0x77, 0x95, 0x71, 0x6d, 0x14, 0xef, 0x0e, 0x0c, 0xb0, 0x5b, 0xfc, 0x39, 0x07,
+	0x4e, 0x7c, 0x34, 0xd6, 0xe2, 0x07, 0x68, 0x79, 0xd4, 0xcc, 0x0c, 0x14, 0x97, 0xcc, 0x05, 0xb0,
+	0x1a, 0xd5, 0x8b, 0x6a, 0xdb, 0x15, 0x0f, 0x9e, 0xbf, 0xba, 0x6a, 0x56, 0x5e, 0x5f, 0x35, 0x2b,
+	0xff, 0x5d, 0x35, 0x2b, 0xbf, 0x5f, 0x37, 0x67, 0x5e, 0x5f, 0x37, 0x67, 0xfe, 0xb9, 0x6e, 0xce,
+	0xfc, 0xfc, 0xa4, 0xc7, 0x4d, 0x7f, 0xd0, 0xdd, 0x8f, 0x65, 0xd2, 0xf2, 0xaf, 0x20, 0x9f, 0xc6,
+	0x7d, 0xca, 0xd3, 0xe2, 0x47, 0x6b, 0xf8, 0xf8, 0xb3, 0xd6, 0xe5, 0xe4, 0xcb, 0x8b, 0xc9, 0x33,
+	0xd0, 0xdd, 0x79, 0xf7, 0xda, 0xf1, 0xf9, 0xdb, 0x00, 0x00, 0x00, 0xff, 0xff, 0x2c, 0xfb, 0x0c,
+	0xb0, 0xde, 0x08, 0x00, 0x00,
 }
 
 func (m *Params) Marshal() (dAtA []byte, err error) {
@@ -446,6 +518,39 @@ func (m *Params) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.DaySeconds != 0 {
+		i = encodeVarintTokenomics(dAtA, i, uint64(m.DaySeconds))
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0xb0
+	}
+	if m.MigrationRefillThresholdBps != 0 {
+		i = encodeVarintTokenomics(dAtA, i, uint64(m.MigrationRefillThresholdBps))
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0xa8
+	}
+	if m.DailySamples != 0 {
+		i = encodeVarintTokenomics(dAtA, i, uint64(m.DailySamples))
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0xa0
+	}
+	{
+		size := m.ValidatorMinSelfDelegation.Size()
+		i -= size
+		if _, err := m.ValidatorMinSelfDelegation.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintTokenomics(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x1
+	i--
+	dAtA[i] = 0x9a
 	if m.MigrationClaimEndTimeUnix != 0 {
 		i = encodeVarintTokenomics(dAtA, i, uint64(m.MigrationClaimEndTimeUnix))
 		i--
@@ -541,16 +646,6 @@ func (m *Params) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x30
 	}
-	if m.LockedRewardBps != 0 {
-		i = encodeVarintTokenomics(dAtA, i, uint64(m.LockedRewardBps))
-		i--
-		dAtA[i] = 0x28
-	}
-	if m.ImmediateRewardBps != 0 {
-		i = encodeVarintTokenomics(dAtA, i, uint64(m.ImmediateRewardBps))
-		i--
-		dAtA[i] = 0x20
-	}
 	{
 		size := m.MigrationPoolTotal.Size()
 		i -= size
@@ -584,76 +679,6 @@ func (m *Params) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *MinerLockedBalance) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *MinerLockedBalance) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *MinerLockedBalance) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	{
-		size := m.ImmediateReceived.Size()
-		i -= size
-		if _, err := m.ImmediateReceived.MarshalTo(dAtA[i:]); err != nil {
-			return 0, err
-		}
-		i = encodeVarintTokenomics(dAtA, i, uint64(size))
-	}
-	i--
-	dAtA[i] = 0x2a
-	{
-		size := m.LockedClaimed.Size()
-		i -= size
-		if _, err := m.LockedClaimed.MarshalTo(dAtA[i:]); err != nil {
-			return 0, err
-		}
-		i = encodeVarintTokenomics(dAtA, i, uint64(size))
-	}
-	i--
-	dAtA[i] = 0x22
-	{
-		size := m.LockedClaimable.Size()
-		i -= size
-		if _, err := m.LockedClaimable.MarshalTo(dAtA[i:]); err != nil {
-			return 0, err
-		}
-		i = encodeVarintTokenomics(dAtA, i, uint64(size))
-	}
-	i--
-	dAtA[i] = 0x1a
-	{
-		size := m.LockedAccrued.Size()
-		i -= size
-		if _, err := m.LockedAccrued.MarshalTo(dAtA[i:]); err != nil {
-			return 0, err
-		}
-		i = encodeVarintTokenomics(dAtA, i, uint64(size))
-	}
-	i--
-	dAtA[i] = 0x12
-	if len(m.ValidatorAddress) > 0 {
-		i -= len(m.ValidatorAddress)
-		copy(dAtA[i:], m.ValidatorAddress)
-		i = encodeVarintTokenomics(dAtA, i, uint64(len(m.ValidatorAddress)))
-		i--
-		dAtA[i] = 0xa
-	}
-	return len(dAtA) - i, nil
-}
-
 func (m *ReleaseState) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -674,26 +699,36 @@ func (m *ReleaseState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	{
-		size := m.TotalMinerLocked.Size()
-		i -= size
-		if _, err := m.TotalMinerLocked.MarshalTo(dAtA[i:]); err != nil {
-			return 0, err
-		}
-		i = encodeVarintTokenomics(dAtA, i, uint64(size))
+	if m.LastSampleBlock != 0 {
+		i = encodeVarintTokenomics(dAtA, i, uint64(m.LastSampleBlock))
+		i--
+		dAtA[i] = 0x68
 	}
-	i--
-	dAtA[i] = 0x42
-	{
-		size := m.TotalImmediateDistributed.Size()
-		i -= size
-		if _, err := m.TotalImmediateDistributed.MarshalTo(dAtA[i:]); err != nil {
-			return 0, err
-		}
-		i = encodeVarintTokenomics(dAtA, i, uint64(size))
+	if m.LastSampledPriceTime != 0 {
+		i = encodeVarintTokenomics(dAtA, i, uint64(m.LastSampledPriceTime))
+		i--
+		dAtA[i] = 0x60
 	}
-	i--
-	dAtA[i] = 0x3a
+	if m.DayQualified {
+		i--
+		if m.DayQualified {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x58
+	}
+	if m.SamplesToday != 0 {
+		i = encodeVarintTokenomics(dAtA, i, uint64(m.SamplesToday))
+		i--
+		dAtA[i] = 0x50
+	}
+	if m.CurrentSampleDay != 0 {
+		i = encodeVarintTokenomics(dAtA, i, uint64(m.CurrentSampleDay))
+		i--
+		dAtA[i] = 0x48
+	}
 	{
 		size := m.TotalProjectReleased.Size()
 		i -= size
@@ -798,12 +833,6 @@ func (m *Params) Size() (n int) {
 	n += 1 + l + sovTokenomics(uint64(l))
 	l = m.MigrationPoolTotal.Size()
 	n += 1 + l + sovTokenomics(uint64(l))
-	if m.ImmediateRewardBps != 0 {
-		n += 1 + sovTokenomics(uint64(m.ImmediateRewardBps))
-	}
-	if m.LockedRewardBps != 0 {
-		n += 1 + sovTokenomics(uint64(m.LockedRewardBps))
-	}
 	if m.HalvingIntervalBlocks != 0 {
 		n += 1 + sovTokenomics(uint64(m.HalvingIntervalBlocks))
 	}
@@ -841,27 +870,17 @@ func (m *Params) Size() (n int) {
 	if m.MigrationClaimEndTimeUnix != 0 {
 		n += 2 + sovTokenomics(uint64(m.MigrationClaimEndTimeUnix))
 	}
-	return n
-}
-
-func (m *MinerLockedBalance) Size() (n int) {
-	if m == nil {
-		return 0
+	l = m.ValidatorMinSelfDelegation.Size()
+	n += 2 + l + sovTokenomics(uint64(l))
+	if m.DailySamples != 0 {
+		n += 2 + sovTokenomics(uint64(m.DailySamples))
 	}
-	var l int
-	_ = l
-	l = len(m.ValidatorAddress)
-	if l > 0 {
-		n += 1 + l + sovTokenomics(uint64(l))
+	if m.MigrationRefillThresholdBps != 0 {
+		n += 2 + sovTokenomics(uint64(m.MigrationRefillThresholdBps))
 	}
-	l = m.LockedAccrued.Size()
-	n += 1 + l + sovTokenomics(uint64(l))
-	l = m.LockedClaimable.Size()
-	n += 1 + l + sovTokenomics(uint64(l))
-	l = m.LockedClaimed.Size()
-	n += 1 + l + sovTokenomics(uint64(l))
-	l = m.ImmediateReceived.Size()
-	n += 1 + l + sovTokenomics(uint64(l))
+	if m.DaySeconds != 0 {
+		n += 2 + sovTokenomics(uint64(m.DaySeconds))
+	}
 	return n
 }
 
@@ -887,10 +906,21 @@ func (m *ReleaseState) Size() (n int) {
 	n += 1 + l + sovTokenomics(uint64(l))
 	l = m.TotalProjectReleased.Size()
 	n += 1 + l + sovTokenomics(uint64(l))
-	l = m.TotalImmediateDistributed.Size()
-	n += 1 + l + sovTokenomics(uint64(l))
-	l = m.TotalMinerLocked.Size()
-	n += 1 + l + sovTokenomics(uint64(l))
+	if m.CurrentSampleDay != 0 {
+		n += 1 + sovTokenomics(uint64(m.CurrentSampleDay))
+	}
+	if m.SamplesToday != 0 {
+		n += 1 + sovTokenomics(uint64(m.SamplesToday))
+	}
+	if m.DayQualified {
+		n += 2
+	}
+	if m.LastSampledPriceTime != 0 {
+		n += 1 + sovTokenomics(uint64(m.LastSampledPriceTime))
+	}
+	if m.LastSampleBlock != 0 {
+		n += 1 + sovTokenomics(uint64(m.LastSampleBlock))
+	}
 	return n
 }
 
@@ -1045,44 +1075,6 @@ func (m *Params) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 4:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ImmediateRewardBps", wireType)
-			}
-			m.ImmediateRewardBps = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTokenomics
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.ImmediateRewardBps |= uint32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 5:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LockedRewardBps", wireType)
-			}
-			m.LockedRewardBps = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTokenomics
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.LockedRewardBps |= uint32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
 		case 6:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field HalvingIntervalBlocks", wireType)
@@ -1416,59 +1408,9 @@ func (m *Params) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
-		default:
-			iNdEx = preIndex
-			skippy, err := skipTokenomics(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
-				return ErrInvalidLengthTokenomics
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *MinerLockedBalance) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowTokenomics
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: MinerLockedBalance: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: MinerLockedBalance: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
+		case 19:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ValidatorAddress", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field ValidatorMinSelfDelegation", wireType)
 			}
 			var stringLen uint64
 			for shift := uint(0); ; shift += 7 {
@@ -1496,13 +1438,15 @@ func (m *MinerLockedBalance) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.ValidatorAddress = string(dAtA[iNdEx:postIndex])
-			iNdEx = postIndex
-		case 2:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LockedAccrued", wireType)
+			if err := m.ValidatorMinSelfDelegation.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
-			var stringLen uint64
+			iNdEx = postIndex
+		case 20:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DailySamples", wireType)
+			}
+			m.DailySamples = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowTokenomics
@@ -1512,31 +1456,16 @@ func (m *MinerLockedBalance) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				m.DailySamples |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthTokenomics
+		case 21:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MigrationRefillThresholdBps", wireType)
 			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthTokenomics
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if err := m.LockedAccrued.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 3:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LockedClaimable", wireType)
-			}
-			var stringLen uint64
+			m.MigrationRefillThresholdBps = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowTokenomics
@@ -1546,31 +1475,16 @@ func (m *MinerLockedBalance) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				m.MigrationRefillThresholdBps |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthTokenomics
+		case 22:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DaySeconds", wireType)
 			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthTokenomics
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if err := m.LockedClaimable.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 4:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LockedClaimed", wireType)
-			}
-			var stringLen uint64
+			m.DaySeconds = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowTokenomics
@@ -1580,60 +1494,11 @@ func (m *MinerLockedBalance) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				m.DaySeconds |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthTokenomics
-			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthTokenomics
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if err := m.LockedClaimed.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 5:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ImmediateReceived", wireType)
-			}
-			var stringLen uint64
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTokenomics
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthTokenomics
-			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthTokenomics
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if err := m.ImmediateReceived.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipTokenomics(dAtA[iNdEx:])
@@ -1828,11 +1693,11 @@ func (m *ReleaseState) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 7:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field TotalImmediateDistributed", wireType)
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CurrentSampleDay", wireType)
 			}
-			var stringLen uint64
+			m.CurrentSampleDay = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowTokenomics
@@ -1842,31 +1707,16 @@ func (m *ReleaseState) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				m.CurrentSampleDay |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthTokenomics
+		case 10:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SamplesToday", wireType)
 			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthTokenomics
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if err := m.TotalImmediateDistributed.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 8:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field TotalMinerLocked", wireType)
-			}
-			var stringLen uint64
+			m.SamplesToday = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowTokenomics
@@ -1876,26 +1726,69 @@ func (m *ReleaseState) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				m.SamplesToday |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthTokenomics
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DayQualified", wireType)
 			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthTokenomics
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTokenomics
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
 			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
+			m.DayQualified = bool(v != 0)
+		case 12:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LastSampledPriceTime", wireType)
 			}
-			if err := m.TotalMinerLocked.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
+			m.LastSampledPriceTime = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTokenomics
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LastSampledPriceTime |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
 			}
-			iNdEx = postIndex
+		case 13:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LastSampleBlock", wireType)
+			}
+			m.LastSampleBlock = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTokenomics
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LastSampleBlock |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipTokenomics(dAtA[iNdEx:])

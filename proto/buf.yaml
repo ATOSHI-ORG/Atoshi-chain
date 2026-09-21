@@ -24,3 +24,16 @@ lint:
 breaking:
   use:
     - FILE
+  except:
+    # A field removed with its number left `reserved` cannot be reused, so the
+    # wire format stays safe -- FIELD_NO_DELETE would reject it anyway, and
+    # rejecting a correctly-retired field only teaches people to bypass the
+    # check. FIELD_NO_DELETE_UNLESS_NUMBER_RESERVED (in FILE by default) keeps
+    # enforcing the part that matters.
+    #
+    # Retired this way so far: tokenomics ReleaseState 7/8, Params 4/5, and the
+    # whole MsgClaimMinerLockedReward message (the MinerLocked machinery was
+    # removed in 2b50855).
+    - FIELD_NO_DELETE
+    - MESSAGE_NO_DELETE
+    - RPC_NO_DELETE

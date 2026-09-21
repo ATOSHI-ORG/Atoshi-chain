@@ -32,7 +32,13 @@ var (
 		encoding.MakeConfig().TxConfig,
 	)
 )
-var feePayerAddress = "evmos17xpfvakm2amg962yls6f84z3kell8c5ljcjw34"
+
+// Inherited from the upstream evmos fixture and re-encoded under the atoshi
+// HRP. The 20 address bytes are unchanged; only the bech32 checksum was
+// recomputed, which a longer HRP requires. Do not hand-edit the prefix here --
+// swapping "evmos" for "atoshi" without recomputing yields a string that
+// AccAddressFromBech32 rejects.
+var feePayerAddress = "atoshi17xpfvakm2amg962yls6f84z3kell8c5lvfmwaj"
 
 type TestCaseStruct struct {
 	txBuilder              client.TxBuilder
@@ -68,8 +74,14 @@ func TestLedgerPreprocessing(t *testing.T) {
 		require.True(t, ok)
 		require.True(t, len(hasExtOptsTx.GetExtensionOptions()) == 1)
 
+		// Derived from chainID rather than hardcoded. PreprocessLedgerTx parses
+		// the EVM chain id out of the cosmos chain id, so a literal here only
+		// held for evmos's 9000 and silently went stale at the fork.
+		typedDataChainID, err := types.ParseChainID(chainID)
+		require.NoError(t, err)
+
 		expectedExt := types.ExtensionOptionsWeb3Tx{
-			TypedDataChainID: 9000,
+			TypedDataChainID: typedDataChainID.Uint64(),
 			FeePayer:         feePayerAddress,
 			FeePayerSig:      tc.expectedSignatureBytes,
 		}
@@ -211,7 +223,11 @@ func createPopulatedTestCase(t *testing.T) TestCaseStruct {
 
 	msgSend := banktypes.MsgSend{
 		FromAddress: feePayerAddress,
-		ToAddress:   "evmos12luku6uxehhak02py4rcz65zu0swh7wjun6msa",
+		// Same 20 bytes as the upstream fixture, re-encoded under the atoshi HRP.
+		// Note the upstream string's own checksum was already invalid; nothing
+		// parses this field (SetMsgs does not validate addresses), so it went
+		// unnoticed. Recomputed here so the fixture is at least self-consistent.
+		ToAddress: "atoshi12luku6uxehhak02py4rcz65zu0swh7wjmdvh9s",
 		Amount: sdk.NewCoins(
 			sdk.NewCoin(
 				denom,

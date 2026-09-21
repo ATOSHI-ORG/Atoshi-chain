@@ -32,7 +32,7 @@ cd "$ROOT"
 CHAIN_ID="atoshi_88388-1"
 HOME_DIR="$(mktemp -d /tmp/atoshid-itest.XXXXXX)"
 KEYRING="test"
-DENOM="aatos"
+DENOM="liao"
 # Use NON-default ports so we don't collide with a running local_node.sh
 # instance on the same machine. Shift everything by +30 from defaults.
 RPC_PORT=26687     # CometBFT RPC      (default 26657)

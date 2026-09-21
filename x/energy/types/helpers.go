@@ -11,23 +11,21 @@ import (
 //
 // The numbers track the design doc: 30,000 ATOS holding gives one
 // 50,000-gas free transfer per 24h; 1M ATOS holding gives one 800k-gas
-// deploy every 10 days. Threshold ATOS is expressed in aatos
-// (1 ATOS = 10^18 aatos).
+// deploy every 10 days. Threshold ATOS is expressed in liao
+// (1 ATOS = 10^18 liao).
 func DefaultParams() Params {
-	atosUnit := math.NewIntWithDecimal(1, 18) // 1 ATOS in aatos
+	atosUnit := math.NewIntWithDecimal(1, 18) // 1 ATOS in liao
 	return Params{
-		EnergyEnabled:              true,
-		TxEnergyHoldingThreshold:   atosUnit.Mul(math.NewInt(30_000)),
-		TxEnergyPerThreshold:       50_000,
-		TxEnergyMaxAccrueWindow:    86_400, // 24h
-		DeployHoldingThreshold:     atosUnit.Mul(math.NewInt(1_000_000)),
-		DeployEnergyCapacity:       800_000,
-		DeployRecoverDays:          10,
-		InsufficientGasPrice:       math.LegacyNewDecWithPrec(21, 4), // 0.0021
+		EnergyEnabled:            true,
+		TxEnergyHoldingThreshold: atosUnit.Mul(math.NewInt(30_000)),
+		TxEnergyPerThreshold:     50_000,
+		TxEnergyMaxAccrueWindow:  86_400, // 24h
+		DeployHoldingThreshold:   atosUnit.Mul(math.NewInt(1_000_000)),
+		DeployEnergyCapacity:     800_000,
+		DeployRecoverDays:        10,
+		InsufficientGasPrice:     math.LegacyNewDecWithPrec(21, 4), // 0.0021
 		SubsidizedMsgTypeUrls: []string{
 			"/atoshi.tokenomics.v1.MsgClaimMigrationTokens",
-			"/atoshi.tokenomics.v1.MsgClaimMinerLockedReward",
-			"/atoshi.tokenomics.v1.MsgClaimProjectTreasuryReward",
 			"/atoshi.oracle.v1.MsgReportPrice",
 			// Delegate / undelegate of energy itself MUST be subsidized:
 			// the AnteHandler greedily reserves up to gas_limit worth of

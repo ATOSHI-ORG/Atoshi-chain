@@ -31,6 +31,8 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/module"
 	"github.com/cosmos/cosmos-sdk/x/genutil"
 	genutilcli "github.com/cosmos/cosmos-sdk/x/genutil/client/cli"
+
+	"github.com/atoshi-chain/atoshi/v20/app"
 )
 
 type printInfo struct {
@@ -136,7 +138,14 @@ func InitCmd(mbm module.BasicManager, defaultNodeHome string) *cobra.Command {
 				sdk.DefaultBondDenom = defaultDenom
 			}
 
-			appState, err := json.MarshalIndent(mbm.DefaultGenesis(cdc), "", " ")
+			// Both genesis producers in this binary -- here and testnet.go --
+			// build from mbm.DefaultGenesis and so bypass app.DefaultGenesis.
+			// The native coin's bank denom metadata has to be added explicitly
+			// on each path; without it the ERC20 precompile's decimals(),
+			// name() and symbol() revert for the native token pair.
+			defaultGenesis := app.WithNativeDenomMetadataOf(mbm.DefaultGenesis(cdc), cdc, chainID)
+
+			appState, err := json.MarshalIndent(defaultGenesis, "", " ")
 			if err != nil {
 				return errors.Wrap(err, "Failed to marshal default genesis state")
 			}

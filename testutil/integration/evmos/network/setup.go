@@ -4,6 +4,7 @@
 package network
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -42,6 +43,7 @@ import (
 	infltypes "github.com/atoshi-chain/atoshi/v20/x/inflation/v1/types"
 
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
+	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
 
 // genSetupFn is the type for the module genesis setup functions
@@ -458,6 +460,26 @@ func setDefaultGovGenesisState(evmosApp *app.Atoshi, genesisState evmostypes.Gen
 	minDepositAmt := sdkmath.NewInt(1e18).Quo(evmtypes.GetEVMCoinDecimals().ConversionFactor())
 	updatedParams.MinDeposit = sdktypes.NewCoins(sdktypes.NewCoin(overwriteParams.denom, minDepositAmt))
 	updatedParams.ExpeditedMinDeposit = sdktypes.NewCoins(sdktypes.NewCoin(overwriteParams.denom, minDepositAmt))
+
+	// Quorum is zero for tests.
+	//
+	// createDelegations gives only the FIRST genesis account any stake, and only
+	// ONE SHARE per validator, while each validator bonds 1e18. A proposer's
+	// voting power is therefore about 3 out of 3e18 — one part in 1e18 — so the
+	// default 33.4% quorum can never be reached and every proposal ends up
+	// REJECTED for want of quorum. utils.ApproveProposal cannot do what its name
+	// says, which is why every test that reaches params through governance fails.
+	//
+	// Zero rather than a small value: at 1e-18 the margin is a single unit of
+	// LegacyDec precision, so any change to the validator count or bonded amount
+	// would silently break it again. Raising the delegation instead would be the
+	// alternative, but several tests model the bonded total as exactly
+	// 1 * numValidators and would all need updating.
+	//
+	// The threshold is left at its default. Only Yes votes are ever cast, so it is
+	// satisfied on its own and still fails a proposal that was genuinely rejected.
+	updatedParams.Quorum = sdkmath.LegacyZeroDec().String()
+
 	govGen.Params = updatedParams
 	genesisState[govtypes.ModuleName] = evmosApp.AppCodec().MustMarshalJSON(govGen)
 	return genesisState
@@ -495,7 +517,40 @@ func newDefaultGenesisState(evmosApp *app.Atoshi, params defaultGenesisParams) e
 	genesisState = setDefaultSlashingGenesisState(evmosApp, genesisState, params.slashing)
 	genesisState = setDefaultFeeMarketGenesisState(evmosApp, genesisState, params.feeMarket)
 	genesisState = setDefaultErc20GenesisState(evmosApp, genesisState)
+	genesisState = setDefaultTokenomicsGenesisState(evmosApp, genesisState)
 
+	return genesisState
+}
+
+// setDefaultTokenomicsGenesisState disables the chain-wide validator self-stake
+// floor for integration networks.
+//
+// The production default is 100 million ATOS. Every suite that creates a
+// validator does so with a few coins, so leaving the floor on rejects those
+// MsgCreateValidator calls in the AnteHandler -- it broke x/staking/keeper,
+// x/evm/keeper and precompiles/staking with "validator min_self_delegation must
+// be at least 100000000000000000000000000, got 1".
+//
+// Turning it off here rather than restating 1e26 across those suites keeps the
+// floor a mainnet policy question and leaves the suites testing what they are
+// about. The decorator itself is covered by unit tests in
+// app/ante/cosmos/min_self_delegation_test.go, and genesis gentxs by
+// docs/check_genesis.py; a test wanting the floor on can set the param through
+// the custom-genesis hook.
+func setDefaultTokenomicsGenesisState(_ *app.Atoshi, genesisState evmostypes.GenesisState) evmostypes.GenesisState {
+	tokenomicsGen := tokenomicstypes.DefaultGenesisState()
+	tokenomicsGen.Params.ValidatorMinSelfDelegation = sdkmath.ZeroInt()
+
+	// Marshaled with encoding/json, NOT AppCodec().MustMarshalJSON, because
+	// x/tokenomics' own module.go uses encoding/json for both DefaultGenesis and
+	// InitGenesis. Proto3 JSON encodes int64 as a string, so codec-marshaled
+	// bytes fail the module's plain json.Unmarshal with "cannot unmarshal string
+	// into Go struct field Params.params.halving_interval_blocks of type int64".
+	bz, err := json.Marshal(tokenomicsGen)
+	if err != nil {
+		panic(err)
+	}
+	genesisState[tokenomicstypes.ModuleName] = bz
 	return genesisState
 }
 

@@ -49,7 +49,7 @@
 |----------|-------|
 | **Chain Name** | Atoshi |
 | **Native Token** | ATOSHI (ATOS) |
-| **Base Denom** | `aatos` |
+| **Base Denom** | `liao` |
 | **Display Denom** | `atos` |
 | **Decimals** | 18 |
 | **Total Supply** | 10,000,000,000,000 ATOS (10 Trillion) |
@@ -268,7 +268,7 @@ Initialize a new chain with pre-mined tokens:
 # Or manually:
 atoshid init my-node --chain-id atoshi_88188-1
 atoshid keys add preminer
-atoshid genesis add-genesis-account <address> 70000000000000000000000000000aatos
+atoshid genesis add-genesis-account <address> 70000000000000000000000000000liao
 ```
 
 ### Environment Variables

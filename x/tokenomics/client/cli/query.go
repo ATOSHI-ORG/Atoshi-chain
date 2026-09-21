@@ -24,7 +24,6 @@ func GetQueryCmd() *cobra.Command {
 		GetCmdQueryCirculatingSupply(),
 		GetCmdQueryBlockReward(),
 		GetCmdQueryProjectClaimable(),
-		GetCmdQueryMinerLockedBalance(),
 	)
 	return cmd
 }
@@ -109,21 +108,6 @@ func GetCmdQueryProjectClaimable() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runQuery(cmd, func(qc types.QueryClient) (*types.QueryProjectClaimableResponse, error) {
 				return qc.ProjectClaimable(cmd.Context(), &types.QueryProjectClaimableRequest{})
-			})
-		},
-	}
-	flags.AddQueryFlagsToCmd(cmd)
-	return cmd
-}
-
-func GetCmdQueryMinerLockedBalance() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "miner-locked-balance VALIDATOR_ADDR",
-		Short: "Query a validator's locked-pool accrued / claimable / claimed amounts",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runQuery(cmd, func(qc types.QueryClient) (*types.QueryMinerLockedBalanceResponse, error) {
-				return qc.MinerLockedBalance(cmd.Context(), &types.QueryMinerLockedBalanceRequest{ValidatorAddress: args[0]})
 			})
 		},
 	}

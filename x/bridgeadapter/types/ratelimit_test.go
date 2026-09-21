@@ -1,0 +1,433 @@
+package types_test
+
+import (
+	"testing"
+
+	"cosmossdk.io/math"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/stretchr/testify/require"
+
+	"github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types"
+)
+
+func atos(n int64) math.Int { return math.NewIntWithDecimal(n, 18) }
+
+// poolTotal is the configured migration pool: 300 billion ATOS.
+var poolTotal = math.NewIntWithDecimal(3, 29)
+
+func limitParams() types.Params {
+	p := types.DefaultParams()
+	p.GlobalDailyCap = atos(1_000_000) // fixed leg well below the percentage leg
+	p.GlobalDailyCapBpsOfPool = 500    // 5%
+	p.PerAddressDailyBps = 200         // 2% of global
+	p.MinTransferOut = atos(1_000)     //
+	p.SmallTransferThreshold = atos(10_000)
+	p.SmallQuotaBps = 2000 // 20% reserved
+	p.CrisisPoolBps = 1000 // 10%
+	return p
+}
+
+// TestResolveLimits_TakesTheSmallerLeg is what makes the cap self-tightening:
+// as the pool drains the percentage leg falls below the fixed one and starts
+// binding, with no proposal needed.
+func TestResolveLimits_TakesTheSmallerLeg(t *testing.T) {
+	p := limitParams()
+
+	// Full pool: 5% is 15 billion, far above the 1M fixed cap, so the fixed leg
+	// binds.
+	l := types.ResolveLimits(p, poolTotal, poolTotal)
+	require.Equal(t, atos(1_000_000).String(), l.Global.String())
+
+	// Nearly empty pool: 5% of 10M ATOS is 500k, which now binds instead.
+	l = types.ResolveLimits(p, atos(10_000_000), poolTotal)
+	require.Equal(t, atos(500_000).String(), l.Global.String())
+}
+
+func TestResolveLimits_DerivedFigures(t *testing.T) {
+	l := types.ResolveLimits(limitParams(), poolTotal, poolTotal)
+
+	require.Equal(t, atos(1_000_000).String(), l.Global.String())
+	require.Equal(t, atos(800_000).String(), l.LargeBudget.String(),
+		"20%% of the cap is reserved for small transfers")
+	require.Equal(t, atos(20_000).String(), l.PerAddress.String(), "2%% of the cap per address")
+	require.False(t, l.CrisisMode, "a full pool is not in crisis")
+}
+
+// TestSmallTransferReserve_CannotBeEatenByWhales is the layer that matters most
+// for ordinary holders. Large exits are capped at the global cap minus the
+// reserve, so the reserve is still there after they have taken everything they
+// can — which is precisely when small holders want out.
+func TestSmallTransferReserve_CannotBeEatenByWhales(t *testing.T) {
+	l := types.ResolveLimits(limitParams(), poolTotal, poolTotal)
+
+	// Whales exhaust the entire large budget.
+	usedLarge := l.LargeBudget
+	used := l.LargeBudget
+
+	// One more large transfer is refused even though the global cap has room.
+	err := types.CheckOutbound(l, atos(50_000), used, usedLarge, math.ZeroInt())
+	require.ErrorIs(t, err, types.ErrLargeQuotaReached)
+
+	// A small transfer still goes through, drawing on the reserve.
+	require.NoError(t, types.CheckOutbound(l, atos(10_000), used, usedLarge, math.ZeroInt()))
+
+	// And the reserve is exactly the configured 20%: small transfers can consume
+	// the remainder up to the global cap, then stop.
+	used = l.Global.Sub(atos(10_000))
+	require.NoError(t, types.CheckOutbound(l, atos(10_000), used, usedLarge, math.ZeroInt()))
+	require.ErrorIs(t,
+		types.CheckOutbound(l, atos(10_001), used, usedLarge, math.ZeroInt()),
+		types.ErrDailyCapReached)
+}
+
+func TestCheckOutbound_GlobalCap(t *testing.T) {
+	l := types.ResolveLimits(limitParams(), poolTotal, poolTotal)
+
+	require.NoError(t, types.CheckOutbound(l, atos(10_000), l.Global.Sub(atos(10_000)), math.ZeroInt(), math.ZeroInt()))
+	require.ErrorIs(t,
+		types.CheckOutbound(l, atos(10_001), l.Global.Sub(atos(10_000)), math.ZeroInt(), math.ZeroInt()),
+		types.ErrDailyCapReached)
+}
+
+func TestCheckOutbound_PerAddressCap(t *testing.T) {
+	l := types.ResolveLimits(limitParams(), poolTotal, poolTotal)
+
+	// The address has used its whole 2% allowance; the global cap is untouched.
+	require.ErrorIs(t,
+		types.CheckOutbound(l, atos(1_000), math.ZeroInt(), math.ZeroInt(), l.PerAddress),
+		types.ErrAddressCapReached)
+
+	// A different address with no usage is unaffected.
+	require.NoError(t, types.CheckOutbound(l, atos(1_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
+}
+
+func TestCheckOutbound_MinimumTransfer(t *testing.T) {
+	l := types.ResolveLimits(limitParams(), poolTotal, poolTotal)
+
+	require.ErrorIs(t,
+		types.CheckOutbound(l, atos(999), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		types.ErrBelowMinimum)
+	require.NoError(t, types.CheckOutbound(l, atos(1_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
+}
+
+// TestCrisisMode_OnlySmallTransfers — below the floor the remaining liquidity
+// should serve many small holders rather than one large exit.
+func TestCrisisMode_OnlySmallTransfers(t *testing.T) {
+	p := limitParams()
+
+	// 9% of the pool: below the 10% crisis floor.
+	poolBalance := poolTotal.MulRaw(9).QuoRaw(100)
+	l := types.ResolveLimits(p, poolBalance, poolTotal)
+	require.True(t, l.CrisisMode)
+
+	require.ErrorIs(t,
+		types.CheckOutbound(l, atos(50_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		types.ErrCrisisMode)
+	require.NoError(t, types.CheckOutbound(l, atos(10_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		"small transfers must keep working in crisis mode")
+
+	// Exactly at the floor is not crisis.
+	l = types.ResolveLimits(p, poolTotal.MulRaw(10).QuoRaw(100), poolTotal)
+	require.False(t, l.CrisisMode)
+}
+
+func TestCheckOutbound_ZeroGlobalCapThrottlesEverything(t *testing.T) {
+	p := limitParams()
+	p.GlobalDailyCap = math.ZeroInt()
+	p.GlobalDailyCapBpsOfPool = 0
+	l := types.ResolveLimits(p, poolTotal, poolTotal)
+
+	require.ErrorIs(t,
+		types.CheckOutbound(l, atos(1_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		types.ErrDailyCapReached)
+}
+
+func TestCheckOutbound_RejectsNonPositive(t *testing.T) {
+	l := types.ResolveLimits(limitParams(), poolTotal, poolTotal)
+	for _, a := range []math.Int{math.ZeroInt(), math.NewInt(-1), {}} {
+		require.ErrorIs(t, types.CheckOutbound(l, a, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+			types.ErrInvalidAmount)
+	}
+}
+
+// ----- day rollover -----
+
+func TestDayOf(t *testing.T) {
+	require.Equal(t, int64(0), types.DayOf(0))
+	require.Equal(t, int64(0), types.DayOf(types.SecondsPerDay-1))
+	require.Equal(t, int64(1), types.DayOf(types.SecondsPerDay))
+	require.Equal(t, int64(19_675), types.DayOf(1_700_000_000))
+	require.Equal(t, int64(0), types.DayOf(-1), "a negative clock must not produce a negative day key")
+}
+
+// ----- peg -----
+
+// TestAtosToErc20_RefusesRemainder — truncating would lock the full ATOS here
+// while asking Ethereum for less, quietly confiscating the difference.
+func TestAtosToErc20_RefusesRemainder(t *testing.T) {
+	got, err := types.AtosToErc20(math.NewInt(500), 100)
+	require.NoError(t, err)
+	require.Equal(t, "5", got.String())
+
+	_, err = types.AtosToErc20(math.NewInt(501), 100)
+	require.ErrorIs(t, err, types.ErrIndivisibleAmount)
+
+	_, err = types.AtosToErc20(math.NewInt(99), 100)
+	require.ErrorIs(t, err, types.ErrIndivisibleAmount,
+		"an amount below the peg has no ERC20 representation at all")
+}
+
+func TestPegRoundTrip(t *testing.T) {
+	for _, n := range []int64{100, 1_000, 1_000_000} {
+		a := atos(n)
+		e, err := types.AtosToErc20(a, types.DefaultAtosPerErc20)
+		require.NoError(t, err)
+		require.Equal(t, a.String(), types.Erc20ToAtos(e, types.DefaultAtosPerErc20).String())
+	}
+}
+
+// ----- asset payload -----
+
+func TestAssetPayloadRoundTrip(t *testing.T) {
+	recipient := make([]byte, 32)
+	copy(recipient[12:], []byte("twenty-byte-account!"))
+
+	body, err := types.BuildAssetPayload(recipient, math.NewInt(12_345))
+	require.NoError(t, err)
+	require.Len(t, body, types.AssetPayloadLen)
+
+	gotRecipient, gotAmount, err := types.ParseAssetPayload(body)
+	require.NoError(t, err)
+	require.Equal(t, recipient, gotRecipient)
+	require.Equal(t, "12345", gotAmount.String())
+}
+
+func TestParseAssetPayload_RejectsWrongLength(t *testing.T) {
+	for _, size := range []int{0, 32, 63, 65} {
+		_, _, err := types.ParseAssetPayload(make([]byte, size))
+		require.ErrorIs(t, err, types.ErrInvalidPayload)
+	}
+}
+
+// TestCosmosAddressFromHyperlane_RequiresZeroPadding is the guard against
+// releasing funds to a coerced address. A 32-byte address in some other chain's
+// format would otherwise be silently truncated into a valid-looking Cosmos
+// account, and the ATOS would go there unrecoverably.
+func TestCosmosAddressFromHyperlane_RequiresZeroPadding(t *testing.T) {
+	good := make([]byte, 32)
+	copy(good[12:], []byte("twenty-byte-account!"))
+	got, err := types.CosmosAddressFromHyperlane(good)
+	require.NoError(t, err)
+	require.Equal(t, sdk.AccAddress([]byte("twenty-byte-account!")).String(), got.String())
+
+	// Non-zero high bytes: not a Cosmos account.
+	bad := make([]byte, 32)
+	copy(bad, []byte("0123456789abcdef0123456789abcdef"))
+	_, err = types.CosmosAddressFromHyperlane(bad)
+	require.ErrorIs(t, err, types.ErrInvalidPayload)
+
+	// All zeros: the zero address.
+	_, err = types.CosmosAddressFromHyperlane(make([]byte, 32))
+	require.ErrorIs(t, err, types.ErrInvalidPayload)
+
+	// Wrong width.
+	_, err = types.CosmosAddressFromHyperlane(make([]byte, 20))
+	require.ErrorIs(t, err, types.ErrInvalidPayload)
+}
+
+// ----- params -----
+
+func TestParams_BridgeEnablingRequiresConfiguration(t *testing.T) {
+	p := types.DefaultParams()
+	require.False(t, p.BridgeEnabled, "the bridge must not be live before the Ethereum side exists")
+	require.NoError(t, p.Validate())
+
+	p.BridgeEnabled = true
+	require.ErrorContains(t, p.Validate(), "mailbox_id and remote_bridge_vault must be set",
+		"with no counterparty the inbound sender check has nothing to compare against")
+
+	p.MailboxId = make([]byte, types.HexAddressLen)
+	p.RemoteBridgeVault = make([]byte, types.HexAddressLen)
+	require.NoError(t, p.Validate())
+}
+
+// TestParams_FullSmallReserveIsRejected — a 100% reserve leaves large transfers
+// no budget at all, which is a silent ban rather than a limit.
+func TestParams_FullSmallReserveIsRejected(t *testing.T) {
+	p := types.DefaultParams()
+	p.SmallQuotaBps = types.BpsDenominator
+	require.ErrorContains(t, p.Validate(), "large transfers are banned outright")
+
+	p.SmallQuotaBps = types.BpsDenominator - 1
+	require.NoError(t, p.Validate())
+}
+
+func TestParams_BpsFieldsBounded(t *testing.T) {
+	for _, name := range []string{"global", "address", "small", "crisis"} {
+		p := types.DefaultParams()
+		switch name {
+		case "global":
+			p.GlobalDailyCapBpsOfPool = types.BpsDenominator + 1
+		case "address":
+			p.PerAddressDailyBps = types.BpsDenominator + 1
+		case "small":
+			p.SmallQuotaBps = types.BpsDenominator + 1
+		case "crisis":
+			p.CrisisPoolBps = types.BpsDenominator + 1
+		}
+		require.Error(t, p.Validate(), "%s bps above 100%% must be rejected", name)
+	}
+}
+
+// TestDefaultParams_LimitsAreSane checks the shipped defaults resolve to
+// something usable against the real pool size.
+func TestDefaultParams_LimitsAreSane(t *testing.T) {
+	p := types.DefaultParams()
+	require.NoError(t, p.Validate())
+
+	l := types.ResolveLimits(p, poolTotal, poolTotal)
+	require.True(t, l.Global.IsPositive())
+	require.True(t, l.LargeBudget.LT(l.Global), "some of the cap must be reserved")
+	require.True(t, l.PerAddress.LT(l.Global), "one address must not be able to take the day")
+	require.True(t, l.MinTransfer.IsPositive())
+	require.True(t, l.SmallThreshold.IsPositive())
+	require.False(t, l.CrisisMode)
+
+	// The fixed leg binds at full pool: 5 billion, against 5% of 300 billion.
+	require.Equal(t, math.NewIntWithDecimal(5, 27).String(), l.Global.String())
+}
+
+func TestCheckInbound_GlobalCapOnly(t *testing.T) {
+	l := types.Limits{Inbound: math.NewInt(1_000)}
+
+	require.NoError(t, types.CheckInbound(l, math.NewInt(600), math.ZeroInt()))
+	require.NoError(t, types.CheckInbound(l, math.NewInt(400), math.NewInt(600)),
+		"exactly reaching the cap is allowed")
+	require.ErrorIs(t,
+		types.CheckInbound(l, math.NewInt(1), math.NewInt(1_000)),
+		types.ErrInboundCapReached)
+}
+
+// TestCheckInbound_UnsetCapMeansUnlimited is the opposite default from outbound,
+// and it is deliberate.
+//
+// Outbound treats a zero Global as "fully throttled": a chain with no outbound
+// cap configured should not be paying out. Inbound fails OPEN because the
+// migration pool balance is already a hard ceiling, and failing closed would
+// strand every bridge-in -- with its ERC20 locked on Ethereum -- on a chain that
+// simply had not set the parameter yet.
+func TestCheckInbound_UnsetCapMeansUnlimited(t *testing.T) {
+	for _, l := range []types.Limits{
+		{Inbound: math.ZeroInt()},
+		{},                         // nil Int
+		{Inbound: math.NewInt(-5)}, // negative
+	} {
+		require.NoError(t, types.CheckInbound(l, math.NewIntWithDecimal(1, 30), math.ZeroInt()))
+	}
+}
+
+func TestCheckInbound_RejectsNonPositive(t *testing.T) {
+	l := types.Limits{Inbound: math.NewInt(1_000)}
+	require.ErrorIs(t, types.CheckInbound(l, math.ZeroInt(), math.ZeroInt()), types.ErrInvalidAmount)
+	require.ErrorIs(t, types.CheckInbound(l, math.NewInt(-1), math.ZeroInt()), types.ErrInvalidAmount)
+}
+
+// TestResolveLimits_InboundTakesSmallerLeg mirrors the outbound behavior: the
+// bps leg tightens the cap on its own as the pool drains, without a proposal.
+func TestResolveLimits_InboundTakesSmallerLeg(t *testing.T) {
+	p := types.DefaultParams()
+	p.InboundDailyCap = math.NewInt(1_000)
+	p.InboundDailyCapBpsOfPool = 100 // 1%
+
+	// Pool large enough that the fixed leg binds.
+	l := types.ResolveLimits(p, math.NewInt(1_000_000), math.NewInt(1_000_000))
+	require.Equal(t, "1000", l.Inbound.String())
+
+	// Pool small enough that the 1% leg binds.
+	l = types.ResolveLimits(p, math.NewInt(50_000), math.NewInt(1_000_000))
+	require.Equal(t, "500", l.Inbound.String())
+}
+
+// TestInboundHasNoPerAddressLimit pins the decision not to add one: two
+// addresses sharing the same day draw from one pot and nothing else.
+func TestInboundHasNoPerAddressLimit(t *testing.T) {
+	l := types.Limits{Inbound: math.NewInt(1_000), PerAddress: math.NewInt(1)}
+	// PerAddress is set, and must be ignored by the inbound path.
+	require.NoError(t, types.CheckInbound(l, math.NewInt(900), math.ZeroInt()))
+}
+
+// TestRateLimits_MasterSwitchLetsEverythingThrough pins the off switch: with
+// rate_limits_disabled the throttles stop applying, in both directions, while
+// input validation still does.
+func TestRateLimits_MasterSwitchLetsEverythingThrough(t *testing.T) {
+	// Limits tight enough that every individual check would fire.
+	tight := types.Limits{
+		Global:         math.NewInt(1_000),
+		LargeBudget:    math.NewInt(100),
+		PerAddress:     math.NewInt(10),
+		SmallThreshold: math.NewInt(5),
+		MinTransfer:    math.NewInt(500),
+		CrisisMode:     true,
+		Inbound:        math.NewInt(1_000),
+	}
+	huge := math.NewInt(999_999)
+
+	// Enforced: the request is refused (which check fires first does not matter,
+	// the point is that it is refused).
+	require.Error(t, types.CheckOutbound(tight, huge, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
+	require.Error(t, types.CheckInbound(tight, huge, math.ZeroInt()))
+
+	// Same figures, switch off.
+	off := tight
+	off.Disabled = true
+	require.NoError(t, types.CheckOutbound(off, huge, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		"disabling the rate limits must let an otherwise-valid outbound transfer through")
+	require.NoError(t, types.CheckInbound(off, huge, math.ZeroInt()),
+		"disabling the rate limits must let an otherwise-valid inbound transfer through")
+
+	// Below the minimum, which is a throttle, is now allowed too.
+	require.NoError(t, types.CheckOutbound(off, math.NewInt(1), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
+
+	// But a non-positive amount is invalid input, not a throttled one, and must
+	// still be rejected -- otherwise the switch turns off a validity check.
+	require.ErrorIs(t, types.CheckOutbound(off, math.ZeroInt(), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		types.ErrInvalidAmount)
+	require.ErrorIs(t, types.CheckInbound(off, math.NewInt(-1), math.ZeroInt()),
+		types.ErrInvalidAmount)
+}
+
+// TestRateLimits_ZeroValueMeansEnforced is the upgrade-safety property. A Params
+// record written before rate_limits_disabled existed unmarshals with the bool at
+// its zero value; that must resolve to "limits enforced", not "limits off".
+//
+// This is why the field is named in the negative. Phrased as ENABLED, every
+// pre-upgrade chain would come back up with the throttles silently removed, and
+// this chain swaps binaries rather than running x/upgrade, so no migration would
+// repair it.
+func TestRateLimits_ZeroValueMeansEnforced(t *testing.T) {
+	p := types.DefaultParams()
+	require.False(t, p.RateLimitsDisabled, "the zero value must be the enforcing one")
+
+	l := types.ResolveLimits(p, math.NewIntWithDecimal(300, 27), math.NewIntWithDecimal(300, 27))
+	require.False(t, l.Disabled, "default params must enforce the limits")
+}
+
+// TestRateLimits_DisabledKeepsTheResolvedFigures pins that turning the switch off
+// does not erase the tuned values. Re-enabling has to be one proposal, not a
+// rediscovery of six numbers, and the query keeps reporting what the limits would
+// be so a UI can say "not currently enforced" instead of showing zeros.
+func TestRateLimits_DisabledKeepsTheResolvedFigures(t *testing.T) {
+	p := types.DefaultParams()
+	pool := math.NewIntWithDecimal(300, 27)
+
+	on := types.ResolveLimits(p, pool, pool)
+
+	p.RateLimitsDisabled = true
+	off := types.ResolveLimits(p, pool, pool)
+
+	require.True(t, off.Disabled)
+	require.Equal(t, on.Global.String(), off.Global.String())
+	require.Equal(t, on.PerAddress.String(), off.PerAddress.String())
+	require.Equal(t, on.Inbound.String(), off.Inbound.String())
+	require.Equal(t, on.MinTransfer.String(), off.MinTransfer.String())
+}

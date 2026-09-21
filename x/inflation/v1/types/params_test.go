@@ -63,7 +63,7 @@ func (suite *ParamsTestSuite) TestParamsValidate() {
 		{
 			"invalid - denom",
 			NewParams(
-				"/aatos",
+				"/liao",
 				validExponentialCalculation,
 				validInflationDistribution,
 				true,
@@ -263,7 +263,7 @@ func (suite *ParamsTestSuite) TestParamsValidate() {
 
 // Audit Question 4 regression: DefaultParams must initialize inflation
 // DISABLED. Atoshi's issuance is owned entirely by x/tokenomics; leaving
-// inflation enabled would silently mint extra aatos that bypasses the
+// inflation enabled would silently mint extra liao that bypasses the
 // 10-trillion supply guard.
 func (suite *ParamsTestSuite) TestDefaultParams_InflationDisabled() {
 	p := DefaultParams()

@@ -9,20 +9,66 @@ import (
 
 // ----- Params -----
 
+const (
+	// DefaultDailySamples is how many oracle readings per UTC day count as tier
+	// samples. The rule is ANY-of-N: if one of the day's samples clears both the
+	// price and volume thresholds, the day counts towards the streak.
+	DefaultDailySamples = 3
+
+	// MaxDailySamples caps what governance may set DailySamples to.
+	//
+	// The cap exists because the parameter is one-directional: under ANY-of-N,
+	// every extra sample is another chance for the threshold to be met, so
+	// raising it can only make the release easier to trigger. Left unbounded, a
+	// proposal setting it to a few thousand would turn "the price held on three
+	// random checks" into "the price touched the threshold at least once today"
+	// without visibly changing any threshold. 24 keeps it at most hourly.
+	MaxDailySamples = 24
+
+	// DefaultDaySeconds is the calendar day the release rule is specified in.
+	// Only a test network should deviate; see Params.DaySeconds.
+	DefaultDaySeconds = 86_400
+
+	// BpsDenominator is the basis-point scale.
+	BpsDenominator = 10_000
+
+	// DefaultMigrationRefillThresholdBps refills migration_pool once it drops
+	// below 20% of its configured total.
+	//
+	// 20% rather than something tighter because the refill is bounded by the
+	// ProjectClaimable authorisation, which only grows when a tier release
+	// completes a full round trip -- roughly monthly. Waiting until the pool is
+	// nearly empty would leave the bridge unable to serve inbound transfers for
+	// whatever remains of that month.
+	DefaultMigrationRefillThresholdBps = 2_000
+)
+
 // DefaultParams returns the genesis tokenomics parameters.
+// Pool layout, as fractions of the 10 trillion ATOS supply. Each pool is backed
+// 100:1 by ERC20 ATOS on Ethereum, and the three add up to the whole supply:
+//
+//	miner      10,000 billion ATOS  (10%)  <-  100 billion ERC20
+//	project    87,000 billion ATOS  (87%)  <-  870 billion ERC20
+//	migration   3,000 billion ATOS   (3%)  <-   30 billion ERC20
+//	                                            ------------------
+//	                    10 trillion ATOS         1,000 billion ERC20
+//
+// The miner pool no longer pays block rewards — those are ATOX now. It holds the
+// ATOS that backs ATOX one-for-one, and tier releases move it into the x/atox
+// conversion pool as the matching ERC20 lands in the Ethereum bridge vault.
 func DefaultParams() Params {
-	minerPool := math.NewIntWithDecimal(1, 30)
-	projectPool := math.NewIntWithDecimal(89, 29)
-	migrationPool := math.NewIntWithDecimal(1, 29)
+	minerPool := math.NewIntWithDecimal(1, 30)     // 10,000 billion ATOS
+	projectPool := math.NewIntWithDecimal(87, 29)  // 87,000 billion ATOS
+	migrationPool := math.NewIntWithDecimal(3, 29) // 3,000 billion ATOS
+	// ATOX per block. Kept at the value calibrated for 5s blocks: over two
+	// halvings of 25,228,800 blocks (4 years each) this emits the full 1 trillion
+	// ATOX cap, matching the miner pool exactly.
 	blockReward := math.NewIntWithDecimal(19819, 18)
 
 	return Params{
 		MinerPoolTotal:     minerPool,
 		ProjectPoolTotal:   projectPool,
 		MigrationPoolTotal: migrationPool,
-
-		ImmediateRewardBps: 2000,
-		LockedRewardBps:    8000,
 
 		HalvingIntervalBlocks: 25_228_800,
 		InitialBlockReward:    blockReward,
@@ -36,10 +82,20 @@ func DefaultParams() Params {
 		ProjectReleaseShareBps:  5000,
 
 		ProjectTreasuryAddress: "",
-		PriceCheckEpochBlocks:  17_280,
+		// Minimum spacing between two tier samples, not an evaluation period.
+		// one_day / DefaultDailySamples = 17280 / 3, so the day's three samples
+		// cannot land closer together than 8h.
+		PriceCheckEpochBlocks:       17_280 / DefaultDailySamples,
+		DailySamples:                DefaultDailySamples,
+		DaySeconds:                  DefaultDaySeconds,
+		MigrationRefillThresholdBps: DefaultMigrationRefillThresholdBps,
 
 		MigrationMerkleRoot:       "",
 		MigrationClaimEndTimeUnix: 0, // 0 = no deadline
+
+		// 100 million ATOS. Backed 100:1 by 1 million ERC20 ATOS on Ethereum,
+		// which is the figure the self-stake requirement was specified in.
+		ValidatorMinSelfDelegation: math.NewIntWithDecimal(1, 26),
 	}
 }
 
@@ -53,9 +109,6 @@ func (p Params) Validate() error {
 	}
 	if p.MigrationPoolTotal.IsNil() || p.MigrationPoolTotal.IsNegative() {
 		return fmt.Errorf("migration pool total cannot be negative")
-	}
-	if p.ImmediateRewardBps+p.LockedRewardBps != 10000 {
-		return fmt.Errorf("immediate + locked reward bps must equal 10000, got %d", p.ImmediateRewardBps+p.LockedRewardBps)
 	}
 	if p.HalvingIntervalBlocks <= 0 {
 		return fmt.Errorf("halving interval must be positive")
@@ -86,39 +139,45 @@ func (p Params) Validate() error {
 			return fmt.Errorf("invalid project treasury address: %w", err)
 		}
 	}
+	if p.DaySeconds <= 0 {
+		return fmt.Errorf("day_seconds must be positive")
+	}
+	if p.MigrationRefillThresholdBps > BpsDenominator {
+		return fmt.Errorf("migration_refill_threshold_bps must be <= %d, got %d",
+			BpsDenominator, p.MigrationRefillThresholdBps)
+	}
+	if p.DailySamples <= 0 {
+		return fmt.Errorf("daily_samples must be positive")
+	}
+	// More samples is strictly more permissive under ANY-of-N semantics (each
+	// one is another chance to clear the bar), so an unbounded value would
+	// quietly turn the rule into "the price touched the threshold once today".
+	if p.DailySamples > MaxDailySamples {
+		return fmt.Errorf("daily_samples must be <= %d, got %d", MaxDailySamples, p.DailySamples)
+	}
 	if p.PriceCheckEpochBlocks <= 0 {
 		return fmt.Errorf("price check epoch blocks must be positive")
 	}
 	if p.MigrationClaimEndTimeUnix < 0 {
 		return fmt.Errorf("migration claim end time cannot be negative")
 	}
+	if p.ValidatorMinSelfDelegation.IsNil() || p.ValidatorMinSelfDelegation.IsNegative() {
+		return fmt.Errorf("validator min self delegation cannot be negative")
+	}
 	return nil
 }
 
 // ----- State constructors -----
 
-// NewMinerLockedBalance returns a zeroed miner locked balance.
-func NewMinerLockedBalance(valAddr string) MinerLockedBalance {
-	return MinerLockedBalance{
-		ValidatorAddress:  valAddr,
-		LockedAccrued:     math.ZeroInt(),
-		LockedClaimable:   math.ZeroInt(),
-		LockedClaimed:     math.ZeroInt(),
-		ImmediateReceived: math.ZeroInt(),
-	}
-}
-
 // DefaultReleaseState returns the genesis release state machine.
 func DefaultReleaseState() ReleaseState {
 	return ReleaseState{
-		CurrentTier:               0,
-		ConsecutiveDays:           0,
-		LastCheckBlock:            0,
-		LastCheckTimeUnix:         0,
-		TotalMinerReleased:        math.ZeroInt(),
-		TotalProjectReleased:      math.ZeroInt(),
-		TotalImmediateDistributed: math.ZeroInt(),
-		TotalMinerLocked:          math.ZeroInt(),
+		CurrentTier:          0,
+		ConsecutiveDays:      0,
+		LastCheckBlock:       0,
+		LastCheckTimeUnix:    0,
+		TotalMinerReleased:   math.ZeroInt(),
+		TotalProjectReleased: math.ZeroInt(),
 	}
 }
 
@@ -135,24 +194,19 @@ func DefaultBlockRewardState() BlockRewardState {
 // DefaultGenesisState returns a fresh tokenomics GenesisState.
 func DefaultGenesisState() *GenesisState {
 	return &GenesisState{
-		Params:              DefaultParams(),
-		ReleaseState:        DefaultReleaseState(),
-		BlockRewardState:    DefaultBlockRewardState(),
-		MinerLockedBalances: []MinerLockedBalance{},
-		ProjectClaimable:    math.ZeroInt(),
+		Params:           DefaultParams(),
+		ReleaseState:     DefaultReleaseState(),
+		BlockRewardState: DefaultBlockRewardState(),
+		ProjectClaimable: math.ZeroInt(),
 	}
 }
 
 // Validate enforces invariants on the tokenomics genesis state.
 //
-// Audit Recommendation-1 (round2): the pre-fix version only validated
-// Params and accepted any value for the four remaining fields
-// (ReleaseState, BlockRewardState, MinerLockedBalances,
-// ProjectClaimable). A malformed or hostile genesis file could ship
-// negative running totals, nil math.Int fields (which then panic on
-// arithmetic), or duplicate / malformed validator addresses in the
-// locked-balance table — all of which would corrupt the on-chain
-// tokenomics state before the chain produced its first block.
+// Audit Recommendation-1 (round2): the pre-fix version validated only Params and
+// accepted anything for the rest, so a malformed or hostile genesis could ship
+// negative running totals or nil math.Int fields that then panic on arithmetic —
+// corrupting tokenomics state before the chain produced its first block.
 func (gs GenesisState) Validate() error {
 	if err := gs.Params.Validate(); err != nil {
 		return fmt.Errorf("invalid tokenomics params: %w", err)
@@ -162,16 +216,6 @@ func (gs GenesisState) Validate() error {
 	}
 	if err := validateBlockRewardState(gs.BlockRewardState); err != nil {
 		return fmt.Errorf("invalid block_reward_state: %w", err)
-	}
-	seen := make(map[string]struct{}, len(gs.MinerLockedBalances))
-	for i, bal := range gs.MinerLockedBalances {
-		if err := validateMinerLockedBalance(bal); err != nil {
-			return fmt.Errorf("invalid miner_locked_balances[%d]: %w", i, err)
-		}
-		if _, dup := seen[bal.ValidatorAddress]; dup {
-			return fmt.Errorf("invalid miner_locked_balances[%d]: duplicate validator %q", i, bal.ValidatorAddress)
-		}
-		seen[bal.ValidatorAddress] = struct{}{}
 	}
 	if gs.ProjectClaimable.IsNil() {
 		return fmt.Errorf("invalid project_claimable: nil")
@@ -192,8 +236,6 @@ func validateReleaseState(s ReleaseState) error {
 	}{
 		{"total_miner_released", s.TotalMinerReleased},
 		{"total_project_released", s.TotalProjectReleased},
-		{"total_immediate_distributed", s.TotalImmediateDistributed},
-		{"total_miner_locked", s.TotalMinerLocked},
 	}
 	for _, c := range checks {
 		if c.v.IsNil() {
@@ -222,48 +264,7 @@ func validateBlockRewardState(s BlockRewardState) error {
 	return nil
 }
 
-func validateMinerLockedBalance(bal MinerLockedBalance) error {
-	if _, err := sdk.ValAddressFromBech32(bal.ValidatorAddress); err != nil {
-		return fmt.Errorf("validator_address %q: %w", bal.ValidatorAddress, err)
-	}
-	checks := []struct {
-		name string
-		v    math.Int
-	}{
-		{"locked_accrued", bal.LockedAccrued},
-		{"locked_claimable", bal.LockedClaimable},
-		{"locked_claimed", bal.LockedClaimed},
-		{"immediate_received", bal.ImmediateReceived},
-	}
-	for _, c := range checks {
-		if c.v.IsNil() {
-			return fmt.Errorf("%s: nil", c.name)
-		}
-		if c.v.IsNegative() {
-			return fmt.Errorf("%s: must not be negative, got %s", c.name, c.v)
-		}
-	}
-	// Invariant: claimed + claimable ≤ accrued. Otherwise the genesis
-	// is claiming more than was ever distributed to this validator.
-	used := bal.LockedClaimed.Add(bal.LockedClaimable)
-	if used.GT(bal.LockedAccrued) {
-		return fmt.Errorf("locked_claimed + locked_claimable (%s) exceeds locked_accrued (%s)",
-			used, bal.LockedAccrued)
-	}
-	return nil
-}
-
 // ----- Msg ValidateBasic -----
-
-func (msg MsgClaimMinerLockedReward) ValidateBasic() error {
-	_, err := sdk.ValAddressFromBech32(msg.ValidatorAddress)
-	return err
-}
-
-func (msg MsgClaimProjectTreasuryReward) ValidateBasic() error {
-	_, err := sdk.AccAddressFromBech32(msg.Authority)
-	return err
-}
 
 func (msg MsgClaimMigrationTokens) ValidateBasic() error {
 	if _, err := sdk.AccAddressFromBech32(msg.Claimer); err != nil {

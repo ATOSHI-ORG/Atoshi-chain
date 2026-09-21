@@ -414,7 +414,14 @@ contract StakingCaller {
                 mstore(x, sig) // Place function signature at beginning of empty storage
                 mstore(add(x, 0x04), _addr) // Place the address (input param) after the function sig
                 mstore(add(x, 0x24), 0x40) // These are needed for
-                mstore(add(x, 0x44), 0x33) // bytes unpacking
+                // Validator address string length, read from the string's own
+                // header rather than hardcoded. This was 0x33 (51), the length
+                // of an "evmosvaloper1..." address. A bech32 address is
+                // len(hrp) + 39, so the atoshi prefix makes it 52 -- the
+                // constant declared one byte less than the string actually is,
+                // the precompile decoded a truncated validator address, and the
+                // call reverted during gas estimation.
+                mstore(add(x, 0x44), mload(_validatorAddr)) // bytes unpacking
                 mstore(add(x, 0x64), chunk1) // Place the validator address in 2 chunks (input param)
                 mstore(add(x, 0x84), chunk2) // because mstore stores 32bytes
 

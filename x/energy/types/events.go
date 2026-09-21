@@ -1,11 +1,11 @@
 package types
 
 const (
-	EventTypeEnergyConsumed   = "energy_consumed"
-	EventTypeEnergyDelegated  = "energy_delegated"
+	EventTypeEnergyConsumed    = "energy_consumed"
+	EventTypeEnergyDelegated   = "energy_delegated"
 	EventTypeEnergyUndelegated = "energy_undelegated"
-	EventTypeEnergyExpired    = "energy_delegation_expired"
-	EventTypeUpdateParams     = "update_params"
+	EventTypeEnergyExpired     = "energy_delegation_expired"
+	EventTypeUpdateParams      = "update_params"
 
 	AttributeKeyAddress      = "address"
 	AttributeKeyDelegator    = "delegator"

@@ -199,7 +199,7 @@ func TestReportPrice_MinValidReportsGate(t *testing.T) {
 		sdk.AccAddress([]byte("feeder-2-test-account")).String(),
 		sdk.AccAddress([]byte("feeder-3-test-account")).String(),
 	}
-	params.MaxPriceDeviationBps = 0 // disable deviation cap for this test
+	params.MaxPriceDeviationBps = 1_000_000 // 10000%: effectively no cap (0 is no longer valid)
 	params.MinValidReports = 2
 	params.MaxPriceAgeSeconds = 3600
 	require.NoError(t, k.SetParams(ctx, params))
@@ -247,7 +247,7 @@ func TestReportPrice_SameFeederDoesNotSatisfyQuorum(t *testing.T) {
 
 	params := types.DefaultParams()
 	params.AllowedFeeders = []string{sdk.AccAddress([]byte("feeder-1-test-account")).String()}
-	params.MaxPriceDeviationBps = 0
+	params.MaxPriceDeviationBps = 1_000_000 // 10000%: effectively no cap
 	params.MinValidReports = 2
 	params.MaxPriceAgeSeconds = 3600
 	require.NoError(t, k.SetParams(ctx, params))
@@ -382,7 +382,7 @@ func TestReportPrice_MedianAggregation(t *testing.T) {
 
 	params := types.DefaultParams()
 	params.AllowedFeeders = []string{f1, f2, f3}
-	params.MaxPriceDeviationBps = 0 // disable so the extreme value can land in history
+	params.MaxPriceDeviationBps = 1_000_000 // 10000%: lets the extreme value land in history
 	params.MinValidReports = 3
 	params.MaxPriceAgeSeconds = 3600
 	require.NoError(t, k.SetParams(ctx, params))
@@ -425,7 +425,7 @@ func TestReportPrice_MedianDegradesToSingleFeeder(t *testing.T) {
 	f1 := sdk.AccAddress([]byte("solo-feeder-test-01")).String()
 	params := types.DefaultParams()
 	params.AllowedFeeders = []string{f1}
-	params.MaxPriceDeviationBps = 0
+	params.MaxPriceDeviationBps = 1_000_000 // 10000%: effectively no cap
 	params.MinValidReports = 1
 	require.NoError(t, k.SetParams(ctx, params))
 

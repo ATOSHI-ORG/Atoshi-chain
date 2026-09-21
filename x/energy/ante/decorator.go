@@ -155,7 +155,26 @@ func (d EnergyDeductDecorator) AnteHandle(
 
 	// Probe energy first.
 	isDeploy := isContractDeployMsg(msgs)
-	consumed, err := d.energyKeeper.Consume(ctx, deductFrom, gasLimit, isDeploy, msgUrls)
+
+	// A simulated tx carries gas 0, and Consume returns immediately on zero —
+	// skipping the settle, the account write and the event, all of which cost gas
+	// during delivery. Simulation therefore reported far less gas than delivery
+	// used, and `--gas auto` produced a limit the tx then died on. Measured on a
+	// MsgVote: 63,088 simulated against 110,284 delivered, which even a 1.7x
+	// adjustment could not absorb.
+	//
+	// Passing a nominal 1 makes simulation do the same work. The cost of Consume
+	// is essentially independent of the amount asked for — the same settle, the
+	// same single account write, the same event, whatever the figure — so the
+	// nominal value does not have to resemble the real gas limit to produce a
+	// representative measurement. Energy is "deducted" in the simulated context,
+	// which is discarded.
+	probeGas := gasLimit
+	if simulate && probeGas == 0 {
+		probeGas = 1
+	}
+
+	consumed, err := d.energyKeeper.Consume(ctx, deductFrom, probeGas, isDeploy, msgUrls)
 	if err != nil {
 		return ctx, err
 	}
@@ -191,13 +210,45 @@ func (d EnergyDeductDecorator) AnteHandle(
 	// Compute the ATOS owed for the gas not covered by energy.
 	stdFee := feeTx.GetFee()
 	if consumed.ShortfallGas == 0 {
-		// All gas covered by energy: zero out the fee for downstream.
-		// We still call the txFeeChecker to validate priority.
-		_, _, err := d.txFeeChecker(ctx, tx)
-		if err != nil {
-			return ctx, err
+		// All gas covered by energy: nothing to charge in ATOS. The txFeeChecker
+		// still runs to validate the declared fee and priority — but NOT during
+		// simulation.
+		//
+		// Simulation is how a client discovers the gas it needs, so it submits the
+		// tx with gas 0 by definition. The dynamic fee checker rejects gas 0
+		// outright (app/ante/evm/fee_checker.go), so calling it here made
+		// `--gas auto` fail with "gas cannot be zero" for every tx the energy
+		// module fully covers. The SDK's own DeductFeeDecorator guards the same
+		// call with !simulate (x/auth/ante/fee.go:58); this path is a replacement
+		// for that decorator and has to match it.
+		if !simulate {
+			if _, _, err := d.txFeeChecker(ctx, tx); err != nil {
+				return ctx, err
+			}
 		}
 		return next(ctx, tx, simulate)
+	}
+
+	// Validate the declared fee before charging anything. This path used to skip
+	// txFeeChecker entirely, which left the EIP-1559 base fee unenforced for
+	// every Cosmos tx whose payer had any energy shortfall -- i.e. the common
+	// case. NewMinGasPriceDecorator, earlier in the chain, still applied the
+	// governance min gas price, so a tx below the *floor* was rejected; but the
+	// dynamic base fee that rises with congestion was not checked at all, so
+	// Cosmos txs could keep paying the floor no matter how congested the chain
+	// got. That defeats the fee market's only congestion control for this path.
+	//
+	// Guarded with !simulate for the same reason as the zero-shortfall branch
+	// above: simulation submits gas 0, and the dynamic fee checker rejects gas 0
+	// outright. The SDK's DeductFeeDecorator guards its call the same way.
+	//
+	// The returned fee and priority are deliberately discarded. Priority on this
+	// path is computed from chargeAtos further down, not from the declared fee --
+	// see the audit note there.
+	if !simulate {
+		if _, _, err := d.txFeeChecker(ctx, tx); err != nil {
+			return ctx, err
+		}
 	}
 
 	// Partial / full ATOS payment: derive the actual amount to charge.
@@ -250,27 +301,29 @@ func (d EnergyDeductDecorator) AnteHandle(
 //
 // Audit Question 6 (round2): the prior implementation used integer
 // arithmetic without the floor on the non-zero-offered branch. A user
-// could submit fee = 1 aatos against gasLimit = 200_000:
-//   num = 1 × shortfallGas
-//   amt = num / 200_000 = 0   (integer division truncation)
+// could submit fee = 1 liao against gasLimit = 200_000:
+//
+//	num = 1 × shortfallGas
+//	amt = num / 200_000 = 0   (integer division truncation)
+//
 // chargeAtos.IsZero() then short-circuited the ante to next(), letting
-// the user pay literally one aatos in fee while consuming the chain's
+// the user pay literally one liao in fee while consuming the chain's
 // gas for an arbitrary tx — a complete shortfall fee evasion.
 //
 // The zero-offered branch already floored at InsufficientGasPrice, but
-// a 1-aatos offer dodged that branch. The fix unifies both paths
+// a 1-liao offer dodged that branch. The fix unifies both paths
 // through a single gas-price floor:
 //
-//   offeredPerGas := offered / gasLimit  (Dec to avoid truncation)
-//   if offeredPerGas < InsufficientGasPrice:
-//       offeredPerGas = InsufficientGasPrice
-//   amt := ceil(offeredPerGas × shortfallGas)
+//	offeredPerGas := offered / gasLimit  (Dec to avoid truncation)
+//	if offeredPerGas < InsufficientGasPrice:
+//	    offeredPerGas = InsufficientGasPrice
+//	amt := ceil(offeredPerGas × shortfallGas)
 //
 // Properties:
 //   - A user offering >= InsufficientGasPrice * gasLimit pays the
 //     pro-rated portion — same as the old code's intended path.
 //   - A user offering < InsufficientGasPrice * gasLimit (including 0,
-//     including the 1-aatos evasion shape) pays at least
+//     including the 1-liao evasion shape) pays at least
 //     InsufficientGasPrice × shortfallGas — minimum economic cost.
 //   - shortfallGas == 0 or gasLimit == 0 still short-circuits to
 //     empty coins (no charge — Consume covered all gas).
@@ -289,7 +342,7 @@ func computeShortfallFee(
 
 	// Step 1: compute the user's offered per-gas rate. Use LegacyDec
 	// so truncation doesn't happen here (integer Quo would lose
-	// fractional precision below 1 aatos/gas, and that fraction
+	// fractional precision below 1 liao/gas, and that fraction
 	// matters when shortfallGas < gasLimit).
 	gasLimitDec := math.LegacyNewDec(int64(gasLimit))
 	offeredPerGas := math.LegacyZeroDec()
@@ -298,7 +351,7 @@ func computeShortfallFee(
 	}
 
 	// Step 2: floor at InsufficientGasPrice. This is the single
-	// chokepoint that prevents the 1-aatos evasion the audit flagged.
+	// chokepoint that prevents the 1-liao evasion the audit flagged.
 	if !params.InsufficientGasPrice.IsNil() && params.InsufficientGasPrice.IsPositive() &&
 		offeredPerGas.LT(params.InsufficientGasPrice) {
 		offeredPerGas = params.InsufficientGasPrice
@@ -342,12 +395,12 @@ func computeShortfallFee(
 const maxInt64Priority = int64(^uint64(0) >> 1)
 
 // Audit Issue-15 (round1-issue8): getTxPriority must only consider the
-// chain's base denom (aatos). The previous signature took no denom
+// chain's base denom (liao). The previous signature took no denom
 // and iterated every coin in the fee bag, treating each as if it
 // could move the priority needle. The chain is single-fee-denom
 // today, so the bug is latent — but as soon as governance enables
 // IBC vouchers, gov-staked alt-coins, or any non-base fee path, an
-// attacker could attach a high-amount alt-coin to a low-aatos tx and
+// attacker could attach a high-amount alt-coin to a low-liao tx and
 // either crowd into the mempool's front (if their alt-coin yielded
 // MaxInt64 priority and the min-selection happened to pick it) or
 // drag priority down (if the alt-coin yielded a tiny per-gas number
