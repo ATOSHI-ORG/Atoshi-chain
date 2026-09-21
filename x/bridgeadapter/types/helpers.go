@@ -140,6 +140,10 @@ func DefaultParams() Params {
 		MailboxId:         nil,
 		RemoteBridgeVault: nil,
 
+		// RateLimitsDisabled is deliberately not listed: false is both the zero
+		// value and the safe state (limits enforced). Naming the field in the
+		// negative is what makes those two coincide -- see the proto comment.
+
 		// 5 billion ATOS a day, or 5% of the migration pool, whichever is smaller.
 		// Against a 300-billion pool the percentage binds first, so the cap tracks
 		// the pool down as it drains instead of holding a stale figure.

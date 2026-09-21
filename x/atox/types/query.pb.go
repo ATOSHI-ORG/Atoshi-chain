@@ -268,14 +268,17 @@ type QueryAccountResponse struct {
 	// `unsettled` by construction (one aatox per liao), and is surfaced separately
 	// because wallets need it to size a transfer.
 	BurnOnSettle cosmossdk_io_math.Int `protobuf:"bytes,7,opt,name=burn_on_settle,json=burnOnSettle,proto3,customtype=cosmossdk.io/math.Int" json:"burn_on_settle"`
-	// max_sendable is the largest ATOX transfer this account can sign right now,
-	// after both the conversion burn and the transfer fee.
+	// max_sendable is the largest ATOX transfer this account can sign right now:
+	// atox_balance - burn_on_settle.
 	//
 	// Wallets must not offer `atox_balance` as "send max". A transfer settles the
-	// sender first, which burns burn_on_settle aatox, and the fee is charged ON
-	// TOP of the transferred amount — so a send sized against the displayed
-	// balance fails with insufficient funds for a reason the user cannot see.
-	// The chain computes it here so every wallet gets the same answer.
+	// sender first, which burns burn_on_settle aatox, so a send sized against the
+	// displayed balance fails with insufficient funds for a reason the user cannot
+	// see. The chain computes it here so every wallet gets the same answer.
+	//
+	// The transfer fee needs no headroom: it is INCLUSIVE, taken out of the amount
+	// sent, so the recipient receives max_sendable minus the fee and the sender's
+	// balance goes to zero.
 	MaxSendable cosmossdk_io_math.Int `protobuf:"bytes,8,opt,name=max_sendable,json=maxSendable,proto3,customtype=cosmossdk.io/math.Int" json:"max_sendable"`
 }
 

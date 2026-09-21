@@ -136,6 +136,12 @@ message QueryLimitsResponse {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+
+  // rate_limits_disabled mirrors the param. When true every figure above is
+  // still reported -- they are what the limits WOULD be -- but nothing is
+  // enforced. A UI that shows a quota bar must check this first, or it will
+  // tell users they are near a cap that is not being applied.
+  bool rate_limits_disabled = 13;
 }
 
 message QueryRateLimitStateRequest {}

@@ -355,3 +355,79 @@ func TestInboundHasNoPerAddressLimit(t *testing.T) {
 	// PerAddress is set, and must be ignored by the inbound path.
 	require.NoError(t, types.CheckInbound(l, math.NewInt(900), math.ZeroInt()))
 }
+
+// TestRateLimits_MasterSwitchLetsEverythingThrough pins the off switch: with
+// rate_limits_disabled the throttles stop applying, in both directions, while
+// input validation still does.
+func TestRateLimits_MasterSwitchLetsEverythingThrough(t *testing.T) {
+	// Limits tight enough that every individual check would fire.
+	tight := types.Limits{
+		Global:         math.NewInt(1_000),
+		LargeBudget:    math.NewInt(100),
+		PerAddress:     math.NewInt(10),
+		SmallThreshold: math.NewInt(5),
+		MinTransfer:    math.NewInt(500),
+		CrisisMode:     true,
+		Inbound:        math.NewInt(1_000),
+	}
+	huge := math.NewInt(999_999)
+
+	// Enforced: the request is refused (which check fires first does not matter,
+	// the point is that it is refused).
+	require.Error(t, types.CheckOutbound(tight, huge, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
+	require.Error(t, types.CheckInbound(tight, huge, math.ZeroInt()))
+
+	// Same figures, switch off.
+	off := tight
+	off.Disabled = true
+	require.NoError(t, types.CheckOutbound(off, huge, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		"disabling the rate limits must let an otherwise-valid outbound transfer through")
+	require.NoError(t, types.CheckInbound(off, huge, math.ZeroInt()),
+		"disabling the rate limits must let an otherwise-valid inbound transfer through")
+
+	// Below the minimum, which is a throttle, is now allowed too.
+	require.NoError(t, types.CheckOutbound(off, math.NewInt(1), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
+
+	// But a non-positive amount is invalid input, not a throttled one, and must
+	// still be rejected -- otherwise the switch turns off a validity check.
+	require.ErrorIs(t, types.CheckOutbound(off, math.ZeroInt(), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		types.ErrInvalidAmount)
+	require.ErrorIs(t, types.CheckInbound(off, math.NewInt(-1), math.ZeroInt()),
+		types.ErrInvalidAmount)
+}
+
+// TestRateLimits_ZeroValueMeansEnforced is the upgrade-safety property. A Params
+// record written before rate_limits_disabled existed unmarshals with the bool at
+// its zero value; that must resolve to "limits enforced", not "limits off".
+//
+// This is why the field is named in the negative. Phrased as ENABLED, every
+// pre-upgrade chain would come back up with the throttles silently removed, and
+// this chain swaps binaries rather than running x/upgrade, so no migration would
+// repair it.
+func TestRateLimits_ZeroValueMeansEnforced(t *testing.T) {
+	p := types.DefaultParams()
+	require.False(t, p.RateLimitsDisabled, "the zero value must be the enforcing one")
+
+	l := types.ResolveLimits(p, math.NewIntWithDecimal(300, 27), math.NewIntWithDecimal(300, 27))
+	require.False(t, l.Disabled, "default params must enforce the limits")
+}
+
+// TestRateLimits_DisabledKeepsTheResolvedFigures pins that turning the switch off
+// does not erase the tuned values. Re-enabling has to be one proposal, not a
+// rediscovery of six numbers, and the query keeps reporting what the limits would
+// be so a UI can say "not currently enforced" instead of showing zeros.
+func TestRateLimits_DisabledKeepsTheResolvedFigures(t *testing.T) {
+	p := types.DefaultParams()
+	pool := math.NewIntWithDecimal(300, 27)
+
+	on := types.ResolveLimits(p, pool, pool)
+
+	p.RateLimitsDisabled = true
+	off := types.ResolveLimits(p, pool, pool)
+
+	require.True(t, off.Disabled)
+	require.Equal(t, on.Global.String(), off.Global.String())
+	require.Equal(t, on.PerAddress.String(), off.PerAddress.String())
+	require.Equal(t, on.Inbound.String(), off.Inbound.String())
+	require.Equal(t, on.MinTransfer.String(), off.MinTransfer.String())
+}
