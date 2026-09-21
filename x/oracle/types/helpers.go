@@ -50,6 +50,22 @@ func (p Params) Validate() error {
 	if p.TWAPLookbackSeconds == 0 {
 		return fmt.Errorf("TWAP lookback cannot be zero")
 	}
+	// The deviation cap must never be switchable off.
+	//
+	// ReportPrice skips the check entirely when this is 0, so a single
+	// parameter change turns the cap from "50% per report" into "any price
+	// a feeder wants". That is the one oracle guard whose absence is
+	// invisible: nothing fails, nothing logs, reports just stop being
+	// bounded. Keeping the invariant here means the only way to remove the
+	// cap is a code change, which is reviewable, rather than a parameter
+	// change, which is not.
+	//
+	// Governance can still widen it as far as it likes -- this rejects
+	// only the off switch, not a loose setting.
+	if p.MaxPriceDeviationBps == 0 {
+		return fmt.Errorf("max_price_deviation_bps must be > 0; 0 disables the deviation check entirely")
+	}
+
 	for _, feeder := range p.AllowedFeeders {
 		if _, err := sdk.AccAddressFromBech32(feeder); err != nil {
 			return fmt.Errorf("invalid feeder address %s: %w", feeder, err)
