@@ -525,8 +525,14 @@ const _ = grpc.SupportPackageIsVersion4
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type QueryClient interface {
+	// Params returns the module parameters: the holding threshold, the energy
+	// capacities and the accrual windows.
 	Params(ctx context.Context, in *QueryParamsRequest, opts ...grpc.CallOption) (*QueryParamsResponse, error)
+	// Account returns one address's energy state, settled to the current block so
+	// the caller sees live numbers without having to broadcast a tx first.
 	Account(ctx context.Context, in *QueryAccountRequest, opts ...grpc.CallOption) (*QueryAccountResponse, error)
+	// Delegations lists the energy this address has delegated out and received,
+	// together with each entry's expiry.
 	Delegations(ctx context.Context, in *QueryDelegationsRequest, opts ...grpc.CallOption) (*QueryDelegationsResponse, error)
 	// EstimateFee tells the caller how much TxEnergy and ATOS gas-fee a tx
 	// with the given gas_limit would cost the given signer right now.
@@ -579,8 +585,14 @@ func (c *queryClient) EstimateFee(ctx context.Context, in *QueryEstimateFeeReque
 
 // QueryServer is the server API for Query service.
 type QueryServer interface {
+	// Params returns the module parameters: the holding threshold, the energy
+	// capacities and the accrual windows.
 	Params(context.Context, *QueryParamsRequest) (*QueryParamsResponse, error)
+	// Account returns one address's energy state, settled to the current block so
+	// the caller sees live numbers without having to broadcast a tx first.
 	Account(context.Context, *QueryAccountRequest) (*QueryAccountResponse, error)
+	// Delegations lists the energy this address has delegated out and received,
+	// together with each entry's expiry.
 	Delegations(context.Context, *QueryDelegationsRequest) (*QueryDelegationsResponse, error)
 	// EstimateFee tells the caller how much TxEnergy and ATOS gas-fee a tx
 	// with the given gas_limit would cost the given signer right now.

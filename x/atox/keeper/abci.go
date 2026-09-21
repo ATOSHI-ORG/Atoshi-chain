@@ -104,7 +104,9 @@ func (k Keeper) collectSweepBatch(ctx sdk.Context, limit uint32) (keys [][]byte,
 	defer iter.Close()
 
 	for ; iter.Valid(); iter.Next() {
-		if uint32(len(keys)) == limit {
+		// len(keys) stops at `limit`, which is itself a uint32, so the conversion
+		// cannot wrap.
+		if uint32(len(keys)) == limit { //nolint:gosec // G115: bounded by limit
 			return keys, true
 		}
 		keys = append(keys, append([]byte(nil), iter.Key()...))
