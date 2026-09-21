@@ -359,6 +359,19 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ---
 
+## 🔒 Security
+
+Audit reports and their scope are in [`docs/audits/`](docs/audits/).
+
+The most recent report (BlockSec, 2026-07-10) covers `x/oracle`, `x/tokenomics`
+and `x/energy` only — it predates `x/atox` and `x/bridgeadapter`. The linked page
+says exactly what each report did and did not cover; please read it before
+treating any report as covering the chain as a whole.
+
+Report suspected vulnerabilities to **info@atoshi.org**, not as a public issue.
+
+---
+
 ## 📄 License
 
 This project is licensed under the [ENCL-1.0 License](LICENSE).
