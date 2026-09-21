@@ -22,6 +22,8 @@ service Msg {
   // BridgeOut locks ATOS and requests the matching ERC20 on Ethereum.
   rpc BridgeOut(MsgBridgeOut) returns (MsgBridgeOutResponse);
 
+  // UpdateParams sets the module parameters. Governance only -- it carries the
+  // bridge kill switch, the rate limits and the Ethereum-side addresses.
   rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
 }
 

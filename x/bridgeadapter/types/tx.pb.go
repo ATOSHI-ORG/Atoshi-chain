@@ -305,6 +305,8 @@ const _ = grpc.SupportPackageIsVersion4
 type MsgClient interface {
 	// BridgeOut locks ATOS and requests the matching ERC20 on Ethereum.
 	BridgeOut(ctx context.Context, in *MsgBridgeOut, opts ...grpc.CallOption) (*MsgBridgeOutResponse, error)
+	// UpdateParams sets the module parameters. Governance only -- it carries the
+	// bridge kill switch, the rate limits and the Ethereum-side addresses.
 	UpdateParams(ctx context.Context, in *MsgUpdateParams, opts ...grpc.CallOption) (*MsgUpdateParamsResponse, error)
 }
 
@@ -338,6 +340,8 @@ func (c *msgClient) UpdateParams(ctx context.Context, in *MsgUpdateParams, opts 
 type MsgServer interface {
 	// BridgeOut locks ATOS and requests the matching ERC20 on Ethereum.
 	BridgeOut(context.Context, *MsgBridgeOut) (*MsgBridgeOutResponse, error)
+	// UpdateParams sets the module parameters. Governance only -- it carries the
+	// bridge kill switch, the rate limits and the Ethereum-side addresses.
 	UpdateParams(context.Context, *MsgUpdateParams) (*MsgUpdateParamsResponse, error)
 }
 

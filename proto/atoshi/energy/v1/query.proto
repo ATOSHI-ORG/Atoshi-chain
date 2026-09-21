@@ -10,12 +10,18 @@ option go_package = "github.com/atoshi-chain/atoshi/v20/x/energy/types";
 
 // Query defines the energy module Query service.
 service Query {
+  // Params returns the module parameters: the holding threshold, the energy
+  // capacities and the accrual windows.
   rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
     option (google.api.http).get = "/atoshi/energy/v1/params";
   }
+  // Account returns one address's energy state, settled to the current block so
+  // the caller sees live numbers without having to broadcast a tx first.
   rpc Account(QueryAccountRequest) returns (QueryAccountResponse) {
     option (google.api.http).get = "/atoshi/energy/v1/account/{address}";
   }
+  // Delegations lists the energy this address has delegated out and received,
+  // together with each entry's expiry.
   rpc Delegations(QueryDelegationsRequest) returns (QueryDelegationsResponse) {
     option (google.api.http).get = "/atoshi/energy/v1/delegations/{address}";
   }

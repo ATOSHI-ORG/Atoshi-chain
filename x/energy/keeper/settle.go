@@ -40,7 +40,11 @@ func (k Keeper) Settle(ctx sdk.Context, addr sdk.AccAddress) types.EnergyAccount
 	}
 
 	params := k.GetParams(ctx)
-	elapsed := uint64(now - acct.LastUpdatedTime)
+	// The `now <= acct.LastUpdatedTime` guard above makes the subtraction
+	// positive, so the conversion cannot wrap. Worth stating: if it could, a
+	// timestamp in the future would turn into a near-infinite `elapsed` and mint
+	// the account a full energy bar every block.
+	elapsed := uint64(now - acct.LastUpdatedTime) //nolint:gosec // G115: guarded above
 
 	// --- TxEnergy refill ---
 	// Compute (capacity * elapsed / window) to avoid sub-second
@@ -136,7 +140,8 @@ func (k Keeper) SimulateSettle(ctx sdk.Context, addr sdk.AccAddress) types.Energ
 		return acct
 	}
 	params := k.GetParams(ctx)
-	elapsed := uint64(now - acct.LastUpdatedTime)
+	// Same guard as Settle: the early return above covers now <= LastUpdatedTime.
+	elapsed := uint64(now - acct.LastUpdatedTime) //nolint:gosec // G115: guarded above
 
 	txCap := types.TxEnergyCapacity(acct.LastBalanceSnapshot, params)
 	if txCap > 0 && acct.TxEnergyAccrued < txCap && params.TxEnergyMaxAccrueWindow > 0 {
