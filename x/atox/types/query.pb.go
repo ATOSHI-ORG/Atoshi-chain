@@ -498,7 +498,12 @@ const _ = grpc.SupportPackageIsVersion4
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type QueryClient interface {
+	// Params returns the module parameters: the supply cap, the transfer fee rate
+	// and the automatic-settlement batch size.
 	Params(ctx context.Context, in *QueryParamsRequest, opts ...grpc.CallOption) (*QueryParamsResponse, error)
+	// GlobalState returns the chain-wide conversion accounting: the global index,
+	// the live ATOX supply and the two burn totals (conversion and transfer fee),
+	// which are tracked apart because only the fee burn frees minting headroom.
 	GlobalState(ctx context.Context, in *QueryGlobalStateRequest, opts ...grpc.CallOption) (*QueryGlobalStateResponse, error)
 	// Account returns the raw settlement record plus the amount that would be
 	// credited by settling right now. Wallets should show
@@ -555,7 +560,12 @@ func (c *queryClient) ExchangePool(ctx context.Context, in *QueryExchangePoolReq
 
 // QueryServer is the server API for Query service.
 type QueryServer interface {
+	// Params returns the module parameters: the supply cap, the transfer fee rate
+	// and the automatic-settlement batch size.
 	Params(context.Context, *QueryParamsRequest) (*QueryParamsResponse, error)
+	// GlobalState returns the chain-wide conversion accounting: the global index,
+	// the live ATOX supply and the two burn totals (conversion and transfer fee),
+	// which are tracked apart because only the fee burn frees minting headroom.
 	GlobalState(context.Context, *QueryGlobalStateRequest) (*QueryGlobalStateResponse, error)
 	// Account returns the raw settlement record plus the amount that would be
 	// credited by settling right now. Wallets should show
