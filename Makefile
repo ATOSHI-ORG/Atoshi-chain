@@ -173,7 +173,7 @@ build-docker-goleveldb:
 	echo '#!/usr/bin/env bash' > ./build/atoshid
 	echo "IMAGE_NAME=${DOCKER_IMAGE}:${COMMIT_HASH}" >> ./build/atoshid
 	echo 'SCRIPT_PATH=$$(cd $$(dirname $$0) && pwd -P)' >> ./build/atoshid
-	echo 'docker run -it --rm -v $${SCRIPT_PATH}/.atoshid:/home/evmos/.atoshid $$IMAGE_NAME atoshid "$$@"' >> ./build/atoshid
+	echo 'docker run -it --rm -v $${SCRIPT_PATH}/.atoshid:/home/atoshi/.atoshid $$IMAGE_NAME atoshid "$$@"' >> ./build/atoshid
 	chmod +x ./build/atoshid
 
 build-docker-pebbledb:
@@ -183,7 +183,7 @@ build-docker-pebbledb:
 	echo '#!/usr/bin/env bash' > ./build/atoshid
 	echo "IMAGE_NAME=${DOCKER_IMAGE}:${COMMIT_HASH}" >> ./build/atoshid
 	echo 'SCRIPT_PATH=$$(cd $$(dirname $$0) && pwd -P)' >> ./build/atoshid
-	echo 'docker run -it --rm -v $${SCRIPT_PATH}/.atoshid:/home/evmos/.atoshid $$IMAGE_NAME atoshid "$$@"' >> ./build/atoshid
+	echo 'docker run -it --rm -v $${SCRIPT_PATH}/.atoshid:/home/atoshi/.atoshid $$IMAGE_NAME atoshid "$$@"' >> ./build/atoshid
 	chmod +x ./build/atoshid
 
 build-rocksdb:
