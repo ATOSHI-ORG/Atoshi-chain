@@ -95,7 +95,7 @@ func (am AppModule) EndBlock(goCtx context.Context) error {
 	return nil
 }
 
-func (am AppModule) GenerateGenesisState(_ *module.SimulationState)      {}
+func (am AppModule) GenerateGenesisState(_ *module.SimulationState)       {}
 func (am AppModule) RegisterStoreDecoder(_ simtypes.StoreDecoderRegistry) {}
 func (am AppModule) WeightedOperations(_ module.SimulationState) []simtypes.WeightedOperation {
 	return nil

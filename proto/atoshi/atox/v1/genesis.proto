@@ -1,0 +1,37 @@
+syntax = "proto3";
+package atoshi.atox.v1;
+
+import "gogoproto/gogo.proto";
+import "atoshi/atox/v1/atox.proto";
+
+option go_package = "github.com/atoshi-chain/atoshi/v20/x/atox/types";
+
+// GenesisState is the atox module genesis / export state.
+//
+// ATOX is not pre-minted: supply starts at zero and is minted as block rewards,
+// so a fresh genesis carries no accounts and a zero index. The account list
+// exists for export/import of a running chain.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+
+  GlobalState global_state = 2 [(gogoproto.nullable) = false];
+
+  repeated AtoxAccount accounts = 3 [(gogoproto.nullable) = false];
+
+  // scan_cursor is the EndBlocker sweep position, so an exported chain resumes
+  // the sweep where it stopped instead of restarting from the first account and
+  // starving the tail of the keyspace.
+  bytes scan_cursor = 4;
+
+  // swept_index is the global_index at which the last full sweep pass finished.
+  //
+  // The index only moves when a tier release lands, and that needs 30
+  // consecutive qualifying days, so it happens rarely. Between releases every
+  // account the sweep visits has a zero span and nothing to settle, making the
+  // pass pure waste. Comparing this against the live index lets the EndBlocker
+  // skip entirely in that steady state.
+  string swept_index = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+}

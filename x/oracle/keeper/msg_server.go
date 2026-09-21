@@ -44,7 +44,8 @@ func (k Keeper) medianOfFreshReports(ctx sdk.Context, params types.Params, incom
 	// preferring the most recent per feeder. `incoming` wins for its own
 	// feeder regardless (its timestamp is now).
 	now := ctx.BlockTime().Unix()
-	cutoff := now - int64(params.MaxPriceAgeSeconds)
+	// uint32 always fits in int64.
+	cutoff := now - int64(params.MaxPriceAgeSeconds) //nolint:gosec // G115: widening
 	if params.MaxPriceAgeSeconds == 0 {
 		cutoff = 0
 	}
@@ -119,7 +120,9 @@ func (k Keeper) hasEnoughFreshFeeders(ctx sdk.Context, params types.Params) bool
 	for _, pd := range history {
 		seen[pd.Feeder] = struct{}{}
 	}
-	return uint32(len(seen)) >= params.MinValidReports
+	// seen holds one entry per distinct feeder in the allowlist; it cannot reach
+	// 2^32 entries.
+	return uint32(len(seen)) >= params.MinValidReports //nolint:gosec // G115: bounded by the feeder set
 }
 
 type msgServer struct {

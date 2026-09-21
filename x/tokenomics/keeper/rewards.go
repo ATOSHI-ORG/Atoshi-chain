@@ -5,55 +5,55 @@ import (
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
 
-// BeginBlocker handles per-block miner reward distribution.
-// 20% is immediate (counted into circulating supply tracking), 80% is locked to validators by voting power.
+// BeginBlocker emits the per-block mining reward.
+//
+// The reward is ATOX, not ATOS. It is minted into the fee collector so
+// x/distribution splits it across the active validator set and their delegators
+// by commission, on exactly the path transaction fees take — which means
+// delegators receive mining rewards without any new distribution logic here.
+// The consequence for clients is that rewards are now multi-denom: ATOS from
+// fees, ATOX from mining, withdrawn together.
+//
+// The ATOS that backs ATOX stays in the miner pool and only moves into the
+// x/atox conversion pool on a tier release, once the matching ERC20 has landed
+// in the Ethereum bridge vault. Nothing here spends ATOS.
 func (k Keeper) BeginBlocker(ctx sdk.Context) error {
+	if k.atoxKeeper == nil {
+		return nil
+	}
+
 	params := k.GetParams(ctx)
 	blockRewardState := k.GetBlockRewardState(ctx)
-	releaseState := k.GetReleaseState(ctx)
 
 	currentReward := k.GetCurrentBlockReward(ctx)
 	if currentReward.IsZero() {
 		return nil
 	}
 
-	// Ensure we do not exceed the miner pool.
-	if blockRewardState.TotalDistributed.Add(currentReward).GT(params.MinerPoolTotal) {
-		remaining := params.MinerPoolTotal.Sub(blockRewardState.TotalDistributed)
+	// Clamp against the ATOX limitAmt held by x/atox, which is the authoritative
+	// ceiling and is immutable there. Clamping rather than letting MintAtox
+	// reject matters: an error here propagates into FinalizeBlock, so once the
+	// limitAmt were reached every block on every node would fail and the chain would
+	// halt. Emission must simply stop.
+	supply := k.atoxKeeper.AtoxSupply(ctx)
+	limitAmt := k.atoxKeeper.AtoxSupplyCap(ctx)
+	if remaining := limitAmt.Sub(supply); remaining.LT(currentReward) {
 		if !remaining.IsPositive() {
 			return nil
 		}
 		currentReward = remaining
 	}
 
-	// Audit Issue-18 (round2): check totalBonded BEFORE any state
-	// mutation. The pre-fix code transferred the immediate share to
-	// the fee collector and updated releaseState IN MEMORY, then
-	// looked up totalBonded; if it was zero (genesis bootstrap before
-	// any validator bonds, or a degenerate scenario where all
-	// validators got unbonded), the function returned at line 54
-	// without calling SetBlockRewardState/SetReleaseState. Effect:
-	//   - bank moved aatos from MinerPool to FeeCollector (committed),
-	//   - releaseState.TotalImmediateDistributed never persisted,
-	//   - blockRewardState.TotalDistributed never persisted.
-	// Next block, currentReward repeats the SAME amount (TotalDistributed
-	// hasn't advanced), bank gets another chunk of coins, and the
-	// tokenomics accounting silently drifts further from bank reality.
-	// Over enough blocks the immediate share would over-distribute
-	// without the supply cap (MinerPoolTotal) catching up.
-	//
-	// Moving the check up front means: if no validator can receive
-	// locked rewards, we skip the whole block — no bank send, no
-	// releaseState bump, no drift. This is a safe no-op for chains
-	// with no bonded validators (which shouldn't be producing blocks
-	// at all under normal CometBFT consensus, but the audit's concern
-	// is the genesis bootstrap window where the first block may be
-	// processed before any validator bond is recorded).
+	// Audit Issue-18 (round2): check totalBonded BEFORE any state mutation. With
+	// nothing bonded, x/distribution has no validator to allocate to and would
+	// sweep the whole reward into the community pool — a module account, which
+	// never accrues a conversion claim, so the ATOX would be stranded there. This
+	// is reachable during the genesis bootstrap window before the first validator
+	// bonds.
 	totalBonded, err := k.stakingKeeper.TotalBondedTokens(ctx)
 	if err != nil {
 		return err
@@ -62,69 +62,17 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 		return nil
 	}
 
-	immediate := currentReward.MulRaw(int64(params.ImmediateRewardBps)).QuoRaw(10000)
-	locked := currentReward.Sub(immediate)
-
-	if immediate.IsPositive() {
-		coin := sdk.NewCoin(k.baseDenom(), immediate)
-		if err := k.bankKeeper.SendCoinsFromModuleToModule(ctx, tokenomicstypes.MinerPoolName, k.feeCollectorName, sdk.NewCoins(coin)); err != nil {
-			return err
-		}
-	}
-
-	// Track immediate rewards globally as circulating supply.
-	releaseState.TotalImmediateDistributed = releaseState.TotalImmediateDistributed.Add(immediate)
-	releaseState.TotalMinerLocked = releaseState.TotalMinerLocked.Add(locked)
-
-	// Audit Recommendation-2 (round2): a block handler must NOT panic
-	// on a recoverable failure. cosmos-sdk runs BeginBlocker /
-	// EndBlocker as part of every block's FinalizeBlock; a panic here
-	// propagates up to baseapp and halts consensus across every node
-	// hitting the same condition. The prior code panicked on
-	// SetMinerLockedBalance errors — serialization issues, store
-	// problems, schema mismatches — any of which would freeze the
-	// chain until a coordinated binary fix and migration. We capture
-	// the error into a shadowed variable and break out of the
-	// validator iterator instead, returning it from BeginBlocker so
-	// the FinalizeBlock pipeline can record and surface it as a
-	// regular block error.
-	remainingLocked := locked
-	var setErr error
-	err = k.stakingKeeper.IterateBondedValidatorsByPower(ctx, func(_ int64, validator stakingtypes.ValidatorI) bool {
-		valPower := validator.GetTokens()
-		if !valPower.IsPositive() {
-			return false
-		}
-
-		share := locked.Mul(valPower).Quo(totalBonded)
-		if share.GT(remainingLocked) {
-			share = remainingLocked
-		}
-		if share.IsPositive() {
-			bal := k.GetMinerLockedBalance(ctx, validator.GetOperator())
-			bal.LockedAccrued = bal.LockedAccrued.Add(share)
-			if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-				setErr = fmt.Errorf("set miner locked balance %q: %w", validator.GetOperator(), err)
-				return true // stop the iterator
-			}
-			remainingLocked = remainingLocked.Sub(share)
-		}
-		return false
-	})
-	if err != nil {
+	if err := k.atoxKeeper.MintAtoxToModule(ctx, k.feeCollectorName, currentReward); err != nil {
 		return err
 	}
-	if setErr != nil {
-		return setErr
-	}
 
+	// TotalDistributed counts ATOX emitted, and nothing else. It must never feed
+	// GetCirculatingSupply, which is an ATOS figure and the basis for tier release
+	// quotas: adding ATOX amounts there would inflate circulating supply and so
+	// inflate every future release.
 	blockRewardState.TotalDistributed = blockRewardState.TotalDistributed.Add(currentReward)
 	blockRewardState.CurrentPeriod = uint64(ctx.BlockHeight() / params.HalvingIntervalBlocks)
-
 	if err := k.SetBlockRewardState(ctx, blockRewardState); err != nil {
-		return err
-	}
-	if err := k.SetReleaseState(ctx, releaseState); err != nil {
 		return err
 	}
 
@@ -138,66 +86,176 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 	return nil
 }
 
-// EndBlocker performs daily price checks and triggers release windows.
+// EndBlocker samples the oracle and settles the streak at UTC day boundaries.
+//
+// # The rule
+//
+// The feeder takes params.DailySamples readings at random instants during each
+// UTC day. If ANY of them clears both the price and volume thresholds, the day
+// counts towards the streak; otherwise the streak resets to zero. Once the
+// streak reaches params.ConsecutiveDaysRequired, a release fires.
+//
+// # Why the feeder picks the instants
+//
+// The chain records outcomes, it does not choose when to look. A chain-chosen
+// instant is a publicly known block height, so anyone wanting the release to
+// fire would know exactly when the price has to hold and could arrange for it
+// to hold only then. Randomizing off-chain makes that unprofitable, at the cost
+// of trusting the feeder about *when* -- which the sample cap and the spacing
+// floor below bound.
+//
+// # Why the sample count is capped
+//
+// Under ANY-of-N semantics more samples is strictly more permissive: each one is
+// another chance for the threshold to be met. An unbounded feeder reporting
+// every block would turn "the price held on three random checks" into "the price
+// touched the threshold at least once today". So only the first DailySamples
+// readings of each day are consumed, and PriceCheckEpochBlocks enforces a
+// minimum gap between them so they cannot all land in the same few seconds.
+//
+// # What changed from the previous behavior
+//
+// This used to evaluate once every PriceCheckEpochBlocks against whatever the
+// latest report happened to be. That is a different rule -- it samples at a
+// fixed, publicly known height -- and it had no concept of a day at all.
 func (k Keeper) EndBlocker(ctx sdk.Context) error {
 	params := k.GetParams(ctx)
 	state := k.GetReleaseState(ctx)
 
-	// Only evaluate once per configured epoch.
-	if state.LastCheckBlock > 0 && ctx.BlockHeight()-state.LastCheckBlock < params.PriceCheckEpochBlocks {
+	now := ctx.BlockTime().Unix()
+	if now <= 0 {
+		// Genesis blocks can carry a zero time; bucketing by it would put every
+		// sample in day 0 and settle the day at the first real block.
 		return nil
+	}
+	// The sampling window. A parameter so a test network can compress it --
+	// with the mainnet value one release takes consecutive_days_required real
+	// days, which makes the cross-chain path untestable in an afternoon. See
+	// Params.DaySeconds for why changing it mid-streak is meaningless.
+	daySeconds := params.DaySeconds
+	if daySeconds <= 0 {
+		daySeconds = tokenomicstypes.DefaultDaySeconds
+	}
+	today := now / daySeconds
+
+	// Keep the user bridge liquid before doing anything else. Independent of the
+	// tier machinery: it moves already-authorized ATOS between two pools and does
+	// not change any cumulative total, so a failure here should not stop the
+	// sampling below.
+	if err := k.RefillMigrationPool(ctx); err != nil {
+		k.Logger(ctx).Error("migration pool refill failed", "err", err)
+	}
+
+	// ----- settle the previous day, if it has rolled over -----
+	if state.CurrentSampleDay != 0 && today > state.CurrentSampleDay {
+		// A gap of more than one day means no sample landed on those days. That
+		// is a failed streak, not a paused one: the rule asks for CONSECUTIVE
+		// days, and a day nobody measured is a day that did not qualify.
+		//
+		// Note this differs from the staleness handling below, which pauses
+		// rather than resets. The distinction: a stale reading within a day is
+		// "no signal yet, the day is not over"; a whole day with no qualifying
+		// sample is a definite negative.
+		if state.DayQualified {
+			state.ConsecutiveDays++
+		} else {
+			state.ConsecutiveDays = 0
+		}
+
+		if state.ConsecutiveDays >= params.ConsecutiveDaysRequired {
+			if err := k.TriggerRelease(ctx, &state, params); err != nil {
+				return err
+			}
+			state.ConsecutiveDays = 0
+			state.CurrentTier++
+		}
+
+		ctx.EventManager().EmitEvent(sdk.NewEvent(
+			tokenomicstypes.EventTypeDailyCheck,
+			sdk.NewAttribute(tokenomicstypes.AttributeKeyDay, fmt.Sprintf("%d", state.CurrentSampleDay)),
+			sdk.NewAttribute(tokenomicstypes.AttributeKeyQualified, fmt.Sprintf("%t", state.DayQualified)),
+			sdk.NewAttribute(tokenomicstypes.AttributeKeySamples, fmt.Sprintf("%d", state.SamplesToday)),
+			sdk.NewAttribute(tokenomicstypes.AttributeKeyConsecutiveDays, fmt.Sprintf("%d", state.ConsecutiveDays)),
+		))
+
+		state.DayQualified = false
+		state.SamplesToday = 0
+	}
+	state.CurrentSampleDay = today
+
+	// ----- take a sample, if today's quota allows -----
+	dailySamples := params.DailySamples
+	if dailySamples <= 0 {
+		dailySamples = tokenomicstypes.DefaultDailySamples
+	}
+	if int64(state.SamplesToday) >= dailySamples {
+		return k.SetReleaseState(ctx, state)
+	}
+
+	// Spacing floor: keeps the day's samples from clustering.
+	if state.LastSampleBlock > 0 &&
+		ctx.BlockHeight()-state.LastSampleBlock < params.PriceCheckEpochBlocks {
+		return k.SetReleaseState(ctx, state)
 	}
 
 	priceData, err := k.oracleKeeper.GetCurrentPrice(ctx)
 	if err != nil {
-		k.Logger(ctx).Error("failed to get oracle price", "err", err)
-		state.LastCheckBlock = ctx.BlockHeight()
+		// No price at all (nobody has ever reported). Not a sample, and not a
+		// failure -- the day can still qualify if a feeder shows up later.
 		return k.SetReleaseState(ctx, state)
 	}
 
-	// Audit Issue 3: reject stale oracle data. Previously the tier
-	// engine consumed whatever GetCurrentPrice returned, even if no
-	// feeder had reported in days. A malicious or absent feeder could
-	// have left a high-tier price persistently in the store, causing
-	// ConsecutiveDays to keep climbing and eventually trigger an
-	// undeserved miner/project release. Cross-check the price age
-	// against oracle.params.MaxPriceAgeSeconds; if stale, pause the
-	// streak (do NOT increment, do NOT reset — we treat staleness as
-	// "no signal" rather than "negative signal", so a brief feeder
-	// outage doesn't kill a legitimate ongoing streak).
+	// A report is consumed as a sample exactly once. Without this the same
+	// reading would be re-counted on every subsequent block until a new report
+	// arrived, spending the whole day's quota on one price.
+	if priceData.Timestamp <= state.LastSampledPriceTime {
+		return k.SetReleaseState(ctx, state)
+	}
+
+	// Audit Issue 3: reject stale oracle data. The tier engine used to consume
+	// whatever GetCurrentPrice returned even if no feeder had reported in days,
+	// so an absent or malicious feeder could leave a high price in the store and
+	// let the streak climb on a reading nobody stood behind.
+	//
+	// Staleness pauses rather than resets: it means "no signal", not "negative
+	// signal", so a brief feeder outage does not consume a sample or kill a
+	// legitimate streak. The day-rollover branch above is what turns a genuinely
+	// missed day into a reset.
 	oracleParams := k.oracleKeeper.GetParams(ctx)
-	now := ctx.BlockTime().Unix()
 	if priceData.Timestamp == 0 ||
 		(oracleParams.MaxPriceAgeSeconds > 0 &&
 			uint64(now-priceData.Timestamp) > oracleParams.MaxPriceAgeSeconds) {
-		k.Logger(ctx).Info("oracle price stale; skipping tier check",
+		k.Logger(ctx).Info("oracle price stale; not sampling",
 			"price_timestamp", priceData.Timestamp,
 			"now", now,
 			"max_age", oracleParams.MaxPriceAgeSeconds)
-		state.LastCheckBlock = ctx.BlockHeight()
-		state.LastCheckTimeUnix = now
 		return k.SetReleaseState(ctx, state)
 	}
 
 	requiredPrice := params.PriceBase.Mul(params.TierMultiplier.Power(uint64(state.CurrentTier)))
 	requiredVolume := params.VolumeBase.Mul(params.TierMultiplier.Power(uint64(state.CurrentTier)))
+	sampleOk := priceData.Price.GTE(requiredPrice) && priceData.Volume24h.GTE(requiredVolume)
 
-	if priceData.Price.GTE(requiredPrice) && priceData.Volume24h.GTE(requiredVolume) {
-		state.ConsecutiveDays++
-	} else {
-		state.ConsecutiveDays = 0
-	}
-
+	state.SamplesToday++
+	state.LastSampledPriceTime = priceData.Timestamp
+	state.LastSampleBlock = ctx.BlockHeight()
 	state.LastCheckBlock = ctx.BlockHeight()
-	state.LastCheckTimeUnix = ctx.BlockTime().Unix()
-
-	if state.ConsecutiveDays >= params.ConsecutiveDaysRequired {
-		if err := k.TriggerRelease(ctx, &state, params); err != nil {
-			return err
-		}
-		state.ConsecutiveDays = 0
-		state.CurrentTier++
+	state.LastCheckTimeUnix = now
+	if sampleOk {
+		// ANY-of-N: one qualifying sample settles the day. Later samples cannot
+		// take it back, which is the whole point of the rule -- the price only
+		// has to clear the bar once per day, not hold it all day.
+		state.DayQualified = true
 	}
+
+	ctx.EventManager().EmitEvent(sdk.NewEvent(
+		tokenomicstypes.EventTypeDailySample,
+		sdk.NewAttribute(tokenomicstypes.AttributeKeyDay, fmt.Sprintf("%d", today)),
+		sdk.NewAttribute(tokenomicstypes.AttributeKeySamples, fmt.Sprintf("%d", state.SamplesToday)),
+		sdk.NewAttribute(tokenomicstypes.AttributeKeyPrice, priceData.Price.String()),
+		sdk.NewAttribute(tokenomicstypes.AttributeKeyVolume, priceData.Volume24h.String()),
+		sdk.NewAttribute(tokenomicstypes.AttributeKeySampleOk, fmt.Sprintf("%t", sampleOk)),
+	))
 
 	return k.SetReleaseState(ctx, state)
 }
@@ -230,15 +288,35 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	minerTarget := releaseQuota.MulRaw(int64(params.MinerReleaseShareBps)).QuoRaw(10000)
 	projectTarget := releaseQuota.Sub(minerTarget)
 
-	actualMinerRelease, err := k.ReleaseMinerLockedRewards(ctx, minerTarget)
-	if err != nil {
-		return err
-	}
+	// Record only. The ATOS behind this authorisation does not move here: it is
+	// released by x/bridgeadapter once Ethereum confirms, by Hyperlane receipt,
+	// that the matching ERC20 has landed in the bridge vault.
+	//
+	// Releasing here instead would let holders convert ATOX into ATOS that
+	// nothing backs, for as long as the Ethereum side lagged or failed — which is
+	// the exact failure the receipt round-trip exists to prevent. The authorized
+	// figure is capped to the miner pool's balance so it can never authorize more
+	// ATOS than exists to release.
+	actualMinerRelease := k.authorizeMinerRelease(ctx, minerTarget)
 	actualProjectRelease := projectTarget
 	if actualMinerRelease.LT(minerTarget) {
 		actualProjectRelease = actualProjectRelease.Add(minerTarget.Sub(actualMinerRelease))
 	}
 
+	// ProjectClaimable is deliberately NOT credited here. Per the design doc
+	// §3.4 step 1 only books the authorisation; ProjectClaimable is set in step 4
+	// from the Ethereum receipt (x/bridgeadapter applyReceipt). Crediting it in
+	// both places double-counts every release -- invisible today only because the
+	// forward dispatch did not exist, so no receipt ever arrived.
+	//
+	// KNOWN GAP, needs review: the capacity cap below still measures headroom
+	// against ProjectClaimable, which now lags this authorisation by one round
+	// trip. Between step 1 and step 4 the cap cannot see the in-flight
+	// authorisation, so consecutive tier releases could over-authorize by up to
+	// the in-flight amount. Bounded by one release (release_percentage_bps of
+	// circulating supply), and the ATOX side is still protected by the
+	// ERC20-lands-first invariant, but the accounting wants a pending-authorisation
+	// counter rather than this proxy.
 	projectClaimable := k.GetProjectClaimable(ctx)
 	projectPoolAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.ProjectPoolName)
 	projectPoolBalance := k.bankKeeper.GetBalance(ctx, projectPoolAddr, k.baseDenom()).Amount
@@ -249,10 +327,26 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	if actualProjectRelease.GT(remainingProjectCapacity) {
 		actualProjectRelease = remainingProjectCapacity
 	}
-	k.SetProjectClaimable(ctx, projectClaimable.Add(actualProjectRelease))
 
 	state.TotalMinerReleased = state.TotalMinerReleased.Add(actualMinerRelease)
 	state.TotalProjectReleased = state.TotalProjectReleased.Add(actualProjectRelease)
+
+	// Step 1 of the round trip: tell Ethereum the new cumulative targets. Failure
+	// is logged, not propagated: the amounts are cumulative, so the next release
+	// carries the full target and repairs a missed dispatch, whereas returning an
+	// error here would abort the EndBlocker and stall the chain on a bridge that
+	// is merely unconfigured or paused.
+	if k.tierDispatcher != nil {
+		if _, err := k.tierDispatcher.DispatchTierRelease(
+			ctx, state.TotalMinerReleased, state.TotalProjectReleased,
+		); err != nil {
+			k.Logger(ctx).Error("tier release dispatch failed; next release will resend the cumulative target",
+				"error", err,
+				"cumulative_miner", state.TotalMinerReleased.String(),
+				"cumulative_project", state.TotalProjectReleased.String(),
+			)
+		}
+	}
 
 	ctx.EventManager().EmitEvent(
 		sdk.NewEvent(
@@ -267,67 +361,168 @@ func (k Keeper) TriggerRelease(ctx sdk.Context, state *tokenomicstypes.ReleaseSt
 	return nil
 }
 
-// ReleaseMinerLockedRewards distributes newly unlocked miner rewards
-// proportionally to existing locked balances.
+// authorizeMinerRelease records how much of the miner pool a tier judgment has
+// authorized for release, without moving any ATOS.
 //
-// Audit Recommendation-2 (round2): return any SetMinerLockedBalance
-// error to the caller instead of panicking. The caller (TriggerRelease
-// → EndBlocker) already propagates errors up the FinalizeBlock chain,
-// so a failure here becomes a regular block error rather than a chain
-// halt.
-func (k Keeper) ReleaseMinerLockedRewards(ctx sdk.Context, target math.Int) (math.Int, error) {
+// Under the ATOX model the miner share is not owed to specific validators — it
+// backs every ATOX holder pro rata, and x/atox's index apportions it — so there
+// is no per-validator accounting to do here. What remains is to cap the
+// authorisation at the pool's actual balance, so a mis-specified release
+// percentage can never authorize more ATOS than exists.
+//
+// x/bridgeadapter does the moving, when Ethereum confirms the matching ERC20.
+//
+// No error return: every branch is a plain comparison against a balance the
+// bank keeper always answers. A nil error that can never be non-nil invites a
+// caller to skip checking it, and then to keep skipping it after someone adds a
+// failure path.
+func (k Keeper) authorizeMinerRelease(ctx sdk.Context, target math.Int) math.Int {
 	if !target.IsPositive() {
-		return math.ZeroInt(), nil
+		return math.ZeroInt()
 	}
 
-	totalLockedRemaining := math.ZeroInt()
-	var balances []tokenomicstypes.MinerLockedBalance
-	k.IterateMinerLockedBalances(ctx, func(balance tokenomicstypes.MinerLockedBalance) bool {
-		remaining := balance.LockedAccrued.Sub(balance.LockedClaimed).Sub(balance.LockedClaimable)
-		if remaining.IsPositive() {
-			totalLockedRemaining = totalLockedRemaining.Add(remaining)
-			balances = append(balances, balance)
-		}
-		return false
-	})
-
-	if !totalLockedRemaining.IsPositive() {
-		return math.ZeroInt(), nil
+	poolAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.MinerPoolName)
+	available := k.bankKeeper.GetBalance(ctx, poolAddr, k.baseDenom()).Amount
+	if !available.IsPositive() {
+		return math.ZeroInt()
 	}
 
-	actual := target
-	if target.GT(totalLockedRemaining) {
-		actual = totalLockedRemaining
+	if target.GT(available) {
+		return available
 	}
-
-	remainingToAssign := actual
-	for i, bal := range balances {
-		remaining := bal.LockedAccrued.Sub(bal.LockedClaimed).Sub(bal.LockedClaimable)
-		share := actual.Mul(remaining).Quo(totalLockedRemaining)
-		if i == len(balances)-1 {
-			share = remainingToAssign
-		}
-		if share.GT(remaining) {
-			share = remaining
-		}
-		if share.IsPositive() {
-			bal.LockedClaimable = bal.LockedClaimable.Add(share)
-			if err := k.SetMinerLockedBalance(ctx, bal); err != nil {
-				return math.ZeroInt(), fmt.Errorf("set miner locked balance %q: %w", bal.ValidatorAddress, err)
-			}
-			remainingToAssign = remainingToAssign.Sub(share)
-		}
-	}
-
-	return actual.Sub(remainingToAssign), nil
+	return target
 }
 
-// GetCirculatingSupply = migration pool total + immediate miner rewards + unlocked miner rewards + unlocked project rewards.
+// AuthorizedReleases returns the cumulative miner and project shares that tier
+// judgments have authorized, in ATOS. x/bridgeadapter reads these to reject a
+// receipt claiming more than the chain ever authorized.
+func (k Keeper) AuthorizedReleases(ctx sdk.Context) (miner, project math.Int) {
+	state := k.GetReleaseState(ctx)
+	return state.TotalMinerReleased, state.TotalProjectReleased
+}
+
+// MinerPoolName is the module account holding the ATOS that backs ATOX.
+func (k Keeper) MinerPoolName() string { return tokenomicstypes.MinerPoolName }
+
+// GetCirculatingSupply is the ATOS actually in circulation: the migration pool
+// plus everything tier releases have authorized.
+//
+// Block rewards contribute nothing — they are ATOX, and ATOX is not ATOS. The
+// old immediate-reward term is gone with the field it read.
 func (k Keeper) GetCirculatingSupply(ctx sdk.Context) math.Int {
 	params := k.GetParams(ctx)
 	state := k.GetReleaseState(ctx)
 	return params.MigrationPoolTotal.
-		Add(state.TotalImmediateDistributed).
 		Add(state.TotalMinerReleased).
 		Add(state.TotalProjectReleased)
+}
+
+// MigrationPoolName is the module account the asset bridge locks ATOS into and
+// releases from. It is the bridge's counterparty: neither ATOS nor the ERC20 can
+// be minted, so outbound locks here and inbound pays out of the same balance.
+func (k Keeper) MigrationPoolName() string { return tokenomicstypes.MigrationPoolName }
+
+// MigrationPoolBalance is the pool's live balance, which bounds both the daily
+// outbound cap and what an inbound transfer can be paid from.
+func (k Keeper) MigrationPoolBalance(ctx sdk.Context) math.Int {
+	addr := k.accountKeeper.GetModuleAddress(tokenomicstypes.MigrationPoolName)
+	return k.bankKeeper.GetBalance(ctx, addr, k.baseDenom()).Amount
+}
+
+// MigrationPoolTotal is the pool's configured size, the denominator for the
+// bridge's crisis-mode floor.
+func (k Keeper) MigrationPoolTotal(ctx sdk.Context) math.Int {
+	return k.GetParams(ctx).MigrationPoolTotal
+}
+
+// BaseDenom is the ATOS denom.
+func (k Keeper) BaseDenom() string { return k.baseDenom() }
+
+// RefillMigrationPool tops migration_pool up out of project_pool.
+//
+// migration_pool is the reserve behind the ordinary user bridge: every bridge-in
+// releases ATOS from it, and every bridge-out returns ATOS to it. If it empties,
+// inbound transfers stop -- even though project_pool holds trillions of ATOS
+// that tier releases have already authorized. Design doc 1.4 calls the fix
+// "半自动补充（低于阈值自动补，从 project_pool 补充）".
+//
+// # What bounds the transfer
+//
+// ProjectClaimable. That counter is the cumulative ATOS the Ethereum side has
+// confirmed releasing to the project (receipt leg, design doc 3.4 step 4), and
+// it is the ONLY thing that makes this transfer solvent: moving ATOS out of
+// project_pool without it would put ATOS into circulation that no locked ERC20
+// backs, which is the invariant the whole round trip exists to protect.
+//
+// It is not a balance anyone may withdraw. The project's half of a release is
+// paid as ERC20 into the project cold wallet on Ethereum; this counter is the
+// separate, on-chain permission to keep the bridge liquid. An earlier version
+// let params.project_treasury_address draw ATOS against it, which paid the
+// project twice for one release.
+//
+// # Why it is not an error to be unable to refill
+//
+// A short pool with no authorisation left is a legitimate state: it means the
+// bridge has drained faster than tier releases have authorized. The right
+// response is to stop refilling, not to halt the chain, so this returns nil and
+// leaves the bridge's own rate limiting to reject transfers it cannot fund.
+func (k Keeper) RefillMigrationPool(ctx sdk.Context) error {
+	params := k.GetParams(ctx)
+	if params.MigrationRefillThresholdBps == 0 {
+		return nil
+	}
+
+	total := params.MigrationPoolTotal
+	if total.IsNil() || !total.IsPositive() {
+		return nil
+	}
+
+	migrationAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.MigrationPoolName)
+	balance := k.bankKeeper.GetBalance(ctx, migrationAddr, k.baseDenom()).Amount
+
+	threshold := total.MulRaw(int64(params.MigrationRefillThresholdBps)).QuoRaw(tokenomicstypes.BpsDenominator)
+	if balance.GTE(threshold) {
+		return nil
+	}
+
+	authorized := k.GetProjectClaimable(ctx)
+	if !authorized.IsPositive() {
+		return nil
+	}
+
+	// Refill back to full, bounded by the authorisation and by what project_pool
+	// actually holds. Refilling to the threshold instead would re-trigger on
+	// almost every block once the pool hovered near it.
+	want := total.Sub(balance)
+	if want.GT(authorized) {
+		want = authorized
+	}
+
+	projectAddr := k.accountKeeper.GetModuleAddress(tokenomicstypes.ProjectPoolName)
+	projectBalance := k.bankKeeper.GetBalance(ctx, projectAddr, k.baseDenom()).Amount
+	if want.GT(projectBalance) {
+		want = projectBalance
+	}
+	if !want.IsPositive() {
+		return nil
+	}
+
+	coins := sdk.NewCoins(sdk.NewCoin(k.baseDenom(), want))
+	if err := k.bankKeeper.SendCoinsFromModuleToModule(
+		ctx, tokenomicstypes.ProjectPoolName, tokenomicstypes.MigrationPoolName, coins,
+	); err != nil {
+		return err
+	}
+
+	// Spend the authorisation. Without this the same permission would fund an
+	// unlimited number of refills.
+	k.SetProjectClaimable(ctx, authorized.Sub(want))
+
+	ctx.EventManager().EmitEvent(sdk.NewEvent(
+		tokenomicstypes.EventTypeMigrationPoolRefilled,
+		sdk.NewAttribute(tokenomicstypes.AttributeKeyAmount, want.String()),
+		sdk.NewAttribute(tokenomicstypes.AttributeKeyRemainingAuthorisation,
+			authorized.Sub(want).String()),
+	))
+	return nil
 }

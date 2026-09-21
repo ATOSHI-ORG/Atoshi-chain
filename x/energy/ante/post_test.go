@@ -87,7 +87,7 @@ func runRefundPost(
 		WithValue(energyante.CtxKeyEnergySigner, signer)
 	tx := fakeFeeTx{
 		gas:      gasLimit,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(1_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1_000))),
 		feePayer: signer,
 		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
 	}
@@ -103,7 +103,9 @@ func runRefundPost(
 // the same 30k subsidy was burned three times.
 //
 // Root cause: the PostHandler computed
-//     refund = min(reserved_energy, gas_limit - gas_used)
+//
+//	refund = min(reserved_energy, gas_limit - gas_used)
+//
 // which silently rolled back the FULL reserved energy whenever the tx
 // had any unused gas room at all (the common case: a 300k MsgSend
 // uses ~232k, leaving 68k unused — that's >= 30k, so the entire 30k

@@ -18,6 +18,7 @@ import (
 	"github.com/atoshi-chain/atoshi/v20/rpc/backend/mocks"
 	rpc "github.com/atoshi-chain/atoshi/v20/rpc/types"
 	utiltx "github.com/atoshi-chain/atoshi/v20/testutil/tx"
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 )
 
@@ -154,7 +155,12 @@ func (suite *BackendTestSuite) TestBaseFee() {
 }
 
 func (suite *BackendTestSuite) TestChainId() {
-	expChainID := (*hexutil.Big)(big.NewInt(9000))
+	// Derived from the suite's chain id, not a literal. Backend.ChainID parses
+	// the EIP-155 id out of clientCtx.ChainID, so the hardcoded 9000 only ever
+	// matched evmos and went stale at the fork -- this chain's testnet is 88288.
+	eip155ChainID, err := atoshitypes.ParseChainID(ChainID)
+	suite.Require().NoError(err)
+	expChainID := (*hexutil.Big)(eip155ChainID)
 	testCases := []struct {
 		name         string
 		registerMock func()

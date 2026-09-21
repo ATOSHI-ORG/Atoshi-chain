@@ -8,9 +8,10 @@ import (
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 
-	sdktypes "github.com/cosmos/cosmos-sdk/types"
 	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/utils"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/types"
+	sdktypes "github.com/cosmos/cosmos-sdk/types"
+	gethparams "github.com/ethereum/go-ethereum/params"
 )
 
 func (suite *KeeperTestSuite) TestEthereumTx() {
@@ -42,6 +43,15 @@ func (suite *KeeperTestSuite) TestEthereumTx() {
 				args := types.EvmTxArgs{
 					To:     &recipient,
 					Amount: big.NewInt(1e18),
+					// Pinned to exactly what a transfer costs. This calls
+					// EthereumTx directly, so no AnteHandler ran and the fee
+					// collector holds nothing; any gas left over makes RefundGas
+					// fail with "spendable balance 0liao is smaller than ...".
+					//
+					// Leaving GasLimit unset made the factory estimate it, and the
+					// harness adds headroom on top (see estimateShortfallDivisor),
+					// which left 5250 gas to refund out of an empty fee collector.
+					GasLimit: gethparams.TxGas,
 				}
 				tx, err := suite.factory.GenerateSignedEthTx(suite.keyring.GetPrivKey(0), args)
 				suite.Require().NoError(err)

@@ -80,7 +80,7 @@ func (k Keeper) Delegate(
 	if currentLocked.IsNil() {
 		currentLocked = math.ZeroInt()
 	}
-	bal := k.bankKeeper.GetBalance(ctx, delegator, k.baseDenom).Amount
+	bal := k.bankKeeper.GetBalance(ctx, delegator, k.BaseDenom()).Amount
 	if bal.LT(lockedATOS) {
 		return 0, math.ZeroInt(), types.ErrInsufficientBalance
 	}
@@ -121,7 +121,7 @@ func (k Keeper) Delegate(
 	// projected eligible (= old eligible balance, since bank dropped
 	// and LockedAtos rose by the same `lockedATOS`).
 	if err := k.bankKeeper.SendCoinsFromAccountToModule(
-		ctx, delegator, types.LockedEnergyPoolName, sdk.NewCoins(sdk.NewCoin(k.baseDenom, lockedATOS)),
+		ctx, delegator, types.LockedEnergyPoolName, sdk.NewCoins(sdk.NewCoin(k.BaseDenom(), lockedATOS)),
 	); err != nil {
 		return 0, math.ZeroInt(), err
 	}
@@ -249,7 +249,7 @@ func (k Keeper) releaseDelegation(ctx sdk.Context, d types.EnergyDelegation, eve
 	// just shifted from locked to liquid.
 	if d.LockedAtos.IsPositive() {
 		if err := k.bankKeeper.SendCoinsFromModuleToAccount(
-			ctx, types.LockedEnergyPoolName, delegator, sdk.NewCoins(sdk.NewCoin(k.baseDenom, d.LockedAtos)),
+			ctx, types.LockedEnergyPoolName, delegator, sdk.NewCoins(sdk.NewCoin(k.BaseDenom(), d.LockedAtos)),
 		); err != nil {
 			return err
 		}

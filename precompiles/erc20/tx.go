@@ -9,7 +9,6 @@ import (
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/x/authz"
-	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -84,6 +83,19 @@ func (p *Precompile) transfer(
 		return nil, err
 	}
 
+	// Recipient balance before the send, so the Transfer event can report what
+	// actually arrived rather than what was asked for.
+	//
+	// ATOX carries a 10% inclusive transfer fee: a transfer(to, 100) moves 100
+	// out of the sender and delivers 90. Emitting `amount` would tell every
+	// explorer, indexer and exchange that 90 aatox arrived as 100 -- the kind of
+	// mismatch that makes an exchange credit a deposit it never received.
+	//
+	// Measured rather than recomputed: the fee rules live in x/atox and
+	// duplicating them here is how the two drift. A balance delta is exact for
+	// any fee, exemption or future rule.
+	recipientBefore := p.BankKeeper.GetBalance(ctx, to.Bytes(), p.tokenPair.Denom).Amount
+
 	isTransferFrom := method.Name == TransferFromMethod
 	owner := sdk.AccAddress(from.Bytes())
 	spenderAddr := contract.CallerAddress
@@ -92,8 +104,7 @@ func (p *Precompile) transfer(
 
 	var prevAllowance *big.Int
 	if ownerIsSpender {
-		msgSrv := bankkeeper.NewMsgServerImpl(p.BankKeeper)
-		_, err = msgSrv.Send(ctx, msg)
+		_, err = p.bankMsgServerOrStock().Send(ctx, msg)
 	} else {
 		_, _, prevAllowance, err = GetAuthzExpirationAndAllowance(p.AuthzKeeper, ctx, spenderAddr, from, p.tokenPair.Denom)
 		if err != nil {
@@ -116,7 +127,14 @@ func (p *Precompile) transfer(
 			cmn.NewBalanceChangeEntry(to, convertedAmount, cmn.Add))
 	}
 
-	if err = p.EmitTransferEvent(ctx, stateDB, from, to, amount); err != nil {
+	delivered := p.BankKeeper.GetBalance(ctx, to.Bytes(), p.tokenPair.Denom).Amount.
+		Sub(recipientBefore)
+	if delivered.IsNegative() {
+		// Cannot happen for a send, but a negative would pack as a huge uint256.
+		delivered = math.ZeroInt()
+	}
+
+	if err = p.EmitTransferEvent(ctx, stateDB, from, to, delivered.BigInt()); err != nil {
 		return nil, err
 	}
 

@@ -228,9 +228,13 @@ func TestQueryCirculatingSupply(t *testing.T) {
 	bondedAmount := network.GetInitialBondedAmount(baseCoinInfo.Decimals).MulRaw(nVals)
 	bondedCoins := sdk.NewDecCoin(evmostypes.BaseDenom, bondedAmount)
 
+	// Plus the tokenomics genesis pre-mint. bank counts it, so the query reports
+	// it — see the note on this endpoint in TestQueryInflationRate.
+	preMint := sdk.NewDecCoin(evmostypes.BaseDenom, tokenomicsPoolTotal())
+
 	res, err := qc.CirculatingSupply(ctx, &types.QueryCirculatingSupplyRequest{})
 	require.NoError(t, err)
-	require.Equal(t, expCirculatingSupply.Add(bondedCoins), res.CirculatingSupply)
+	require.Equal(t, expCirculatingSupply.Add(bondedCoins).Add(preMint), res.CirculatingSupply)
 }
 
 func TestQueryInflationRate(t *testing.T) {
@@ -262,7 +266,12 @@ func TestQueryInflationRate(t *testing.T) {
 	err := nw.App.InflationKeeper.MintCoins(ctx, mintCoin)
 	require.NoError(t, err)
 
-	circulatingSupply := valBondedAmt.Add(accsBondAmount).Add(accsFreeAmount).Add(mintAmount)
+	// Plus the tokenomics genesis pre-mint of the whole 10 trillion ATOS supply.
+	// It dominates everything else here, which is why the rate this endpoint
+	// reports is tiny — inflation is disabled on this chain and x/tokenomics owns
+	// emission instead, so the figure is informational only.
+	circulatingSupply := valBondedAmt.Add(accsBondAmount).Add(accsFreeAmount).
+		Add(mintAmount).Add(tokenomicsPoolTotal())
 
 	epp := nw.App.InflationKeeper.GetEpochsPerPeriod(ctx)
 	epochsPerPeriod := math.LegacyNewDec(epp)

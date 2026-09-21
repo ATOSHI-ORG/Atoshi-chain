@@ -4,14 +4,14 @@
 package ante
 
 import (
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/x/auth/ante"
-	sdkvesting "github.com/cosmos/cosmos-sdk/x/auth/vesting/types"
-	ibcante "github.com/cosmos/ibc-go/v8/modules/core/ante"
 	cosmosante "github.com/atoshi-chain/atoshi/v20/app/ante/cosmos"
 	evmante "github.com/atoshi-chain/atoshi/v20/app/ante/evm"
 	energyante "github.com/atoshi-chain/atoshi/v20/x/energy/ante"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/x/auth/ante"
+	sdkvesting "github.com/cosmos/cosmos-sdk/x/auth/vesting/types"
+	ibcante "github.com/cosmos/ibc-go/v8/modules/core/ante"
 )
 
 // newCosmosAnteHandler creates the default ante handler for Cosmos transactions.
@@ -36,7 +36,7 @@ func newCosmosAnteHandler(options HandlerOptions) sdk.AnteHandler {
 		feeDecorator = ante.NewDeductFeeDecorator(options.AccountKeeper, options.BankKeeper, options.FeegrantKeeper, options.TxFeeChecker)
 	}
 
-	return sdk.ChainAnteDecorators(
+	decorators := []sdk.AnteDecorator{
 		cosmosante.RejectMessagesDecorator{}, // reject MsgEthereumTxs
 		cosmosante.NewAuthzLimiterDecorator( // disable the Msg types that cannot be included on an authz.MsgExec msgs field
 			sdk.MsgTypeURL(&evmtypes.MsgEthereumTx{}),
@@ -48,6 +48,21 @@ func newCosmosAnteHandler(options HandlerOptions) sdk.AnteHandler {
 		ante.NewTxTimeoutHeightDecorator(),
 		ante.NewValidateMemoDecorator(options.AccountKeeper),
 		cosmosante.NewMinGasPriceDecorator(options.FeeMarketKeeper, options.EvmKeeper),
+	}
+
+	// Chain-wide validator self-stake floor. Only wired when a tokenomics keeper
+	// is supplied -- see HandlerOptions -- so unit tests assembling a bare ante
+	// chain are unaffected.
+	//
+	// Position matters: after ValidateBasic so the msg is known well-formed, and
+	// before the fee decorator so a validator that cannot meet the floor is
+	// rejected without being charged for the attempt.
+	if options.TokenomicsKeeper != nil {
+		decorators = append(decorators,
+			cosmosante.NewMinSelfDelegationDecorator(options.TokenomicsKeeper))
+	}
+
+	decorators = append(decorators,
 		ante.NewConsumeGasForTxSizeDecorator(options.AccountKeeper),
 		feeDecorator,
 		// SetPubKeyDecorator must be called before all signature verification decorators
@@ -59,4 +74,6 @@ func newCosmosAnteHandler(options HandlerOptions) sdk.AnteHandler {
 		ibcante.NewRedundantRelayDecorator(options.IBCKeeper),
 		evmante.NewGasWantedDecorator(options.EvmKeeper, options.FeeMarketKeeper),
 	)
+
+	return sdk.ChainAnteDecorators(decorators...)
 }

@@ -9,6 +9,15 @@ import (
 
 	sdkmath "cosmossdk.io/math"
 	storetypes "cosmossdk.io/store/types"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/factory"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/grpc"
+	testkeyring "github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/keyring"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/network"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/utils"
+	utiltx "github.com/atoshi-chain/atoshi/v20/testutil/tx"
+	"github.com/atoshi-chain/atoshi/v20/x/evm/keeper"
+	"github.com/atoshi-chain/atoshi/v20/x/evm/types"
+	feemarkettypes "github.com/atoshi-chain/atoshi/v20/x/feemarket/types"
 	"github.com/cometbft/cometbft/crypto/tmhash"
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	cmttypes "github.com/cometbft/cometbft/types"
@@ -20,15 +29,6 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/factory"
-	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/grpc"
-	testkeyring "github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/keyring"
-	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/network"
-	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/utils"
-	utiltx "github.com/atoshi-chain/atoshi/v20/testutil/tx"
-	"github.com/atoshi-chain/atoshi/v20/x/evm/keeper"
-	"github.com/atoshi-chain/atoshi/v20/x/evm/types"
-	feemarkettypes "github.com/atoshi-chain/atoshi/v20/x/feemarket/types"
 )
 
 func (suite *KeeperTestSuite) TestGetHashFn() {
@@ -439,8 +439,20 @@ func (suite *KeeperTestSuite) TestRefundGas() {
 			coreMsg, err := txFactory.GenerateGethCoreMsg(
 				sender.Priv,
 				types.EvmTxArgs{
-					To:       &recipient,
-					Amount:   big.NewInt(100),
+					To:     &recipient,
+					Amount: big.NewInt(100),
+					// Pinned, not estimated. Every case above is written against
+					// transactionGas == params.TxGas: the first one relies on
+					// leftoverGas (TxGas+1) exceeding it to return early, and the
+					// rest derive expGasRefund from TxGas. Leaving GasLimit unset
+					// makes the factory fill it from eth_estimateGas, and the
+					// harness adds headroom on top of that (see
+					// estimateShortfallDivisor), so transactionGas came out ~25%
+					// above TxGas and every expectation in the table went stale.
+					//
+					// The arithmetic under test should not depend on an estimate
+					// anyway.
+					GasLimit: params.TxGas,
 					GasPrice: tc.gasPrice,
 				},
 			)

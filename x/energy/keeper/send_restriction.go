@@ -5,6 +5,8 @@ import (
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 )
 
 // SendRestriction is registered with bank.AppendSendRestriction at app
@@ -25,10 +27,16 @@ import (
 // pre-send balance, subtract/add the moved amount, and pass the
 // projected post-send balance to ApplyBalanceChange.
 //
-// Only transfers of the base denom (aatos) move energy-eligible
-// funds. Other denoms (IBC vouchers, future tokens) are ignored.
+// Both energy-eligible denoms count: liao and aatox. ATOX was added to
+// EligibleBalance but this gate still filtered on the base denom alone, so an
+// ATOX transfer left both parties' snapshots frozen at their pre-transfer value
+// -- the eligibility sum was right and nothing ever asked it to recompute.
+// Other denoms (IBC vouchers, future tokens) are still ignored.
 func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) (sdk.AccAddress, error) {
-	moved := amt.AmountOf(k.baseDenom)
+	// Summed, not handled separately: both carry 18 decimals and both count at
+	// face value toward eligibility, so their total is the amount by which the
+	// recipient's eligible balance is about to rise.
+	moved := amt.AmountOf(k.BaseDenom()).Add(amt.AmountOf(atoshitypes.AtoxBaseDenom))
 	if !moved.IsPositive() {
 		return to, nil
 	}
@@ -43,8 +51,24 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 
-	fromBefore := k.bankKeeper.GetBalance(sdkCtx, from, k.baseDenom).Amount
-	toBefore := k.bankKeeper.GetBalance(sdkCtx, to, k.baseDenom).Amount
+	// Read the two bank terms directly instead of calling EligibleBalance.
+	//
+	// EligibleBalance would be the tidier call and would never drift from the
+	// definition, but it also reads the staking delegations, and this runs on
+	// every transfer on the chain: routing the hot path through it pushed a
+	// plain MsgSend from 200_061 gas over a 200_000 limit -- x/feemarket's
+	// integration tests turned red with "out of gas in location: ReadFlat".
+	//
+	// So the cheap terms are summed here and the staked term is deliberately
+	// left out, exactly as before. That makes this projection an approximation
+	// of EligibleBalance for stakers, which is tolerable because it is only a
+	// snapshot: settle (keeper/settle.go) recomputes from EligibleBalance and
+	// corrects it. What was NOT tolerable is omitting ATOX, because nothing else
+	// was triggering a recompute after an ATOX transfer.
+	fromBefore := k.bankKeeper.GetBalance(sdkCtx, from, k.BaseDenom()).Amount.
+		Add(k.bankKeeper.GetBalance(sdkCtx, from, atoshitypes.AtoxBaseDenom).Amount)
+	toBefore := k.bankKeeper.GetBalance(sdkCtx, to, k.BaseDenom()).Amount.
+		Add(k.bankKeeper.GetBalance(sdkCtx, to, atoshitypes.AtoxBaseDenom).Amount)
 
 	// Audit Question 2 (round2): the projected post-send "eligible
 	// balance" we pass into ApplyBalanceChange must match what
@@ -64,7 +88,7 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 	//
 	// Old code computed `projected_from = fromBefore - moved + fromLocked`,
 	// which on Evmos became `(real_pre - moved) - moved + fromLocked`
-	// = `real_pre - 2*moved + fromLocked`. snapshot lost `moved` aatos
+	// = `real_pre - 2*moved + fromLocked`. snapshot lost `moved` liao
 	// on every transfer — even pure delegations that should be
 	// cap-neutral. For a 30k ATOS lock that's exactly one
 	// TxEnergyHoldingThreshold worth of eligible balance → capacity

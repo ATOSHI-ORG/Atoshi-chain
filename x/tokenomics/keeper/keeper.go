@@ -24,6 +24,20 @@ type Keeper struct {
 	stakingKeeper    tokenomicstypes.StakingKeeper
 	distrKeeper      tokenomicstypes.DistrKeeper
 	oracleKeeper     tokenomicstypes.OracleKeeper
+	// atoxKeeper is optional so unit tests can exercise the tier engine
+	// without the ATOX module; block rewards are skipped when it is nil.
+	atoxKeeper tokenomicstypes.AtoxKeeper
+	// tierDispatcher sends the forward leg of a tier release to Ethereum. Set
+	// after construction because x/bridgeadapter already depends on this keeper,
+	// so taking it as a constructor argument would be an import cycle. Optional:
+	// nil means the round trip is not wired, which is what unit tests want.
+	tierDispatcher tokenomicstypes.TierDispatcher
+}
+
+// SetTierDispatcher wires the Ethereum-facing dispatcher. Called once from
+// app.go after both keepers exist.
+func (k *Keeper) SetTierDispatcher(d tokenomicstypes.TierDispatcher) {
+	k.tierDispatcher = d
 }
 
 func NewKeeper(
@@ -36,6 +50,7 @@ func NewKeeper(
 	sk tokenomicstypes.StakingKeeper,
 	dk tokenomicstypes.DistrKeeper,
 	ok tokenomicstypes.OracleKeeper,
+	xk tokenomicstypes.AtoxKeeper,
 ) Keeper {
 	if err := sdk.VerifyAddressFormat(authority); err != nil {
 		panic(err)
@@ -50,6 +65,7 @@ func NewKeeper(
 		stakingKeeper:    sk,
 		distrKeeper:      dk,
 		oracleKeeper:     ok,
+		atoxKeeper:       xk,
 	}
 }
 
@@ -133,45 +149,6 @@ func (k Keeper) SetBlockRewardState(ctx sdk.Context, state tokenomicstypes.Block
 	return nil
 }
 
-func (k Keeper) GetMinerLockedBalance(ctx sdk.Context, valAddr string) tokenomicstypes.MinerLockedBalance {
-	store := ctx.KVStore(k.storeKey)
-	bz := store.Get(tokenomicstypes.MinerLockedKey(valAddr))
-	if bz == nil {
-		return tokenomicstypes.NewMinerLockedBalance(valAddr)
-	}
-	var bal tokenomicstypes.MinerLockedBalance
-	if err := k.cdc.Unmarshal(bz, &bal); err != nil {
-		panic(fmt.Errorf("failed to unmarshal miner locked balance: %w", err))
-	}
-	return bal
-}
-
-func (k Keeper) SetMinerLockedBalance(ctx sdk.Context, bal tokenomicstypes.MinerLockedBalance) error {
-	store := ctx.KVStore(k.storeKey)
-	bz, err := k.cdc.Marshal(&bal)
-	if err != nil {
-		return err
-	}
-	store.Set(tokenomicstypes.MinerLockedKey(bal.ValidatorAddress), bz)
-	return nil
-}
-
-func (k Keeper) IterateMinerLockedBalances(ctx sdk.Context, fn func(balance tokenomicstypes.MinerLockedBalance) bool) {
-	store := ctx.KVStore(k.storeKey)
-	iter := storetypes.KVStorePrefixIterator(store, tokenomicstypes.KeyPrefixMinerLocked)
-	defer iter.Close()
-
-	for ; iter.Valid(); iter.Next() {
-		var bal tokenomicstypes.MinerLockedBalance
-		if err := k.cdc.Unmarshal(iter.Value(), &bal); err != nil {
-			continue
-		}
-		if fn(bal) {
-			return
-		}
-	}
-}
-
 func (k Keeper) GetProjectClaimable(ctx sdk.Context) math.Int {
 	store := ctx.KVStore(k.storeKey)
 	bz := store.Get(tokenomicstypes.KeyPrefixProjectClaimable)
@@ -215,4 +192,10 @@ func (k Keeper) validatorToAccAddress(valAddr string) (sdk.AccAddress, error) {
 
 func (k Keeper) getValidatorVotingPower(ctx sdk.Context, validator stakingtypes.ValidatorI) math.Int {
 	return validator.GetTokens()
+}
+
+// GetValidatorMinSelfDelegation returns the chain-wide floor on a validator's own
+// stake, in the base denom. Zero means the requirement is disabled.
+func (k Keeper) GetValidatorMinSelfDelegation(ctx sdk.Context) math.Int {
+	return k.GetParams(ctx).ValidatorMinSelfDelegation
 }

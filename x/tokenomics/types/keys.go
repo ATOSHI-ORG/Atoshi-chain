@@ -5,15 +5,17 @@ const (
 	StoreKey   = ModuleName
 	RouterKey  = ModuleName
 
-	MinerPoolName       = "miner_pool"
-	ProjectPoolName     = "project_pool"
-	MigrationPoolName   = "migration_pool"
-	MinerLockedPoolName = "miner_locked_pool"
+	MinerPoolName     = "miner_pool"
+	ProjectPoolName   = "project_pool"
+	MigrationPoolName = "migration_pool"
 )
 
 const (
 	prefixParams = iota + 1
-	prefixMinerLocked
+	// prefixMinerLocked is retired. The number stays occupied on purpose: a new
+	// prefix reusing it would collide with any locked-balance rows still on disk
+	// from before the ATOX switch and read them as something else.
+	prefixMinerLockedRetired
 	prefixReleaseState
 	prefixProjectClaimable
 	prefixMigrationClaimed
@@ -24,7 +26,6 @@ const (
 
 var (
 	KeyPrefixParams           = []byte{prefixParams}
-	KeyPrefixMinerLocked      = []byte{prefixMinerLocked}
 	KeyPrefixReleaseState     = []byte{prefixReleaseState}
 	KeyPrefixProjectClaimable = []byte{prefixProjectClaimable}
 	KeyPrefixMigrationClaimed = []byte{prefixMigrationClaimed}
@@ -32,10 +33,6 @@ var (
 	KeyPrefixCirculatingCache = []byte{prefixCirculatingCache}
 	KeyPrefixBlockRewardState = []byte{prefixBlockRewardState}
 )
-
-func MinerLockedKey(valAddr string) []byte {
-	return append(KeyPrefixMinerLocked, []byte(valAddr)...)
-}
 
 func MigrationClaimedKey(addr string) []byte {
 	return append(KeyPrefixMigrationClaimed, []byte(addr)...)

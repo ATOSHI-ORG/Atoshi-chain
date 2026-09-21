@@ -2,6 +2,8 @@ package ante_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -17,6 +19,8 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	"github.com/stretchr/testify/require"
+
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 	protov2 "google.golang.org/protobuf/proto"
 
 	energyante "github.com/atoshi-chain/atoshi/v20/x/energy/ante"
@@ -28,6 +32,7 @@ import (
 
 type fakeBank struct {
 	balances map[string]math.Int
+	atox     map[string]math.Int
 	denom    string
 	// records the last SendCoinsFromAccountToModule call so we can assert
 	lastFrom   sdk.AccAddress
@@ -36,16 +41,27 @@ type fakeBank struct {
 }
 
 func newFakeBank(denom string) *fakeBank {
-	return &fakeBank{balances: map[string]math.Int{}, denom: denom}
+	return &fakeBank{balances: map[string]math.Int{}, atox: map[string]math.Int{}, denom: denom}
 }
 
 func (b *fakeBank) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) sdk.Coin {
+	// Denom-aware: EligibleBalance reads both the base denom and aatox, and a
+	// stub that answers every denom from one ledger would double-count the
+	// holder's ATOS as ATOX. These tests carry no ATOX, so aatox reads zero.
+	if denom == atoshitypes.AtoxBaseDenom {
+		v, ok := b.atox[addr.String()]
+		if !ok {
+			return sdk.NewCoin(denom, math.ZeroInt())
+		}
+		return sdk.NewCoin(denom, v)
+	}
 	v, ok := b.balances[addr.String()]
 	if !ok {
 		return sdk.NewCoin(denom, math.ZeroInt())
 	}
 	return sdk.NewCoin(denom, v)
 }
+
 func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.AccAddress, module string, amt sdk.Coins) error {
 	b.lastFrom = sender
 	b.lastModule = module
@@ -57,6 +73,7 @@ func (b *fakeBank) SendCoinsFromAccountToModule(_ context.Context, sender sdk.Ac
 	b.balances[sender.String()] = cur.Sub(amt.AmountOf(b.denom))
 	return nil
 }
+
 func (b *fakeBank) SendCoinsFromModuleToAccount(_ context.Context, _ string, recipient sdk.AccAddress, amt sdk.Coins) error {
 	cur := b.balances[recipient.String()]
 	if cur.IsNil() {
@@ -73,7 +90,11 @@ type fakeAccountKeeper struct {
 func (f fakeAccountKeeper) GetModuleAddress(name string) sdk.AccAddress {
 	return sdk.AccAddress([]byte("module/" + name))
 }
-func (f fakeAccountKeeper) GetModuleAccount(_ context.Context, _ string) sdk.ModuleAccountI { return nil }
+
+func (f fakeAccountKeeper) GetModuleAccount(_ context.Context, _ string) sdk.ModuleAccountI {
+	return nil
+}
+
 func (f fakeAccountKeeper) GetAccount(_ context.Context, addr sdk.AccAddress) sdk.AccountI {
 	if f.exists[addr.String()] {
 		// return a non-nil minimal account; the decorator only checks != nil
@@ -91,13 +112,13 @@ type fakeFeeTx struct {
 	msgs       []sdk.Msg
 }
 
-func (t fakeFeeTx) GetMsgs() []sdk.Msg                       { return t.msgs }
-func (t fakeFeeTx) GetMsgsV2() ([]protov2.Message, error)    { return nil, nil }
-func (t fakeFeeTx) ValidateBasic() error                     { return nil }
-func (t fakeFeeTx) GetGas() uint64                           { return t.gas }
-func (t fakeFeeTx) GetFee() sdk.Coins                        { return t.fee }
-func (t fakeFeeTx) FeePayer() []byte                         { return t.feePayer }
-func (t fakeFeeTx) FeeGranter() []byte                       { return t.feeGranter }
+func (t fakeFeeTx) GetMsgs() []sdk.Msg                    { return t.msgs }
+func (t fakeFeeTx) GetMsgsV2() ([]protov2.Message, error) { return nil, nil }
+func (t fakeFeeTx) ValidateBasic() error                  { return nil }
+func (t fakeFeeTx) GetGas() uint64                        { return t.gas }
+func (t fakeFeeTx) GetFee() sdk.Coins                     { return t.fee }
+func (t fakeFeeTx) FeePayer() []byte                      { return t.feePayer }
+func (t fakeFeeTx) FeeGranter() []byte                    { return t.feeGranter }
 
 // ----- harness -----
 
@@ -112,10 +133,10 @@ func newTestEnv(t *testing.T) (keeper.Keeper, *fakeBank, fakeAccountKeeper, sdk.
 	registry := codectypes.NewInterfaceRegistry()
 	cdc := codec.NewProtoCodec(registry)
 
-	bank := newFakeBank("aatos")
+	bank := newFakeBank("liao")
 	ak := fakeAccountKeeper{exists: map[string]bool{}}
-	k := keeper.NewKeeper(cdc, storeKey, fakeAccKeeperShim{fakeAccountKeeper: ak}, bank, nil,
-		sdk.AccAddress([]byte("authority")).String(), "aatos")
+	k := keeper.NewKeeper(cdc, storeKey, fakeAccKeeperShim{fakeAccountKeeper: ak}, bank, nil, nil,
+		sdk.AccAddress([]byte("authority")).String(), func() string { return "liao" })
 
 	header := tmproto.Header{Time: time.Unix(1_700_000_000, 0)}
 	ctx := sdk.NewContext(cms, header, false, log.NewNopLogger()).
@@ -146,7 +167,7 @@ func TestDecorator_SubsidizedMsg_NoFeeCharged(t *testing.T) {
 	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
 	tx := fakeFeeTx{
 		gas:      21_000,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(1_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1_000))),
 		feePayer: signer,
 		msgs:     nil,
 	}
@@ -171,7 +192,7 @@ func TestDecorator_EnergyCoversAllGas_ZeroFee(t *testing.T) {
 	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
 	tx := fakeFeeTx{
 		gas:      21_000,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(1_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1_000))),
 		feePayer: signer,
 		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
 	}
@@ -194,17 +215,17 @@ func TestDecorator_PartialEnergy_DeductsShortfallProrated(t *testing.T) {
 
 	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
 	// gas_limit 100k, energy covers 50k → shortfall = 50k. Fee offered:
-	// 100,000 aatos for 100k gas = 1 aatos/gas. Charge = 1 * 50000 = 50000.
+	// 100,000 liao for 100k gas = 1 liao/gas. Charge = 1 * 50000 = 50000.
 	tx := fakeFeeTx{
 		gas:      100_000,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(100_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(100_000))),
 		feePayer: signer,
 		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
 	}
 	_, err := d.AnteHandle(ctx, tx, false, terminalAnte)
 	require.NoError(t, err)
 	require.NotNil(t, bank.lastAmt)
-	require.Equal(t, "aatos", bank.lastAmt[0].Denom)
+	require.Equal(t, "liao", bank.lastAmt[0].Denom)
 	require.True(t, bank.lastAmt[0].Amount.Equal(math.NewInt(50_000)),
 		"expected 50000 shortfall, got %s", bank.lastAmt[0].Amount)
 	require.Equal(t, authtypes.FeeCollectorName, bank.lastModule)
@@ -223,7 +244,7 @@ func TestDecorator_EnergyDisabled_StillChargesFullFee(t *testing.T) {
 	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
 	tx := fakeFeeTx{
 		gas:      21_000,
-		fee:      sdk.NewCoins(sdk.NewCoin("aatos", math.NewInt(21_000))),
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(21_000))),
 		feePayer: signer,
 		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
 	}
@@ -246,3 +267,152 @@ func (m mockMsg) ProtoMessage()  {}
 // proto.MessageName() to format type URLs as "/<name>", so we make our
 // mock report whatever URL the test wants.
 func (m mockMsg) XXX_MessageName() string { return m.typeURL[1:] }
+
+// ----- simulation parity -----
+//
+// These two guard the gas-estimation fixes. Both failures they cover were
+// production bugs that broke `--gas auto`, and both are the kind of thing a
+// later refactor would silently undo.
+
+// rejectingFeeChecker stands in for the real dynamic fee checker, which rejects
+// gas 0 outright (app/ante/evm/fee_checker.go).
+func rejectingFeeChecker(_ sdk.Context, tx sdk.Tx) (sdk.Coins, int64, error) {
+	feeTx, ok := tx.(sdk.FeeTx)
+	if !ok {
+		return nil, 0, fmt.Errorf("not a fee tx")
+	}
+	if feeTx.GetGas() == 0 {
+		return nil, 0, fmt.Errorf("gas cannot be zero")
+	}
+	return feeTx.GetFee(), 0, nil
+}
+
+// TestDecorator_SimulateSkipsFeeChecker — a simulated tx carries gas 0 by
+// definition, since simulation is how a client discovers the gas it needs. The
+// dynamic fee checker rejects gas 0, so calling it during simulation made
+// estimation fail outright for every tx energy fully covers.
+func TestDecorator_SimulateSkipsFeeChecker(t *testing.T) {
+	k, bank, ak, ctx := newTestEnv(t)
+	signer := sdk.AccAddress([]byte("alice___________________"))
+	ak.exists[signer.String()] = true
+
+	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, rejectingFeeChecker)
+	tx := fakeFeeTx{gas: 0, fee: sdk.NewCoins(), feePayer: signer, msgs: []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}}}
+
+	_, err := d.AnteHandle(ctx, tx, true, terminalAnte)
+	require.NoError(t, err, "simulation must not run the fee checker; the SDK guards the same call with !simulate")
+
+	// Delivery still runs it, so a genuinely bad fee is still caught.
+	_, err = d.AnteHandle(ctx, tx, false, terminalAnte)
+	require.Error(t, err, "delivery must still validate the fee")
+}
+
+// TestDecorator_SimulateDoesTheEnergyWork is the parity check behind the gas
+// estimate. Consume returns immediately when asked for zero gas, skipping the
+// settle, the account write and the event — all of which cost gas in delivery.
+// Simulation therefore reported a fraction of the real cost and `--gas auto`
+// handed back a limit the tx then died on.
+func TestDecorator_SimulateDoesTheEnergyWork(t *testing.T) {
+	measure := func(simulate bool, gas uint64) storetypes.Gas {
+		k, bank, ak, ctx := newTestEnv(t)
+		signer := sdk.AccAddress([]byte("alice___________________"))
+		ak.exists[signer.String()] = true
+		ctx = ctx.WithGasMeter(storetypes.NewInfiniteGasMeter())
+
+		d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, dummyTxFeeChecker)
+		tx := fakeFeeTx{
+			gas:      gas,
+			fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(1_000))),
+			feePayer: signer,
+			msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
+		}
+		before := ctx.GasMeter().GasConsumed()
+		_, err := d.AnteHandle(ctx, tx, simulate, terminalAnte)
+		require.NoError(t, err)
+		return ctx.GasMeter().GasConsumed() - before
+	}
+
+	simulated := measure(true, 0) // as a client submits it
+	delivered := measure(false, 21_000)
+
+	require.Positive(t, simulated,
+		"simulation must perform the energy accounting, or its gas figure means nothing")
+
+	// The cost of Consume barely depends on the amount asked for — same settle,
+	// same single account write, same event — so the two should be close. Before
+	// the fix `simulated` was zero here.
+	require.InDelta(t, float64(delivered), float64(simulated), float64(delivered)*0.5,
+		"simulated gas (%d) must be in the same range as delivered (%d)", simulated, delivered)
+}
+
+// TestDecorator_ShortfallPathRunsFeeChecker locks in that a tx which pays ATOS
+// for an energy shortfall still has its declared fee validated.
+//
+// This path used to skip txFeeChecker outright. Because the base fee check
+// lives in that checker (app/ante/evm.NewDynamicFeeChecker), the EIP-1559 base
+// fee went unenforced for every Cosmos tx whose payer had any shortfall -- the
+// common case. The governance min gas price was still applied by
+// NewMinGasPriceDecorator earlier in the chain, so this was invisible to any
+// test that only probed below the floor; it took a gas price sitting between
+// the floor and the base fee to expose it.
+func TestDecorator_ShortfallPathRunsFeeChecker(t *testing.T) {
+	k, bank, ak, ctx := newTestEnv(t)
+	signer := sdk.AccAddress([]byte("alice___________________"))
+	ak.exists[signer.String()] = true
+	bank.balances[signer.String()] = math.NewIntWithDecimal(30_000, 18) // capacity 50k
+	k.Settle(ctx, signer)
+	ctx = ctx.WithBlockTime(ctx.BlockTime().Add(24 * time.Hour))
+
+	sentinel := errors.New("fee checker rejected the declared fee")
+	called := false
+	rejectingChecker := func(_ sdk.Context, _ sdk.Tx) (sdk.Coins, int64, error) {
+		called = true
+		return nil, 0, sentinel
+	}
+
+	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, rejectingChecker)
+	// gas_limit 100k against a 50k energy capacity, so ShortfallGas is 50k and
+	// the decorator takes the ATOS-charging path rather than the zero-fee one.
+	tx := fakeFeeTx{
+		gas:      100_000,
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(100_000))),
+		feePayer: signer,
+		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
+	}
+
+	_, err := d.AnteHandle(ctx, tx, false, terminalAnte)
+	require.True(t, called, "txFeeChecker must run on the shortfall path")
+	require.ErrorIs(t, err, sentinel, "the checker's rejection must abort the tx")
+	require.Nil(t, bank.lastAmt, "no ATOS may be moved once the fee is rejected")
+}
+
+// TestDecorator_ShortfallPathSkipsFeeCheckerDuringSimulate mirrors the
+// zero-shortfall branch: simulation submits gas 0, which the dynamic fee
+// checker rejects outright, so running it there would break --gas auto for
+// every tx with a shortfall.
+func TestDecorator_ShortfallPathSkipsFeeCheckerDuringSimulate(t *testing.T) {
+	k, bank, ak, ctx := newTestEnv(t)
+	signer := sdk.AccAddress([]byte("alice___________________"))
+	ak.exists[signer.String()] = true
+	bank.balances[signer.String()] = math.NewIntWithDecimal(30_000, 18)
+	k.Settle(ctx, signer)
+	ctx = ctx.WithBlockTime(ctx.BlockTime().Add(24 * time.Hour))
+
+	called := false
+	rejectingChecker := func(_ sdk.Context, _ sdk.Tx) (sdk.Coins, int64, error) {
+		called = true
+		return nil, 0, errors.New("must not be reached during simulation")
+	}
+
+	d := energyante.NewEnergyDeductDecorator(k, ak, bank, nil, rejectingChecker)
+	tx := fakeFeeTx{
+		gas:      100_000,
+		fee:      sdk.NewCoins(sdk.NewCoin("liao", math.NewInt(100_000))),
+		feePayer: signer,
+		msgs:     []sdk.Msg{mockMsg{typeURL: "/cosmos.bank.v1beta1.MsgSend"}},
+	}
+
+	_, err := d.AnteHandle(ctx, tx, true /* simulate */, terminalAnte)
+	require.NoError(t, err)
+	require.False(t, called, "txFeeChecker must not run during simulation")
+}

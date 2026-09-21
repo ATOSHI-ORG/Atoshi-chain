@@ -1,0 +1,19 @@
+{
+  "messages": [
+    {
+      "@type": "/atoshi.atox.v1.MsgUpdateParams",
+      "authority": "atoshi10d07y265gmmuvt4z0w9aw880jnsr700jxjttqu",
+      "params": {
+        "enabled": true,
+        "supply_cap": "1000000000000000000000000000000",
+        "auto_settle_per_block": 0,
+        "min_auto_payout": "1000000000000000",
+        "transfer_fee_bps": 1000
+      }
+    }
+  ],
+  "metadata": "ipfs://none",
+  "deposit": "10000000000000000000000liao",
+  "title": "关闭 ATOX 自动兑换扫描，改为用户主动领取",
+  "summary": "auto_settle_per_block 由 50 改为 0。其余参数保持不变。\n\n为什么：自动扫描跑在 EndBlocker 里，每次 tier 释放后要把所有账户遍历一遍，每块 50 个。出块 3.41 秒，10 万用户要 1.9 小时，100 万用户要 18.9 小时。EndBlocker 不计 gas，是链必须完成的强制工作，这段时间里每个区块都要做 50 次账户读写加银行转账，开销直接压在出块时间上，而且余额为零、收益为零的账户照样每轮被扫。\n\n改成用户主动领取：MsgClaimAtos 已经实现，Claimable 查询也已经有了，所以这是纯参数改动，不需要升级链。EndBlocker 第一行就是 if !params.Enabled || params.AutoSettlePerBlock == 0 { return nil }，改完立刻停止扫描。\n\n对用户没有任何损失：ATOX 的兑换权益记在全局 index 上，不依赖扫描。用户什么时候来领，拿到的都是同一个数。领取入口是 MsgClaimAtos，钱包可以用 atox account 查询的 can_claim 和 claimable 字段决定要不要提示。\n\n随时可以改回去：把 auto_settle_per_block 改回 50 即可恢复自动扫描。"
+}

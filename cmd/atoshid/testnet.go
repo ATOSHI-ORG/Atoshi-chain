@@ -49,6 +49,8 @@ import (
 	evmostypes "github.com/atoshi-chain/atoshi/v20/types"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	feemarkettypes "github.com/atoshi-chain/atoshi/v20/x/feemarket/types"
+
+	"github.com/atoshi-chain/atoshi/v20/app"
 )
 
 var (
@@ -417,7 +419,9 @@ func initGenFiles(
 	baseFee math.LegacyDec,
 	minGasPrice math.LegacyDec,
 ) error {
-	appGenState := mbm.DefaultGenesis(clientCtx.Codec)
+	// See the note in init.go: this path also bypasses app.DefaultGenesis, so
+	// the native denom metadata has to be added here too.
+	appGenState := app.WithNativeDenomMetadataOf(mbm.DefaultGenesis(clientCtx.Codec), clientCtx.Codec, chainID)
 	// set the accounts in the genesis state
 	var authGenState authtypes.GenesisState
 	clientCtx.Codec.MustUnmarshalJSON(appGenState[authtypes.ModuleName], &authGenState)

@@ -60,14 +60,14 @@ func TestEqualMetadata(t *testing.T) {
 		{
 			"equal metadata",
 			banktypes.Metadata{
-				Base:        "aatos",
+				Base:        "liao",
 				Display:     "atos",
 				Name:        "Atos",
 				Symbol:      "ATOS",
 				Description: "EVM, staking and governance denom of Atoshi",
 				DenomUnits: []*banktypes.DenomUnit{
 					{
-						Denom:    "aatos",
+						Denom:    "liao",
 						Exponent: 0,
 						Aliases:  []string{"atto atos"},
 					},
@@ -78,14 +78,14 @@ func TestEqualMetadata(t *testing.T) {
 				},
 			},
 			banktypes.Metadata{
-				Base:        "aatos",
+				Base:        "liao",
 				Display:     "atos",
 				Name:        "Atos",
 				Symbol:      "ATOS",
 				Description: "EVM, staking and governance denom of Atoshi",
 				DenomUnits: []*banktypes.DenomUnit{
 					{
-						Denom:    "aatos",
+						Denom:    "liao",
 						Exponent: 0,
 						Aliases:  []string{"atto atos"},
 					},
@@ -100,10 +100,10 @@ func TestEqualMetadata(t *testing.T) {
 		{
 			"different base field",
 			banktypes.Metadata{
-				Base: "aatos",
+				Base: "liao",
 			},
 			banktypes.Metadata{
-				Base: "taatos",
+				Base: "tliao",
 			},
 			true,
 		},

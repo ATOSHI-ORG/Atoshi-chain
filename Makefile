@@ -173,7 +173,7 @@ build-docker-goleveldb:
 	echo '#!/usr/bin/env bash' > ./build/atoshid
 	echo "IMAGE_NAME=${DOCKER_IMAGE}:${COMMIT_HASH}" >> ./build/atoshid
 	echo 'SCRIPT_PATH=$$(cd $$(dirname $$0) && pwd -P)' >> ./build/atoshid
-	echo 'docker run -it --rm -v $${SCRIPT_PATH}/.atoshid:/home/evmos/.atoshid $$IMAGE_NAME atoshid "$$@"' >> ./build/atoshid
+	echo 'docker run -it --rm -v $${SCRIPT_PATH}/.atoshid:/home/atoshi/.atoshid $$IMAGE_NAME atoshid "$$@"' >> ./build/atoshid
 	chmod +x ./build/atoshid
 
 build-docker-pebbledb:
@@ -183,7 +183,7 @@ build-docker-pebbledb:
 	echo '#!/usr/bin/env bash' > ./build/atoshid
 	echo "IMAGE_NAME=${DOCKER_IMAGE}:${COMMIT_HASH}" >> ./build/atoshid
 	echo 'SCRIPT_PATH=$$(cd $$(dirname $$0) && pwd -P)' >> ./build/atoshid
-	echo 'docker run -it --rm -v $${SCRIPT_PATH}/.atoshid:/home/evmos/.atoshid $$IMAGE_NAME atoshid "$$@"' >> ./build/atoshid
+	echo 'docker run -it --rm -v $${SCRIPT_PATH}/.atoshid:/home/atoshi/.atoshid $$IMAGE_NAME atoshid "$$@"' >> ./build/atoshid
 	chmod +x ./build/atoshid
 
 build-rocksdb:
@@ -460,6 +460,11 @@ proto-gen:
 	@echo "Generating Protobuf files"
 	$(protoImage) sh ./scripts/protocgen.sh
 
+# Docker-free alternative to proto-gen. Same output; needs local buf + protoc.
+proto-gen-local:
+	@echo "Generating Protobuf files (local toolchain)"
+	@bash ./scripts/protocgen-local.sh
+
 proto-swagger-gen:
 	@echo "Downloading Protobuf dependencies"
 	@make proto-download-deps
@@ -527,7 +532,7 @@ proto-download-deps:
 	curl -sSL "https://raw.githubusercontent.com/cosmos/ics23/$(DEPS_COSMOS_ICS23)/proto/cosmos/ics23/v1/proofs.proto" > "$(THIRD_PARTY_DIR)/cosmos/ics23/v1/proofs.proto"
 
 
-.PHONY: proto-all proto-gen proto-format proto-lint proto-check-breaking proto-swagger-gen
+.PHONY: proto-all proto-gen proto-gen-local proto-format proto-lint proto-check-breaking proto-swagger-gen
 
 ###############################################################################
 ###                                Releasing                                ###

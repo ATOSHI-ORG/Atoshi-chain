@@ -92,7 +92,7 @@ func (d EnergyRefundDecorator) PostHandle(
 	// limit (the common case for a typical 300k MsgSend that uses
 	// ~232k), the entire energy deduction was rolled back. A
 	// delegated_in recipient could therefore replay the same
-	// energy-subsidised transfer indefinitely against a single 30k
+	// energy-subsidized transfer indefinitely against a single 30k
 	// grant; the ATOS shortfall fee was charged each time (so the
 	// chain didn't bleed value), but the energy account never moved
 	// and Bound.Used stayed at zero.

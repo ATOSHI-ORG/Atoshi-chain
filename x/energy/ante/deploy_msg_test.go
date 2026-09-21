@@ -3,8 +3,8 @@ package ante
 import (
 	"testing"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
 )
 

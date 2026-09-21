@@ -315,7 +315,11 @@ func (suite *KeeperTestSuite) TestOnRecvPacket() {
 
 func (suite *KeeperTestSuite) TestConvertCoinToERC20FromPacket() {
 	var ctx sdk.Context
-	senderAddr := "evmos1x2w87cvt5mqjncav4lxy8yfreynn273xn5335v"
+	// Same 20 bytes as the upstream evmos fixture, re-encoded under the atoshi
+	// HRP with a recomputed checksum. Do not hand-edit the prefix -- a longer
+	// HRP changes the checksum, so a straight substitution produces a string
+	// AccAddressFromBech32 rejects.
+	senderAddr := "atoshi1x2w87cvt5mqjncav4lxy8yfreynn273xd9c3ct"
 
 	baseDenom, err := sdk.GetBaseDenom()
 	suite.Require().NoError(err)
