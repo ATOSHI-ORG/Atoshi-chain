@@ -277,7 +277,7 @@ func TestGenesis_Validate(t *testing.T) {
 // Without the denominator this fails badly — a naive 1:1 burn accrues on the
 // post-burn balance, which decays as e^-i and pays out only 1-1/e (~63%).
 func TestClaimTimingDoesNotChangeTotal(t *testing.T) {
-	cap := math.NewIntWithDecimal(1, 30)
+	limitAmt := math.NewIntWithDecimal(1, 30)
 	start := math.NewIntWithDecimal(1, 24) // 1e24 aatox
 
 	// run claims in `steps` equal slices of the 0 -> 1.0 index range.
@@ -304,7 +304,7 @@ func TestClaimTimingDoesNotChangeTotal(t *testing.T) {
 		require.True(t, leftover.LTE(math.NewInt(int64(steps))),
 			"%d steps left %s ATOX unburned, should be ~0", steps, leftover)
 	}
-	_ = cap
+	_ = limitAmt
 }
 
 // TestComputeOwed_BurnEqualsOwed pins the 1:1 cap: every liao paid destroys

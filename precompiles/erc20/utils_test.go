@@ -8,12 +8,6 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
-	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/x/authz"
-	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/common"
 	auth "github.com/atoshi-chain/atoshi/v20/precompiles/authorization"
 	"github.com/atoshi-chain/atoshi/v20/precompiles/erc20"
 	"github.com/atoshi-chain/atoshi/v20/precompiles/testutil"
@@ -25,6 +19,12 @@ import (
 	utiltx "github.com/atoshi-chain/atoshi/v20/testutil/tx"
 	erc20types "github.com/atoshi-chain/atoshi/v20/x/erc20/types"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/x/authz"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 
 	//nolint:revive // dot imports are fine for Gomega
 	. "github.com/onsi/gomega"
@@ -245,7 +245,7 @@ func (is *IntegrationTestSuite) setupERC20Precompile(denom string, tokenPairs []
 		is.network.App.BankKeeper,
 		is.network.App.AuthzKeeper,
 		is.network.App.TransferKeeper,
-			nil, // 无费率包装：这些测试不关心 ATOX 手续费
+		nil, // 无费率包装：这些测试不关心 ATOX 手续费
 	)
 	Expect(err).ToNot(HaveOccurred(), "failed to set up %q erc20 precompile", tokenPair.Denom)
 
@@ -263,7 +263,7 @@ func setupERC20PrecompileForTokenPair(
 		unitNetwork.App.BankKeeper,
 		unitNetwork.App.AuthzKeeper,
 		unitNetwork.App.TransferKeeper,
-			nil, // 无费率包装：这些测试不关心 ATOX 手续费
+		nil, // 无费率包装：这些测试不关心 ATOX 手续费
 	)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "failed to create %q erc20 precompile", tokenPair.Denom)
@@ -293,7 +293,7 @@ func setupNewERC20PrecompileForTokenPair(
 		unitNetwork.App.BankKeeper,
 		unitNetwork.App.AuthzKeeper,
 		unitNetwork.App.TransferKeeper,
-			nil, // 无费率包装：这些测试不关心 ATOX 手续费
+		nil, // 无费率包装：这些测试不关心 ATOX 手续费
 	)
 	if err != nil {
 		return nil, errorsmod.Wrapf(err, "failed to create %q erc20 precompile", tokenPair.Denom)

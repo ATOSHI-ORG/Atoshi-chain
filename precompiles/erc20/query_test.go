@@ -165,7 +165,7 @@ func (s *PrecompileTestSuite) TestNameSymbol() {
 			// "mevmos" without updating these. The precompile drops the leading
 			// unit character and title-cases the rest, so "matos" yields Atos /
 			// ATOS. Deliberately spelled out rather than derived from the fixture:
-			// that derivation is the behaviour under test here, and computing the
+			// that derivation is the behavior under test here, and computing the
 			// expectation the same way would make the assertion vacuous.
 			expPass:   true,
 			expName:   "Atos",

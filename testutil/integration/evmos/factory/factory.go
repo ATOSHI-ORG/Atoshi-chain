@@ -120,7 +120,7 @@ func (tf *IntegrationTxFactory) GetEvmTransactionResponseFromTxResult(
 // estimateShortfallDivisor is the reciprocal of the headroom added on top of an
 // estimated gas limit: 4 means +25%.
 //
-// KNOWN ISSUE, not a test artefact. eth_estimateGas under-reports the gas an EVM
+// KNOWN ISSUE, not a test artifact. eth_estimateGas under-reports the gas an EVM
 // extension (precompile) call actually needs. Measured on the staking precompile
 // Delegate path: the estimate is a stable 127,589 while execution needs between
 // 129,001 and 130,000 -- short by ~1.9%. Without headroom the tx aborts with

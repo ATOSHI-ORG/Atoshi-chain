@@ -106,7 +106,7 @@ func (k Keeper) SetReceiptState(ctx sdk.Context, s types.ReceiptState) error {
 	return nil
 }
 
-// PendingConfirmation is what tier judgments have authorised but Ethereum has
+// PendingConfirmation is what tier judgments have authorized but Ethereum has
 // not yet confirmed, in ERC20 units.
 //
 // Operators should watch this: a figure that stays positive means receipts are
@@ -121,7 +121,7 @@ func (k Keeper) PendingConfirmation(ctx sdk.Context) (bridge, project math.Int) 
 		if atos.IsNil() || !atos.IsPositive() || params.AtosPerErc20 == 0 {
 			return math.ZeroInt()
 		}
-		return atos.QuoRaw(int64(params.AtosPerErc20))
+		return atos.QuoRaw(int64(params.AtosPerErc20)) //nolint:gosec // G115: Params.Validate bounds this to MaxInt64
 	}
 
 	bridge = toErc20(authMiner).Sub(state.AppliedToBridge)

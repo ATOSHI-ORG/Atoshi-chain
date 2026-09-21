@@ -36,7 +36,9 @@ func (k Keeper) Exists(ctx context.Context, recipient util.HexAddress) (bool, er
 // instead means a later change to the mailbox default — a different proposal,
 // possibly for an unrelated route — cannot silently weaken the verification
 // standing between Ethereum and a tier release.
-func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*util.HexAddress, error) {
+// The name is dictated by Hyperlane's app-router interface, so it keeps the
+// Id spelling revive would rather have as ID.
+func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*util.HexAddress, error) { //nolint:revive,stylecheck // interface method name fixed by Hyperlane
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	ok, err := k.Exists(ctx, recipient)
 	if err != nil {
@@ -84,8 +86,8 @@ func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*
 // duplicate yields a zero delta, a lost message is repaired by the next one, and
 // a reordered message reports less than what is applied and is rejected.
 //
-// The totals are also cross-checked against what tier judgments authorised.
-// Ethereum can only release what Atoshi authorised, so a receipt claiming more
+// The totals are also cross-checked against what tier judgments authorized.
+// Ethereum can only release what Atoshi authorized, so a receipt claiming more
 // is a bug or a forgery either way, and releasing on it would put ATOS into the
 // conversion pool with no ERC20 behind it — the one failure this module exists
 // to prevent.
@@ -96,7 +98,7 @@ func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*
 // bridge vault. That ordering is the whole point of the receipt: releasing first
 // and confirming later would leave holders able to convert ATOX into ATOS that
 // nothing backs.
-func (k Keeper) Handle(ctx context.Context, mailboxID util.HexAddress, message util.HyperlaneMessage) error {
+func (k Keeper) Handle(ctx context.Context, _ util.HexAddress, message util.HyperlaneMessage) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 
 	// Route by which recipient the message was addressed to. Keeping the two
@@ -201,9 +203,9 @@ func (k Keeper) Handle(ctx context.Context, mailboxID util.HexAddress, message u
 }
 
 // assertWithinAuthorized rejects a receipt reporting more than tier judgments
-// authorised.
+// authorized.
 //
-// Comparison happens in ERC20 units with the authorised ATOS figure divided down
+// Comparison happens in ERC20 units with the authorized ATOS figure divided down
 // and truncated, which rounds in the strict direction: a receipt exactly at the
 // boundary of a non-round authorisation is refused rather than let through.
 func (k Keeper) assertWithinAuthorized(
@@ -217,7 +219,7 @@ func (k Keeper) assertWithinAuthorized(
 		if atos.IsNil() || !atos.IsPositive() {
 			return math.ZeroInt()
 		}
-		return atos.QuoRaw(int64(atosPerErc20))
+		return atos.QuoRaw(int64(atosPerErc20)) //nolint:gosec // G115: Params.Validate bounds this to MaxInt64
 	}
 
 	maxBridge := toErc20(authMiner)

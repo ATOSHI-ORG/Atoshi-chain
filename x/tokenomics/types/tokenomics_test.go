@@ -91,14 +91,14 @@ func TestBlockRewardEmitsExactlyTheAtoxCap(t *testing.T) {
 	p := DefaultParams()
 
 	emitted := p.InitialBlockReward.MulRaw(p.HalvingIntervalBlocks).MulRaw(2)
-	cap := math.NewIntWithDecimal(1, 30) // 1 trillion ATOX in aatox
+	limitAmt := math.NewIntWithDecimal(1, 30) // 1 trillion ATOX in aatox
 
-	require.Equal(t, cap.String(), p.MinerPoolTotal.String(),
-		"the ATOX cap and the ATOS backing it must be the same size")
+	require.Equal(t, limitAmt.String(), p.MinerPoolTotal.String(),
+		"the ATOX limitAmt and the ATOS backing it must be the same size")
 
-	// Integer halving truncates, so the series lands just over the cap; emission
+	// Integer halving truncates, so the series lands just over the limitAmt; emission
 	// is clamped against live supply in BeginBlocker. Allow 0.01% drift.
-	diff := emitted.Sub(cap).Abs()
-	require.True(t, diff.LTE(cap.QuoRaw(10000)),
-		"emission schedule drifts from the cap: emitted %s vs cap %s", emitted, cap)
+	diff := emitted.Sub(limitAmt).Abs()
+	require.True(t, diff.LTE(limitAmt.QuoRaw(10000)),
+		"emission schedule drifts from the limitAmt: emitted %s vs limitAmt %s", emitted, limitAmt)
 }

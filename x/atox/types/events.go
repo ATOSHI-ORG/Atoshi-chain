@@ -12,7 +12,7 @@ const (
 	AttributeKeyAmount         = "amount"
 	AttributeKeyGlobalIndex    = "global_index"
 	AttributeKeyIndexDelta     = "index_delta"
-	AttributeKeyBurned     = "burned"
+	AttributeKeyBurned         = "burned"
 	AttributeKeyPending        = "pending"
 	AttributeKeyAtoxBalance    = "atox_balance"
 	AttributeKeyTrigger        = "trigger"

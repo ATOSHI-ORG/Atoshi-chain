@@ -164,8 +164,8 @@ import (
 
 	atox "github.com/atoshi-chain/atoshi/v20/x/atox"
 	atoxkeeper "github.com/atoshi-chain/atoshi/v20/x/atox/keeper"
-	atoxwrapper "github.com/atoshi-chain/atoshi/v20/x/atox/wrapper"
 	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
+	atoxwrapper "github.com/atoshi-chain/atoshi/v20/x/atox/wrapper"
 	bridgeadapter "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter"
 	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
 	batypes "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types"
@@ -586,7 +586,7 @@ func NewAtoshi(
 	)
 
 	// After atox and tokenomics: the adapter releases into the ATOX conversion
-	// pool and reads what tier judgments authorised.
+	// pool and reads what tier judgments authorized.
 	app.BridgeAdapterKeeper = bakeeper.NewKeeper(
 		appCodec,
 		keys[batypes.StoreKey],

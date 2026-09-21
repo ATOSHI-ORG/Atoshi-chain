@@ -8,7 +8,7 @@ import (
 
 // AccountKeeper expected interface.
 //
-// GetAccount is needed to recognise module accounts, which must be excluded from
+// GetAccount is needed to recognize module accounts, which must be excluded from
 // settlement: ATOX passes through the atox module account, fee_collector and
 // distribution in transit, and settling those would book conversion claims
 // against coins that belong to nobody yet.

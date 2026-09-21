@@ -138,13 +138,13 @@ func TestEligibleBalance_UnwithdrawnAtoxDoesNotCount(t *testing.T) {
 	require.True(t, k.EligibleBalance(ctx, addr).IsZero())
 }
 
-// TestEligibleBalance_StakingIsCapNeutral is the behaviour the user asked for:
+// TestEligibleBalance_StakingIsCapNeutral is the behavior the user asked for:
 // staked ATOS still belongs to the account, so moving it into the bonded pool
 // must not change energy capacity.
 //
 // Before this change a holder who staked their entire balance saw bank drop to
 // zero, capacity drop to zero, and their accrued energy clamped away — forcing a
-// choice between mining ATOX and keeping subsidised transfers.
+// choice between mining ATOX and keeping subsidized transfers.
 func TestEligibleBalance_StakingIsCapNeutral(t *testing.T) {
 	k, ctx, bank, staking := newKeeperWithStaking(t)
 	addr := sdk.AccAddress([]byte("staker--------------"))
@@ -228,7 +228,7 @@ func TestEligibleBalance_StakingReadErrorDegradesQuietly(t *testing.T) {
 	staking.unbondingErr = errors.New("corrupt unbonding record")
 	require.NotPanics(t, func() {
 		require.Equal(t, atos(1_000).String(), k.EligibleBalance(ctx, addr).String(),
-			"both staking terms dropped, bank balance still honoured")
+			"both staking terms dropped, bank balance still honored")
 	})
 }
 

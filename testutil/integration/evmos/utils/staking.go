@@ -33,7 +33,7 @@ const maxAccrualRounds = 60
 // Both wait loops used to test only the base denom, ignoring whatever the
 // caller actually passed. On this chain block rewards are ATOX and inflation is
 // off, so the base denom never accrues from empty blocks and the condition was
-// unsatisfiable regardless of what the caller asked for. Honouring the caller's
+// unsatisfiable regardless of what the caller asked for. Honoring the caller's
 // denoms lets a test wait for the coin it really expects.
 func accrued(got, want sdk.DecCoins) bool {
 	for _, c := range want {

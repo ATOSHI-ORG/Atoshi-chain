@@ -3,6 +3,7 @@ package types
 import (
 	"bytes"
 	"fmt"
+	stdmath "math"
 	"math/big"
 
 	"cosmossdk.io/math"
@@ -119,7 +120,7 @@ func Erc20ToAtos(erc20 math.Int, atosPerErc20 uint64) math.Int {
 	if erc20.IsNil() || !erc20.IsPositive() || atosPerErc20 == 0 {
 		return math.ZeroInt()
 	}
-	return erc20.MulRaw(int64(atosPerErc20))
+	return erc20.MulRaw(int64(atosPerErc20)) //nolint:gosec // G115: Params.Validate bounds this to MaxInt64
 }
 
 // ----- Params -----
@@ -180,6 +181,13 @@ func DefaultParams() Params {
 func (p Params) Validate() error {
 	if p.AtosPerErc20 == 0 {
 		return fmt.Errorf("atos_per_erc20 must be positive")
+	}
+	// Bounded so the int64 conversions in the peg arithmetic cannot wrap. The
+	// peg is 100 and MsgUpdateParams refuses to change it, so this only ever
+	// constrains genesis -- but genesis is exactly where a wrong figure would
+	// go unnoticed until the first bridge transfer.
+	if p.AtosPerErc20 > stdmath.MaxInt64 {
+		return fmt.Errorf("atos_per_erc20 must be at most %d, got %d", int64(stdmath.MaxInt64), p.AtosPerErc20)
 	}
 	if p.EthereumDomain == 0 {
 		return fmt.Errorf("ethereum_domain must be set")

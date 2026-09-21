@@ -15,13 +15,13 @@ import (
 //
 // This is step 1 of the four-step round trip in the design doc §3.4:
 //
-//	1. Atoshi books the release and dispatches the two cumulative targets  <- here
-//	2. Ethereum's TierReleaseVault divides by the peg, releases the difference
-//	3. Ethereum dispatches a receipt with what it actually released
-//	4. Atoshi applies the receipt, moving ATOS into the conversion pool
+//  1. Atoshi books the release and dispatches the two cumulative targets  <- here
+//  2. Ethereum's TierReleaseVault divides by the peg, releases the difference
+//  3. Ethereum dispatches a receipt with what it actually released
+//  4. Atoshi applies the receipt, moving ATOS into the conversion pool
 //
 // No ATOS moves here. Step 1 only tells Ethereum how much release Atoshi's tier
-// state machine has authorised in total; ATOS reaches the conversion pool only
+// state machine has authorized in total; ATOS reaches the conversion pool only
 // once step 4 confirms the ERC20 is actually in the bridge. That ordering is
 // what keeps the invariant the doc requires: at every instant the ERC20 in the
 // bridge is at least the ATOS handed out by the conversion pool divided by the

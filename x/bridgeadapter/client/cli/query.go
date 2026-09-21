@@ -51,7 +51,7 @@ The applied figures are cumulative ERC20 and should equal what the Ethereum
 tier-release vault reports having released — that is the check an auditor makes.
 
 A pending figure that stays positive means receipts are not arriving: the tier
-engine has authorised a release but the ATOX conversion rate has not moved,
+engine has authorized a release but the ATOX conversion rate has not moved,
 because no ATOS may enter the conversion pool until Ethereum confirms.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

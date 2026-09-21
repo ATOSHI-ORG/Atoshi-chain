@@ -49,14 +49,14 @@ func (q Querier) Limits(goCtx context.Context, req *types.QueryLimitsRequest) (*
 	l := q.Keeper.Limits(ctx)
 	rl := q.GetRateLimitState(ctx)
 
-	sub := func(cap, used math.Int) math.Int {
-		if cap.IsNil() || !cap.IsPositive() {
+	sub := func(limitAmt, used math.Int) math.Int {
+		if limitAmt.IsNil() || !limitAmt.IsPositive() {
 			return math.ZeroInt()
 		}
 		if used.IsNil() {
 			used = math.ZeroInt()
 		}
-		r := cap.Sub(used)
+		r := limitAmt.Sub(used)
 		if r.IsNegative() {
 			return math.ZeroInt()
 		}
@@ -78,7 +78,7 @@ func (q Querier) Limits(goCtx context.Context, req *types.QueryLimitsRequest) (*
 		MigrationPoolBalance:    q.tokenomicsKeeper.MigrationPoolBalance(ctx),
 		// Reported even when nothing is enforced: the figures above stay
 		// meaningful (they are what the limits would be), and a UI needs this to
-		// avoid drawing a quota bar for a cap nobody is applying.
+		// avoid drawing a quota bar for a limitAmt nobody is applying.
 		RateLimitsDisabled: l.Disabled,
 	}, nil
 }
@@ -103,11 +103,11 @@ func (q Querier) AddressUsage(goCtx context.Context, req *types.QueryAddressUsag
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
 	used := q.GetAddressUsage(ctx, req.Address)
-	cap := q.Keeper.Limits(ctx).PerAddress
+	limitAmt := q.Keeper.Limits(ctx).PerAddress
 
 	remaining := math.ZeroInt()
-	if cap.IsPositive() && cap.GT(used) {
-		remaining = cap.Sub(used)
+	if limitAmt.IsPositive() && limitAmt.GT(used) {
+		remaining = limitAmt.Sub(used)
 	}
 	return &types.QueryAddressUsageResponse{Used: used, Remaining: remaining}, nil
 }

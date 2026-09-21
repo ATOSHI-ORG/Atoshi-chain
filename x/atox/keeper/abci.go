@@ -23,7 +23,7 @@ import (
 //
 // Collection and processing are deliberately separate passes. Settlement writes
 // account records under the very prefix being walked, and mutating a store while
-// an iterator over it is open is undefined behaviour in the SDK's cachekv layer —
+// an iterator over it is open is undefined behavior in the SDK's cachekv layer —
 // doing both at once made the sweep skip accounts and lose its cursor.
 //
 // A failure on one account is logged and skipped rather than returned. Returning

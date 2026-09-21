@@ -271,7 +271,7 @@ func (k Keeper) PayoutPending(
 		return math.ZeroInt(), nil
 	}
 
-	// Defence in depth against a pool that cannot cover its books. The running
+	// Defense in depth against a pool that cannot cover its books. The running
 	// totals say this cannot happen, but paying out here is the only place the
 	// module spends ATOS, so it is the right place to verify against the actual
 	// bank balance rather than trust the counters.
@@ -369,7 +369,7 @@ func (k Keeper) AtoxSupplyCap(ctx sdk.Context) math.Int {
 //	                 pool that already paid for the originals, and the 1 trillion
 //	                 ATOX / 1 trillion ATOS peg would drift every conversion.
 //
-// Measuring against live supply alone would silently pick the second behaviour
+// Measuring against live supply alone would silently pick the second behavior
 // for both, so conversion burn is added back here.
 func (k Keeper) MintedAgainstCap(ctx sdk.Context) math.Int {
 	burned := k.GetGlobalState(ctx).TotalBurned

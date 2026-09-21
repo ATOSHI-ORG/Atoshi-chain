@@ -2,7 +2,7 @@
 // offline, so that a validator's storage location can be announced by someone
 // else's account.
 //
-// Why this exists
+// # Why this exists
 //
 // The Hyperlane agent cannot announce itself on this chain. Its cosmosKey signer
 // derives an account with standard Cosmos secp256k1 (ripemd160(sha256(pubkey))),
@@ -43,8 +43,9 @@ import (
 )
 
 // 和链上 x/core/01_interchain_security/types.GetAnnouncementDigest 一致：
-//   domainHash        = keccak256( be32(domain) || mailbox(32) || "HYPERLANE_ANNOUNCEMENT" )
-//   announcementDigest= keccak256( domainHash || storageLocation )
+//
+//	domainHash        = keccak256( be32(domain) || mailbox(32) || "HYPERLANE_ANNOUNCEMENT" )
+//	announcementDigest= keccak256( domainHash || storageLocation )
 func announcementDigest(storageLocation string, domainID uint32, mailbox []byte) []byte {
 	d := make([]byte, 4)
 	binary.BigEndian.PutUint32(d, domainID)
@@ -61,7 +62,9 @@ func ethSigningHash(msg []byte) []byte {
 func main() {
 	mailboxHex := os.Args[1]
 	domain := uint32(0)
-	fmt.Sscanf(os.Args[2], "%d", &domain)
+	if _, err := fmt.Sscanf(os.Args[2], "%d", &domain); err != nil {
+		panic(fmt.Sprintf("domain must be a number, got %q: %v", os.Args[2], err))
+	}
 	keys := strings.Split(os.Args[3], ",")
 	locations := strings.Split(os.Args[4], ",")
 

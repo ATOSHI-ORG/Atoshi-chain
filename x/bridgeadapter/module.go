@@ -38,10 +38,12 @@ func (AppModuleBasic) ConsensusVersion() uint64 { return consensusVersion }
 func (AppModuleBasic) RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 	batypes.RegisterInterfaces(registry)
 }
+
 func (AppModuleBasic) DefaultGenesis(_ codec.JSONCodec) json.RawMessage {
 	bz, _ := json.Marshal(batypes.DefaultGenesisState())
 	return bz
 }
+
 func (AppModuleBasic) ValidateGenesis(_ codec.JSONCodec, _ client.TxEncodingConfig, bz json.RawMessage) error {
 	var gs batypes.GenesisState
 	if err := json.Unmarshal(bz, &gs); err != nil {
@@ -49,6 +51,7 @@ func (AppModuleBasic) ValidateGenesis(_ codec.JSONCodec, _ client.TxEncodingConf
 	}
 	return gs.Validate()
 }
+
 func (AppModuleBasic) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *runtime.ServeMux) {
 	if err := batypes.RegisterQueryHandlerClient(context.Background(), mux, batypes.NewQueryClient(clientCtx)); err != nil {
 		panic(err)
