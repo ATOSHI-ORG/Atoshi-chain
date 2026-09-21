@@ -490,10 +490,19 @@ const _ = grpc.SupportPackageIsVersion4
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type QueryClient interface {
+	// Params returns the module parameters: the price and volume thresholds, the
+	// sampling day length and the consecutive-day requirement.
 	Params(ctx context.Context, in *QueryParamsRequest, opts ...grpc.CallOption) (*QueryParamsResponse, error)
+	// ReleaseStatus returns where the tier release stands: the current tier, how
+	// many consecutive qualifying days have accumulated and whether today counts.
 	ReleaseStatus(ctx context.Context, in *QueryReleaseStatusRequest, opts ...grpc.CallOption) (*QueryReleaseStatusResponse, error)
+	// CirculatingSupply returns the ATOS in circulation, excluding what is still
+	// locked in the migration and exchange pools.
 	CirculatingSupply(ctx context.Context, in *QueryCirculatingSupplyRequest, opts ...grpc.CallOption) (*QueryCirculatingSupplyResponse, error)
+	// BlockReward returns the ATOX minted per block at the current tier.
 	BlockReward(ctx context.Context, in *QueryBlockRewardRequest, opts ...grpc.CallOption) (*QueryBlockRewardResponse, error)
+	// ProjectClaimable returns how much the project side is authorised to draw
+	// from the pool. It authorises a withdrawal; it is not itself a balance.
 	ProjectClaimable(ctx context.Context, in *QueryProjectClaimableRequest, opts ...grpc.CallOption) (*QueryProjectClaimableResponse, error)
 }
 
@@ -552,10 +561,19 @@ func (c *queryClient) ProjectClaimable(ctx context.Context, in *QueryProjectClai
 
 // QueryServer is the server API for Query service.
 type QueryServer interface {
+	// Params returns the module parameters: the price and volume thresholds, the
+	// sampling day length and the consecutive-day requirement.
 	Params(context.Context, *QueryParamsRequest) (*QueryParamsResponse, error)
+	// ReleaseStatus returns where the tier release stands: the current tier, how
+	// many consecutive qualifying days have accumulated and whether today counts.
 	ReleaseStatus(context.Context, *QueryReleaseStatusRequest) (*QueryReleaseStatusResponse, error)
+	// CirculatingSupply returns the ATOS in circulation, excluding what is still
+	// locked in the migration and exchange pools.
 	CirculatingSupply(context.Context, *QueryCirculatingSupplyRequest) (*QueryCirculatingSupplyResponse, error)
+	// BlockReward returns the ATOX minted per block at the current tier.
 	BlockReward(context.Context, *QueryBlockRewardRequest) (*QueryBlockRewardResponse, error)
+	// ProjectClaimable returns how much the project side is authorised to draw
+	// from the pool. It authorises a withdrawal; it is not itself a balance.
 	ProjectClaimable(context.Context, *QueryProjectClaimableRequest) (*QueryProjectClaimableResponse, error)
 }
 

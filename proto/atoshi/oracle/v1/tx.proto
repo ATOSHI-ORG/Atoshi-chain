@@ -6,7 +6,6 @@ import "cosmos/msg/v1/msg.proto";
 import "cosmos_proto/cosmos.proto";
 import "gogoproto/gogo.proto";
 import "atoshi/oracle/v1/oracle.proto";
-import "atoshi/oracle/v1/genesis.proto";
 
 option go_package = "github.com/atoshi-chain/atoshi/v20/x/oracle/types";
 

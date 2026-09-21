@@ -575,6 +575,8 @@ const _ = grpc.SupportPackageIsVersion4
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type QueryClient interface {
+	// Params returns the module parameters: the kill switch, the Ethereum-side
+	// addresses and every rate-limit figure.
 	Params(ctx context.Context, in *QueryParamsRequest, opts ...grpc.CallOption) (*QueryParamsResponse, error)
 	// ReceiptState is what an auditor compares against the Ethereum vault: the
 	// cumulative ERC20 confirmed here must equal what the vault reports having
@@ -592,6 +594,8 @@ type QueryClient interface {
 	// AddressUsage is one address's outbound usage today, for showing a per-user
 	// remaining allowance.
 	AddressUsage(ctx context.Context, in *QueryAddressUsageRequest, opts ...grpc.CallOption) (*QueryAddressUsageResponse, error)
+	// ReceiptState returns the cumulative totals Ethereum has confirmed, plus the
+	// app ids both message channels are addressed to.
 	ReceiptState(ctx context.Context, in *QueryReceiptStateRequest, opts ...grpc.CallOption) (*QueryReceiptStateResponse, error)
 }
 
@@ -650,6 +654,8 @@ func (c *queryClient) ReceiptState(ctx context.Context, in *QueryReceiptStateReq
 
 // QueryServer is the server API for Query service.
 type QueryServer interface {
+	// Params returns the module parameters: the kill switch, the Ethereum-side
+	// addresses and every rate-limit figure.
 	Params(context.Context, *QueryParamsRequest) (*QueryParamsResponse, error)
 	// ReceiptState is what an auditor compares against the Ethereum vault: the
 	// cumulative ERC20 confirmed here must equal what the vault reports having
@@ -667,6 +673,8 @@ type QueryServer interface {
 	// AddressUsage is one address's outbound usage today, for showing a per-user
 	// remaining allowance.
 	AddressUsage(context.Context, *QueryAddressUsageRequest) (*QueryAddressUsageResponse, error)
+	// ReceiptState returns the cumulative totals Ethereum has confirmed, plus the
+	// app ids both message channels are addressed to.
 	ReceiptState(context.Context, *QueryReceiptStateRequest) (*QueryReceiptStateResponse, error)
 }
 

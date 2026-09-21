@@ -10,10 +10,15 @@ option go_package = "github.com/atoshi-chain/atoshi/v20/x/atox/types";
 
 // Query defines the atox module Query service.
 service Query {
+  // Params returns the module parameters: the supply cap, the transfer fee rate
+  // and the automatic-settlement batch size.
   rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
     option (google.api.http).get = "/atoshi/atox/v1/params";
   }
 
+  // GlobalState returns the chain-wide conversion accounting: the global index,
+  // the live ATOX supply and the two burn totals (conversion and transfer fee),
+  // which are tracked apart because only the fee burn frees minting headroom.
   rpc GlobalState(QueryGlobalStateRequest) returns (QueryGlobalStateResponse) {
     option (google.api.http).get = "/atoshi/atox/v1/global_state";
   }

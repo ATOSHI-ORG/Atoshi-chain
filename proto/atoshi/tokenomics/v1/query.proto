@@ -10,18 +10,27 @@ option go_package = "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types";
 
 // Query defines the tokenomics module Query service.
 service Query {
+  // Params returns the module parameters: the price and volume thresholds, the
+  // sampling day length and the consecutive-day requirement.
   rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
     option (google.api.http).get = "/atoshi/tokenomics/v1/params";
   }
+  // ReleaseStatus returns where the tier release stands: the current tier, how
+  // many consecutive qualifying days have accumulated and whether today counts.
   rpc ReleaseStatus(QueryReleaseStatusRequest) returns (QueryReleaseStatusResponse) {
     option (google.api.http).get = "/atoshi/tokenomics/v1/release_status";
   }
+  // CirculatingSupply returns the ATOS in circulation, excluding what is still
+  // locked in the migration and exchange pools.
   rpc CirculatingSupply(QueryCirculatingSupplyRequest) returns (QueryCirculatingSupplyResponse) {
     option (google.api.http).get = "/atoshi/tokenomics/v1/circulating_supply";
   }
+  // BlockReward returns the ATOX minted per block at the current tier.
   rpc BlockReward(QueryBlockRewardRequest) returns (QueryBlockRewardResponse) {
     option (google.api.http).get = "/atoshi/tokenomics/v1/block_reward";
   }
+  // ProjectClaimable returns how much the project side is authorised to draw
+  // from the pool. It authorises a withdrawal; it is not itself a balance.
   rpc ProjectClaimable(QueryProjectClaimableRequest) returns (QueryProjectClaimableResponse) {
     option (google.api.http).get = "/atoshi/tokenomics/v1/project_claimable";
   }

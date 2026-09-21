@@ -8,7 +8,10 @@ import "atoshi/bridgeadapter/v1/bridgeadapter.proto";
 
 option go_package = "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types";
 
+// Query defines the bridgeadapter module Query service.
 service Query {
+  // Params returns the module parameters: the kill switch, the Ethereum-side
+  // addresses and every rate-limit figure.
   rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
     option (google.api.http).get = "/atoshi/bridgeadapter/v1/params";
   }
@@ -38,6 +41,8 @@ service Query {
     option (google.api.http).get = "/atoshi/bridgeadapter/v1/address_usage/{address}";
   }
 
+  // ReceiptState returns the cumulative totals Ethereum has confirmed, plus the
+  // app ids both message channels are addressed to.
   rpc ReceiptState(QueryReceiptStateRequest) returns (QueryReceiptStateResponse) {
     option (google.api.http).get = "/atoshi/bridgeadapter/v1/receipt_state";
   }
