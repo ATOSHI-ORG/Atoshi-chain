@@ -256,9 +256,13 @@ const _ = grpc.SupportPackageIsVersion4
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type MsgClient interface {
 	// ClaimAtos settles the sender against the current index and pays out the
-	// full pending balance, ignoring min_auto_payout. Holders do not need this
-	// under normal operation — the EndBlocker sweep reaches every account — but
-	// it lets a holder convert immediately instead of waiting for the sweep.
+	// full pending balance, ignoring min_auto_payout.
+	//
+	// This is now the ONLY way a holder's ATOS arrives. The EndBlocker sweep that
+	// used to reach every account was switched off by governance
+	// (auto_settle_per_block = 0) because it scaled with the number of holders
+	// rather than the number who wanted their ATOS. Wallets must offer it, and
+	// must prompt: nothing else will move the money.
 	ClaimAtos(ctx context.Context, in *MsgClaimAtos, opts ...grpc.CallOption) (*MsgClaimAtosResponse, error)
 	// UpdateParams updates module parameters via governance.
 	UpdateParams(ctx context.Context, in *MsgUpdateParams, opts ...grpc.CallOption) (*MsgUpdateParamsResponse, error)
@@ -293,9 +297,13 @@ func (c *msgClient) UpdateParams(ctx context.Context, in *MsgUpdateParams, opts 
 // MsgServer is the server API for Msg service.
 type MsgServer interface {
 	// ClaimAtos settles the sender against the current index and pays out the
-	// full pending balance, ignoring min_auto_payout. Holders do not need this
-	// under normal operation — the EndBlocker sweep reaches every account — but
-	// it lets a holder convert immediately instead of waiting for the sweep.
+	// full pending balance, ignoring min_auto_payout.
+	//
+	// This is now the ONLY way a holder's ATOS arrives. The EndBlocker sweep that
+	// used to reach every account was switched off by governance
+	// (auto_settle_per_block = 0) because it scaled with the number of holders
+	// rather than the number who wanted their ATOS. Wallets must offer it, and
+	// must prompt: nothing else will move the money.
 	ClaimAtos(context.Context, *MsgClaimAtos) (*MsgClaimAtosResponse, error)
 	// UpdateParams updates module parameters via governance.
 	UpdateParams(context.Context, *MsgUpdateParams) (*MsgUpdateParamsResponse, error)

@@ -131,6 +131,39 @@ message Params {
     (amino.dont_omitempty) = true
   ];
   uint32 inbound_daily_cap_bps_of_pool = 17;
+
+  // rate_limits_disabled is the master switch for every throttle, both
+  // directions: the minimum transfer, the crisis floor, the global daily cap,
+  // the large-transfer reservation, the per-address allowance and the inbound
+  // cap. True lets every otherwise-valid transfer through.
+  //
+  // # Why a switch at all
+  //
+  // "No limits" cannot be expressed by zeroing the fields. A global_daily_cap
+  // of 0 means the opposite of unlimited -- CheckOutbound rejects with
+  // "outbound bridging is fully throttled" -- so a proposal written to remove
+  // the limits would shut the bridge down instead. And zeroing the rest throws
+  // away numbers that took tuning. One flag keeps every value in place while it
+  // is not enforced, so turning the limits back on is a single proposal rather
+  // than a rediscovery of six figures.
+  //
+  // # Why the negative name
+  //
+  // A bool's zero value is false, and a Params record written before this field
+  // existed unmarshals with the zero value. Phrased as rate_limits_ENABLED,
+  // every pre-upgrade chain would come back up with false -- every throttle
+  // silently off, no error, no log. This chain upgrades by swapping binaries
+  // rather than through x/upgrade, so a store migration would not run to repair
+  // it.
+  //
+  // Phrased as DISABLED, that same zero value means "limits enforced", which is
+  // the safe side of the accident. The double negative reads worse and is worth
+  // it.
+  //
+  // This is NOT the bridge kill switch -- bridge_enabled is. Disabling the rate
+  // limits leaves every other check (authorisation, solvency, denom, message
+  // source) exactly where it was.
+  bool rate_limits_disabled = 18;
 }
 
 // ReceiptState tracks what Ethereum has confirmed, in ERC20 units.

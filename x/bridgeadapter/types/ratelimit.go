@@ -42,6 +42,15 @@ type Limits struct {
 	// same way as Global -- the smaller of the fixed parameter and a fraction of
 	// the pool -- so it tightens on its own as the pool drains.
 	Inbound math.Int
+	// Disabled mirrors Params.RateLimitsDisabled. True makes every check above a
+	// no-op while leaving the resolved figures intact, so a query can still show
+	// what the limits WOULD be and turning them back on needs no retuning.
+	//
+	// Negative here for the same reason the param is negative: the zero value
+	// has to be the enforcing one. A Limits built as a struct literal -- which
+	// every test does -- would otherwise silently opt out of every check it
+	// meant to exercise, and pass.
+	Disabled bool
 }
 
 // ResolveLimits computes the effective caps.
@@ -99,6 +108,7 @@ func ResolveLimits(p Params, poolBalance, poolTotal math.Int) Limits {
 	}
 
 	return Limits{
+		Disabled:       p.RateLimitsDisabled,
 		Inbound:        inbound,
 		Global:         global,
 		LargeBudget:    largeBudget,
@@ -138,6 +148,13 @@ func CheckOutbound(
 	if amount.IsNil() || !amount.IsPositive() {
 		return ErrInvalidAmount
 	}
+
+	// The amount check above still applies: a non-positive transfer is invalid
+	// input, not a throttled one. Everything below is a throttle.
+	if l.Disabled {
+		return nil
+	}
+
 	if l.MinTransfer.IsPositive() && amount.LT(l.MinTransfer) {
 		return fmt.Errorf("%w: %s is below the %s minimum", ErrBelowMinimum, amount, l.MinTransfer)
 	}
@@ -187,6 +204,9 @@ func CheckOutbound(
 func CheckInbound(l Limits, amount, usedInbound math.Int) error {
 	if amount.IsNil() || !amount.IsPositive() {
 		return ErrInvalidAmount
+	}
+	if l.Disabled {
+		return nil
 	}
 	if l.Inbound.IsNil() || !l.Inbound.IsPositive() {
 		return nil

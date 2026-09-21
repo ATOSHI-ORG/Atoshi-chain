@@ -76,6 +76,10 @@ func (q Querier) Limits(goCtx context.Context, req *types.QueryLimitsRequest) (*
 		InboundRemaining:        sub(l.Inbound, rl.UsedInbound),
 		ResetsAtUnix:            (types.DayOf(ctx.BlockTime().Unix()) + 1) * types.SecondsPerDay,
 		MigrationPoolBalance:    q.tokenomicsKeeper.MigrationPoolBalance(ctx),
+		// Reported even when nothing is enforced: the figures above stay
+		// meaningful (they are what the limits would be), and a UI needs this to
+		// avoid drawing a quota bar for a cap nobody is applying.
+		RateLimitsDisabled: l.Disabled,
 	}, nil
 }
 
