@@ -660,10 +660,18 @@ func NewAtoshi(
 	// register the staking hooks
 	// NOTE: stakingKeeper above is passed by reference, so that it will contain these hooks
 	// NOTE: Distr, Slashing and Claim must be created before calling the Hooks method to avoid returning a Keeper without its table generated
+	//
+	// x/energy is in here because staked ATOS counts toward energy eligibility
+	// but delegating never reaches the bank send-restriction that keeps the
+	// eligibility snapshot fresh: the Evmos SDK's DelegateCoins writes balances
+	// through setBalance/addCoins and skips the restriction chain entirely.
+	// Without this hook a delegation is invisible to x/energy until the holder
+	// happens to make a transfer. See x/energy/keeper/staking_hooks.go.
 	stakingKeeper.SetHooks(
 		stakingtypes.NewMultiStakingHooks(
 			app.DistrKeeper.Hooks(),
 			app.SlashingKeeper.Hooks(),
+			app.EnergyKeeper.Hooks(),
 		),
 	)
 

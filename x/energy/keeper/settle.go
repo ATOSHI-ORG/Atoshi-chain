@@ -4,6 +4,8 @@ import (
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
+
 	"github.com/atoshi-chain/atoshi/v20/x/energy/types"
 )
 
@@ -30,7 +32,15 @@ func (k Keeper) Settle(ctx sdk.Context, addr sdk.AccAddress) types.EnergyAccount
 	now := ctx.BlockTime().Unix()
 	if acct.LastUpdatedTime == 0 {
 		// First touch: initialize the snapshot to current eligible balance.
+		//
+		// The staked term is cached alongside it. This is the path that covers
+		// the genesis validators: the staking hooks deliberately no-op at
+		// height 0, so the first time anything touches such an account this is
+		// where its 100M self-delegation gets recorded. Without the cache write
+		// the very next transfer would read staked_snapshot as zero and drop it
+		// back out of the snapshot.
 		acct.LastBalanceSnapshot = k.EligibleBalance(ctx, addr)
+		acct.StakedSnapshot = k.stakedAtos(ctx, addr)
 		acct.LastUpdatedTime = now
 		k.SetEnergyAccount(ctx, acct)
 		return acct
@@ -117,6 +127,52 @@ func (k Keeper) ApplyBalanceChange(ctx sdk.Context, addr sdk.AccAddress, newElig
 	// delegated portion can still be reclaimed via undelegation, which
 	// shrinks BOTH counters in lockstep.
 	effectiveCap := newTxCap
+	if effectiveCap < acct.DelegatedOut {
+		effectiveCap = acct.DelegatedOut
+	}
+	if acct.TxEnergyAccrued > effectiveCap {
+		acct.TxEnergyAccrued = effectiveCap
+	}
+	if acct.DeployEnergyAccrued > params.DeployEnergyCapacity {
+		acct.DeployEnergyAccrued = params.DeployEnergyCapacity
+	}
+
+	k.SetEnergyAccount(ctx, acct)
+}
+
+// ApplyStakedChange is ApplyBalanceChange for the staking hooks: it recomputes
+// the snapshot around a new staked total and caches that total on the account.
+//
+// It exists as its own primitive rather than "EligibleBalance, then
+// ApplyBalanceChange, then write the cache" because that sequence reads the
+// delegations twice and writes the account three times. Redelegation fires the
+// hook for both the source and the destination validator, and inside the EVM
+// staking precompile the whole call runs against a fixed gas budget -- the
+// naive version ran it out ("VmError: out of gas" across
+// precompiles/staking's redelegation suite). One delegation read, one
+// read-modify-write.
+func (k Keeper) ApplyStakedChange(ctx sdk.Context, addr sdk.AccAddress, staked math.Int) {
+	if staked.IsNil() || staked.IsNegative() {
+		staked = math.ZeroInt()
+	}
+
+	acct := k.Settle(ctx, addr)
+
+	newEligible := k.bankKeeper.GetBalance(ctx, addr, k.BaseDenom()).Amount.
+		Add(k.bankKeeper.GetBalance(ctx, addr, atoshitypes.AtoxBaseDenom).Amount).
+		Add(staked)
+	if !acct.LockedAtos.IsNil() && acct.LockedAtos.IsPositive() {
+		newEligible = newEligible.Add(acct.LockedAtos)
+	}
+
+	acct.LastBalanceSnapshot = newEligible
+	acct.StakedSnapshot = staked
+	acct.LastUpdatedTime = ctx.BlockTime().Unix()
+
+	// Same cap-down rule as ApplyBalanceChange, and for the same reason
+	// (audit Issue 6): never cut into DelegatedOut.
+	params := k.GetParams(ctx)
+	effectiveCap := types.TxEnergyCapacity(newEligible, params)
 	if effectiveCap < acct.DelegatedOut {
 		effectiveCap = acct.DelegatedOut
 	}

@@ -112,6 +112,7 @@ func NewEnergyAccount(addr string) EnergyAccount {
 		DelegatedOut:        0,
 		DelegatedInUsable:   0,
 		LockedAtos:          math.ZeroInt(),
+		StakedSnapshot:      math.ZeroInt(),
 	}
 }
 
