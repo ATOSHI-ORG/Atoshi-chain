@@ -312,6 +312,24 @@ func (k Keeper) stakedAtos(ctx sdk.Context, addr sdk.AccAddress) math.Int {
 	return staked
 }
 
+// cachedStakedAtos reads the staked term off the energy account instead of
+// asking x/staking for it.
+//
+// SendRestriction runs on every transfer on the chain and cannot afford the
+// delegation reads: routing it through stakedAtos pushed a plain MsgSend to
+// 200_061 gas, past the 200_000 that a wallet sends by default. The account
+// is already being loaded there for locked_atos, so the cached copy is free.
+//
+// The cache is kept current by the staking hooks (staking_hooks.go) and by
+// Settle's first-touch path. A zero value means no delegation has been
+// recorded for this account yet.
+func cachedStakedAtos(acct types.EnergyAccount) math.Int {
+	if acct.StakedSnapshot.IsNil() || !acct.StakedSnapshot.IsPositive() {
+		return math.ZeroInt()
+	}
+	return acct.StakedSnapshot
+}
+
 // EnsureLockedPoolExists is called once at genesis init; the SDK auth
 // module account auto-creates if registered, but we sanity-check.
 func (k Keeper) EnsureLockedPoolExists(ctx sdk.Context) {

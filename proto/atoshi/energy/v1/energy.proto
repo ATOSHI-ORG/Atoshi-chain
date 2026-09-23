@@ -121,6 +121,29 @@ message EnergyAccount {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+
+  // staked_snapshot is the bonded + unbonding ATOS counted in
+  // last_balance_snapshot, cached here rather than re-read from x/staking.
+  //
+  // It is a cache, not a second source of truth: x/staking owns the real
+  // number and x/energy's staking hooks refresh this field whenever a
+  // delegation changes. It exists because last_balance_snapshot is rewritten
+  // on every bank transfer by SendRestriction, which cannot afford to ask
+  // x/staking -- routing that hot path through the delegation reads pushed a
+  // plain MsgSend to 200_061 gas, past the 200_000 default a wallet sends.
+  // Reading it off the account costs nothing: SendRestriction already loads
+  // the account for locked_atos.
+  //
+  // A zero value means "this account has never had a delegation recorded",
+  // which under-counts rather than over-counts eligibility and self-heals the
+  // next time a staking hook or a first-touch settle runs. That direction is
+  // deliberate: the opposite would hand out energy against ATOS that is not
+  // there.
+  string staked_snapshot = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
 }
 
 // EnergyDelegation records a single outbound energy lend from delegator

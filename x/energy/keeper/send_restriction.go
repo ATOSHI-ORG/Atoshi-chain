@@ -7,6 +7,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
+	"github.com/atoshi-chain/atoshi/v20/x/energy/types"
 )
 
 // SendRestriction is registered with bank.AppendSendRestriction at app
@@ -51,20 +52,33 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 
-	// Read the two bank terms directly instead of calling EligibleBalance.
+	// Read the bank terms directly rather than calling EligibleBalance, because
+	// the projection needs the POST-send bank figures and EligibleBalance can
+	// only report the pre-send ones (see the ordering note below). The staked
+	// term is added separately further down.
 	//
-	// EligibleBalance would be the tidier call and would never drift from the
-	// definition, but it also reads the staking delegations, and this runs on
-	// every transfer on the chain: routing the hot path through it pushed a
-	// plain MsgSend from 200_061 gas over a 200_000 limit -- x/feemarket's
-	// integration tests turned red with "out of gas in location: ReadFlat".
+	// An earlier version of this function left the staked term out entirely, on
+	// the stated grounds that "settle recomputes from EligibleBalance and
+	// corrects it". That was wrong: Settle only reads EligibleBalance on the
+	// first touch of an account (LastUpdatedTime == 0) and thereafter works
+	// purely from the stored snapshot. Nothing recomputed. So every transfer --
+	// including the fee deduction of the very next tx -- overwrote the snapshot
+	// with bank-only figures and silently erased a staker's staked ATOS from
+	// their eligibility. Testnet account
+	// atoshi14dpp92vlaxlpp4ctve0082zqhgys9ydv5gz5nd staked 7,500 ATOS on
+	// 2026-09-22 and stayed at capacity 0, 7,481 ATOS short of a threshold it
+	// had in fact crossed.
 	//
-	// So the cheap terms are summed here and the staked term is deliberately
-	// left out, exactly as before. That makes this projection an approximation
-	// of EligibleBalance for stakers, which is tolerable because it is only a
-	// snapshot: settle (keeper/settle.go) recomputes from EligibleBalance and
-	// corrects it. What was NOT tolerable is omitting ATOX, because nothing else
-	// was triggering a recompute after an ATOX transfer.
+	// The staked term is NOT re-read from x/staking here. Asking it costs real
+	// gas on this path -- measured, it pushes a plain MsgSend to 200_061, past
+	// the 200_000 a wallet sends by default, and x/feemarket's integration
+	// tests go red with "out of gas in location: ReadFlat". So the term is
+	// taken from the account's cached staked_snapshot, which costs nothing:
+	// the account is already being loaded for locked_atos. x/energy's staking
+	// hooks (keeper/staking_hooks.go) keep that cache current, which is the
+	// half of the problem bank transfers can never observe -- the Evmos SDK's
+	// DelegateCoins writes balances through setBalance/addCoins and never
+	// enters this restriction chain at all.
 	fromBefore := k.bankKeeper.GetBalance(sdkCtx, from, k.BaseDenom()).Amount.
 		Add(k.bankKeeper.GetBalance(sdkCtx, from, atoshitypes.AtoxBaseDenom).Amount)
 	toBefore := k.bankKeeper.GetBalance(sdkCtx, to, k.BaseDenom()).Amount.
@@ -103,23 +117,45 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 	//     the post-receive balance.
 	//
 	// Delegate / releaseDelegation update LockedAtos BEFORE the
-	// bank send (see x/energy/keeper/delegation.go), so fromLocked
-	// already reflects the post-delegation lock total when the hook
-	// fires.
-	fromLocked := k.lockedAtos(sdkCtx, from)
-	toLocked := k.lockedAtos(sdkCtx, to)
+	// bank send (see x/energy/keeper/delegation.go), so the locked
+	// term already reflects the post-delegation lock total when the
+	// hook fires.
+	//
+	// One account read per side, yielding both non-bank terms. Staked ATOS is
+	// untouched by a bank transfer but still has to be carried over, because
+	// ApplyBalanceChange stores an absolute figure: passing bank+locked alone
+	// would not leave the staked term in place, it would erase it.
+	fromAcct := k.GetEnergyAccount(sdkCtx, from)
+	toAcct := k.GetEnergyAccount(sdkCtx, to)
 
-	k.ApplyBalanceChange(sdkCtx, from, fromBefore.Add(fromLocked))
-	k.ApplyBalanceChange(sdkCtx, to, toBefore.Add(moved).Add(toLocked))
+	k.ApplyBalanceChange(sdkCtx, from, fromBefore.Add(k.nonBankTerms(sdkCtx, from, fromAcct)))
+	k.ApplyBalanceChange(sdkCtx, to, toBefore.Add(moved).Add(k.nonBankTerms(sdkCtx, to, toAcct)))
 
 	return to, nil
 }
 
-// lockedAtos returns the addr's LockedAtos counter, defaulting to
+// nonBankTerms is everything in EligibleBalance that is not a bank balance:
+// locked ATOS plus staked ATOS.
+//
+// The staked term normally comes from the account's cache, which costs nothing
+// because the account is already loaded. The exception is an account that has
+// never been settled: its staked_snapshot has never been written, so a zero
+// there means "not yet known", not "no stake". Those accounts pay for the real
+// x/staking read once; every transfer after the first uses the cache. Getting
+// this wrong would erase a staker's delegation from their eligibility on their
+// very first transfer -- which is the shape of the bug this whole change is
+// about, just one level further in.
+func (k Keeper) nonBankTerms(ctx sdk.Context, addr sdk.AccAddress, acct types.EnergyAccount) math.Int {
+	if acct.LastUpdatedTime == 0 {
+		return lockedAtosOf(acct).Add(k.stakedAtos(ctx, addr))
+	}
+	return lockedAtosOf(acct).Add(cachedStakedAtos(acct))
+}
+
+// lockedAtosOf returns the account's LockedAtos counter, defaulting to
 // zero when the counter is nil (account never initialized) or the
 // account has no ATOS locked.
-func (k Keeper) lockedAtos(ctx sdk.Context, addr sdk.AccAddress) math.Int {
-	acct := k.GetEnergyAccount(ctx, addr)
+func lockedAtosOf(acct types.EnergyAccount) math.Int {
 	if acct.LockedAtos.IsNil() || !acct.LockedAtos.IsPositive() {
 		return math.ZeroInt()
 	}
