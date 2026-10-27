@@ -11,6 +11,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/module"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+	icahosttypes "github.com/cosmos/ibc-go/v8/modules/apps/27-interchain-accounts/host/types"
 
 	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
@@ -22,6 +23,13 @@ type BankKeeper interface {
 	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
 	SendCoins(ctx context.Context, from, to sdk.AccAddress, amt sdk.Coins) error
 	SendCoinsFromModuleToModule(ctx context.Context, from, to string, amt sdk.Coins) error
+}
+
+// ICAHostKeeper is the subset of the interchain-accounts host this upgrade
+// needs. Declared as an interface so this package does not pull the module in.
+type ICAHostKeeper interface {
+	GetParams(ctx sdk.Context) icahosttypes.Params
+	SetParams(ctx sdk.Context, params icahosttypes.Params)
 }
 
 // StakingKeeper is the subset of x/staking this upgrade needs.
@@ -53,6 +61,7 @@ func CreateUpgradeHandler(
 	bk BankKeeper,
 	sk StakingKeeper,
 	bak bakeeper.Keeper,
+	icak ICAHostKeeper,
 ) upgradetypes.UpgradeHandler {
 	return func(c context.Context, _ upgradetypes.Plan, vm module.VersionMap) (module.VersionMap, error) {
 		ctx := sdk.UnwrapSDKContext(c)
@@ -66,6 +75,8 @@ func CreateUpgradeHandler(
 		if err := retuneRateLimits(ctx, bak, logger); err != nil {
 			return newVM, err
 		}
+
+		closeICAHost(ctx, icak, logger)
 
 		if err := recoverStuckAtox(ctx, bk, logger); err != nil {
 			logger.Error("stuck ATOX recovery skipped", "err", err)
@@ -287,6 +298,57 @@ func clawback(ctx sdk.Context, bk BankKeeper, sk StakingKeeper, logger interface
 		"target", ClawbackTarget,
 		"atos", math.NewInt(ClawbackAtos).String())
 	return nil
+}
+
+// closeICAHost switches off the interchain-accounts host.
+//
+// # Why this belongs in the bridge-incident release
+//
+// Mainnet runs the host with host_enabled true and allow_messages ["*"]. The
+// host executes a counterparty chain's messages by handing them straight to the
+// Msg router -- it is not a transaction, so not one ante decorator runs. Every
+// guard this chain enforces in the ante chain is therefore unenforced on that
+// path, including the two that matter most here:
+//
+//	RejectAtoxIBCDecorator, added in this release, which stops ATOX reaching an
+//	IBC escrow where the transfer burn and the conversion claim make the
+//	escrowed balance unbacked and unclaimable. An ICA could send exactly that
+//	MsgTransfer.
+//
+//	RejectMessagesDecorator, which keeps MsgEthereumTx out of Cosmos
+//	transactions. With "*" the host will route one.
+//
+// No counterparty is affected: the chain has zero open channels, so no ICA
+// exists and none is in flight. Nothing that works today stops working.
+//
+// The host is left registered and its state intact, so this is a parameter
+// flip, not a removal. Governance turns it back on with MsgUpdateParams when
+// there is an actual ICA counterparty -- and when it does, allow_messages must
+// be a named list that excludes MsgTransfer and MsgEthereumTx, never "*" again.
+//
+// Non-fatal, like the fund movements: a failure to read or write one parameter
+// is not a reason to stop the network starting.
+func closeICAHost(ctx sdk.Context, icak ICAHostKeeper, logger interface {
+	Info(string, ...any)
+	Error(string, ...any)
+},
+) {
+	if icak == nil {
+		logger.Error("ICA host not wired; leaving its params alone")
+		return
+	}
+
+	before := icak.GetParams(ctx)
+	if !before.HostEnabled && len(before.AllowMessages) == 0 {
+		logger.Info("ICA host already closed; nothing to do")
+		return
+	}
+
+	icak.SetParams(ctx, icahosttypes.NewParams(false, nil))
+
+	logger.Info("ICA host closed",
+		"was_enabled", before.HostEnabled,
+		"was_allow_messages", fmt.Sprintf("%v", before.AllowMessages))
 }
 
 // authModuleAddress derives a module account address without needing the

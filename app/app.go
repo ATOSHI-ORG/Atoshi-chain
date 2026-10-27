@@ -1627,6 +1627,7 @@ func (app *Atoshi) setupUpgradeHandlers() {
 			app.BankKeeper,
 			app.StakingKeeper,
 			app.BridgeAdapterKeeper,
+			app.ICAHostKeeper,
 		),
 	)
 

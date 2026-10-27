@@ -10,6 +10,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+	icahosttypes "github.com/cosmos/ibc-go/v8/modules/apps/27-interchain-accounts/host/types"
 	"github.com/stretchr/testify/require"
 
 	cmdcfg "github.com/atoshi-chain/atoshi/v20/cmd/config"
@@ -29,9 +30,19 @@ func TestMain(m *testing.M) {
 
 // ---------- fakes ----------
 
-type fakeLogger struct{ lines []string }
+type fakeLogger struct{ lines, errs []string }
 
-func (l *fakeLogger) Info(msg string, _ ...any) { l.lines = append(l.lines, msg) }
+func (l *fakeLogger) Info(msg string, _ ...any)  { l.lines = append(l.lines, msg) }
+func (l *fakeLogger) Error(msg string, _ ...any) { l.errs = append(l.errs, msg) }
+
+// fakeICAHost stands in for the interchain-accounts host keeper, which is an
+// interface here precisely so this test needs no app.
+type fakeICAHost struct{ params icahosttypes.Params }
+
+func (f *fakeICAHost) GetParams(sdk.Context) icahosttypes.Params { return f.params }
+func (f *fakeICAHost) SetParams(_ sdk.Context, p icahosttypes.Params) {
+	f.params = p
+}
 
 type fakeBank struct {
 	balances map[string]sdk.Coins
@@ -274,4 +285,55 @@ func TestRecoverStuckAtox_MovesWhateverIsActuallyThere(t *testing.T) {
 
 	require.Equal(t, odd.String(), bk.balances[to.String()].AmountOf(StuckAtoxDenom).String(),
 		"the recovered amount must be the live balance, dust included")
+}
+
+// ---------- ICA host ----------
+
+// TestCloseICAHost_ShutsTheMainnetConfiguration starts from exactly what
+// mainnet reports today -- enabled, allow_messages ["*"] -- which is an open
+// door past every ante decorator on the chain.
+func TestCloseICAHost_ShutsTheMainnetConfiguration(t *testing.T) {
+	ica := &fakeICAHost{params: icahosttypes.NewParams(true, []string{icahosttypes.AllowAllHostMsgs})}
+	log := &fakeLogger{}
+
+	closeICAHost(testCtx(), ica, log)
+
+	require.False(t, ica.params.HostEnabled)
+	require.Empty(t, ica.params.AllowMessages,
+		"a disabled host with \"*\" still armed is one governance flip from open")
+	require.Contains(t, log.lines, "ICA host closed")
+	require.Empty(t, log.errs)
+}
+
+// TestCloseICAHost_LeavesNoWildcardBehind is the part that would be easy to get
+// wrong: disabling the host without clearing the list means re-enabling it
+// later silently restores "*" instead of forcing a named allowlist.
+func TestCloseICAHost_LeavesNoWildcardBehind(t *testing.T) {
+	ica := &fakeICAHost{params: icahosttypes.NewParams(false, []string{icahosttypes.AllowAllHostMsgs})}
+
+	closeICAHost(testCtx(), ica, &fakeLogger{})
+
+	require.NotContains(t, ica.params.AllowMessages, icahosttypes.AllowAllHostMsgs)
+}
+
+// TestCloseICAHost_IsIdempotent — an upgrade handler may be re-run against
+// state that already has the change, and doing so must not error or churn.
+func TestCloseICAHost_IsIdempotent(t *testing.T) {
+	ica := &fakeICAHost{params: icahosttypes.NewParams(false, nil)}
+	log := &fakeLogger{}
+
+	closeICAHost(testCtx(), ica, log)
+
+	require.False(t, ica.params.HostEnabled)
+	require.Contains(t, log.lines, "ICA host already closed; nothing to do")
+	require.Empty(t, log.errs)
+}
+
+// TestCloseICAHost_SurvivesAnUnwiredKeeper. Every step after the parameter
+// write is non-fatal on purpose: a nil keeper must log, not take the network
+// down on the block the upgrade lands.
+func TestCloseICAHost_SurvivesAnUnwiredKeeper(t *testing.T) {
+	log := &fakeLogger{}
+	require.NotPanics(t, func() { closeICAHost(testCtx(), nil, log) })
+	require.NotEmpty(t, log.errs)
 }
