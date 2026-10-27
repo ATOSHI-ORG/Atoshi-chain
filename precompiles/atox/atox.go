@@ -112,6 +112,16 @@ func (p Precompile) Run(evm *vm.EVM, contract *vm.Contract, readOnly bool) (bz [
 	// Turn out-of-gas panics into errors so the EVM can unwind gracefully.
 	defer cmn.HandleGasError(ctx, contract, initialGas, &err)()
 
+	// Same reasoning as the bridgeadapter precompile: the ABI says nonpayable
+	// but that is not enforced here. The EVM moves attached value to this
+	// address before Run is reached, and cmn.Precompile only consults
+	// contract.Value() on the empty-calldata path, so a normal method call
+	// never sees it. Unaccounted ATOS at a precompile address puts the EVM's
+	// view of balances and the bank module's permanently out of step.
+	if v := contract.Value(); v != nil && v.Sign() > 0 {
+		return nil, fmt.Errorf("atox precompile is not payable: %s wei attached", v)
+	}
+
 	switch method.Name {
 	case ClaimMethod:
 		bz, err = p.Claim(ctx, evm.Origin, contract, stateDB, method, args)

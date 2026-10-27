@@ -97,6 +97,25 @@ func (p Precompile) Run(evm *vm.EVM, contract *vm.Contract, readOnly bool) (bz [
 	// Turn out-of-gas panics into errors so the EVM can unwind gracefully.
 	defer cmn.HandleGasError(ctx, contract, initialGas, &err)()
 
+	// No method here is payable, and nothing here accounts for attached value.
+	//
+	// The ABI says nonpayable, but that is not enforced for a precompile: the
+	// EVM moves the value to this address before Run is reached, and the
+	// payability check in cmn.Precompile only runs on the empty-calldata path
+	// (receive/fallback). A normal bridgeOut call goes through standardCallData
+	// and never sees it, so ATOS attached to the call would land on the
+	// precompile address with no Cosmos-side record of it -- the EVM's view of
+	// balances and the bank module's would disagree from that point on, and
+	// neither side would log anything.
+	//
+	// Reject rather than sweep. A caller attaching value to this method has
+	// misunderstood something, and taking the funds would make that
+	// unrecoverable.
+	if v := contract.Value(); v != nil && v.Sign() > 0 {
+		return nil, fmt.Errorf(
+			"bridgeadapter precompile is not payable: %s wei attached", v)
+	}
+
 	switch method.Name {
 	case BridgeOutMethod:
 		bz, err = p.BridgeOut(ctx, evm.Origin, contract, stateDB, method, args)
