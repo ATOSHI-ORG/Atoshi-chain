@@ -146,6 +146,7 @@ import (
 	v20_1 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_1"
 	v20_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_2"
 	v20_3 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_3"
+	v20_4 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_4"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -1609,6 +1610,23 @@ func (app *Atoshi) setupUpgradeHandlers() {
 		v20_3.CreateUpgradeHandler(
 			app.mm, app.configurator,
 			app.EnergyKeeper,
+		),
+	)
+
+	// v20.4: the response to the 2026-10-26 bridge incident. Most of it is
+	// code and rides along with the binary; the handler retunes the rate
+	// limits from observed traffic (and fills in the four fields this
+	// release adds, which would otherwise come up zero), recovers the ATOX
+	// stranded at the token contract's own address, and claws back the ATOS
+	// the replay over-issued. The two fund movements log and continue on
+	// failure rather than aborting the upgrade -- see the handler.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v20_4.UpgradeName,
+		v20_4.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.BankKeeper,
+			app.StakingKeeper,
+			app.BridgeAdapterKeeper,
 		),
 	)
 
