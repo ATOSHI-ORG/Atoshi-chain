@@ -69,12 +69,21 @@ type AtoxKeeper interface {
 	// and advances the conversion index by the matching amount.
 	AddToExchangePool(ctx sdk.Context, fromModule string, amount math.Int) error
 
-	// AtoxSupply is the live minted ATOX, used to stop block rewards once the cap
-	// is reached instead of erroring every block.
+	// AtoxSupply is the live minted ATOX.
 	AtoxSupply(ctx sdk.Context) math.Int
 
-	// AtoxSupplyCap is the ceiling live supply may not exceed.
+	// AtoxSupplyCap is the ceiling MintedAgainstCap may not exceed.
 	AtoxSupplyCap(ctx sdk.Context) math.Int
+
+	// MintedAgainstCap is the figure MintAtoxToModule actually measures against
+	// the cap: live supply plus conversion burn, which does not free headroom.
+	// Block-reward clamping has to use this and not AtoxSupply, or the clamp
+	// disagrees with the mint and the mint rejects a reward the clamp allowed.
+	MintedAgainstCap(ctx sdk.Context) math.Int
+
+	// AtoxEnabled reports whether issuance is switched on. Governance can turn
+	// it off, and a BeginBlocker that mints has to notice before it tries.
+	AtoxEnabled(ctx sdk.Context) bool
 }
 
 // TierDispatcher is the x/bridgeadapter surface this module needs: step 1 of the

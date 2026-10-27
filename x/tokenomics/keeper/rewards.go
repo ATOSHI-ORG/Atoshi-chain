@@ -1,11 +1,13 @@
 package keeper
 
 import (
+	"errors"
 	"fmt"
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
 
@@ -34,14 +36,29 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 		return nil
 	}
 
-	// Clamp against the ATOX limitAmt held by x/atox, which is the authoritative
+	// Governance can switch ATOX issuance off. Minting anyway returns
+	// ErrAtoxDisabled, and an error here propagates into FinalizeBlock, so a
+	// proposal meant to pause issuance would instead halt the chain on the next
+	// block -- and recovering would need another proposal, on a chain that is no
+	// longer producing blocks. Treat "off" as "emit nothing".
+	if !k.atoxKeeper.AtoxEnabled(ctx) {
+		return nil
+	}
+
+	// Clamp against the ATOX cap held by x/atox, which is the authoritative
 	// ceiling and is immutable there. Clamping rather than letting MintAtox
 	// reject matters: an error here propagates into FinalizeBlock, so once the
-	// limitAmt were reached every block on every node would fail and the chain would
+	// cap were reached every block on every node would fail and the chain would
 	// halt. Emission must simply stop.
-	supply := k.atoxKeeper.AtoxSupply(ctx)
+	//
+	// The clamp has to measure what the mint measures. MintAtoxToModule checks
+	// MintedAgainstCap -- live supply plus conversion burn, because conversion
+	// burn does not free headroom. Clamping against live supply alone leaves a
+	// window once TotalBurned is non-zero where the clamp says there is room and
+	// the mint says there is not, which is the halt this clamp exists to avoid.
+	minted := k.atoxKeeper.MintedAgainstCap(ctx)
 	limitAmt := k.atoxKeeper.AtoxSupplyCap(ctx)
-	if remaining := limitAmt.Sub(supply); remaining.LT(currentReward) {
+	if remaining := limitAmt.Sub(minted); remaining.LT(currentReward) {
 		if !remaining.IsPositive() {
 			return nil
 		}
@@ -63,6 +80,17 @@ func (k Keeper) BeginBlocker(ctx sdk.Context) error {
 	}
 
 	if err := k.atoxKeeper.MintAtoxToModule(ctx, k.feeCollectorName, currentReward); err != nil {
+		// Defence in depth behind the two checks above. Both of these mean
+		// "stop emitting", never "the block is invalid", and returning either
+		// one from BeginBlock halts every node deterministically at the same
+		// height -- a state a restart cannot clear. If the guards above ever
+		// drift out of step with what the mint checks, the chain keeps running
+		// and stops paying rewards instead of stopping altogether.
+		if errors.Is(err, atoxtypes.ErrSupplyCapReached) ||
+			errors.Is(err, atoxtypes.ErrAtoxDisabled) {
+			k.Logger(ctx).Info("atox block reward skipped", "reason", err)
+			return nil
+		}
 		return err
 	}
 
