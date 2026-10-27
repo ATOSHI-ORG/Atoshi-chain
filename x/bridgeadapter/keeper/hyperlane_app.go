@@ -205,8 +205,14 @@ func (k Keeper) Handle(ctx context.Context, mailboxId util.HexAddress, message u
 		return k.SetReceiptState(sdkCtx, state)
 	}
 
-	atosToPool := types.Erc20ToAtos(deltaBridge, params.AtosPerErc20)
-	atosToProject := types.Erc20ToAtos(deltaProject, params.AtosPerErc20)
+	atosToPool, err := types.Erc20ToAtos(deltaBridge, params.AtosPerErc20)
+	if err != nil {
+		return err
+	}
+	atosToProject, err := types.Erc20ToAtos(deltaProject, params.AtosPerErc20)
+	if err != nil {
+		return err
+	}
 
 	if err := k.assertWithinAuthorized(sdkCtx, targetBridge, targetProject, params.AtosPerErc20); err != nil {
 		return err

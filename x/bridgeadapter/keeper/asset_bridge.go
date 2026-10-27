@@ -260,7 +260,10 @@ func (k Keeper) handleAssetTransfer(ctx sdk.Context, message util.HyperlaneMessa
 		return err
 	}
 
-	atosAmount := types.Erc20ToAtos(erc20Amount, params.AtosPerErc20)
+	atosAmount, err := types.Erc20ToAtos(erc20Amount, params.AtosPerErc20)
+	if err != nil {
+		return err
+	}
 
 	available := k.tokenomicsKeeper.MigrationPoolBalance(ctx)
 	if available.LT(atosAmount) {

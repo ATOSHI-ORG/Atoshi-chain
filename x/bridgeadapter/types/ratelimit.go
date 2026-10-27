@@ -60,11 +60,23 @@ type Limits struct {
 // allowance shrinks with it, instead of holding a stale figure until someone
 // files a proposal.
 func ResolveLimits(p Params, poolBalance, poolTotal math.Int) Limits {
+	// A configured share never rounds down to zero.
+	//
+	// Several checks read a resolved zero as "not configured, no limit", while
+	// a zero Global means "fully throttled". So when a positive bps multiplies
+	// out to less than one unit -- base is under 10000 wei, or the pool is
+	// nearly empty -- truncation would flip that limit from binding to absent
+	// without anyone changing it. One unit is as close to "allow nothing" as
+	// this can get while staying on the enforcing side of that distinction.
 	bps := func(v math.Int, b uint32) math.Int {
 		if v.IsNil() || !v.IsPositive() || b == 0 {
 			return math.ZeroInt()
 		}
-		return v.MulRaw(int64(b)).QuoRaw(BpsDenominator)
+		out := v.MulRaw(int64(b)).QuoRaw(BpsDenominator)
+		if !out.IsPositive() {
+			return math.OneInt()
+		}
+		return out
 	}
 
 	global := p.GlobalDailyCap

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	stdmath "math"
 	"math/big"
+	"math/bits"
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -116,11 +117,24 @@ func ParseTierRelease(payload []byte) (cumulativeMiner, cumulativeProject math.I
 
 // Erc20ToAtos converts an ERC20 amount to ATOS at the configured peg. Both are
 // 18-decimal, so this is a plain multiply.
-func Erc20ToAtos(erc20 math.Int, atosPerErc20 uint64) math.Int {
+func Erc20ToAtos(erc20 math.Int, atosPerErc20 uint64) (math.Int, error) {
 	if erc20.IsNil() || !erc20.IsPositive() || atosPerErc20 == 0 {
-		return math.ZeroInt()
+		return math.ZeroInt(), nil
 	}
-	return erc20.MulRaw(int64(atosPerErc20)) //nolint:gosec // G115: Params.Validate bounds this to MaxInt64
+	// The ERC20 figure comes off the wire as a uint256 that nothing has
+	// bounded yet, and cosmossdk.io/math panics on a product wider than 256
+	// bits. Both callers multiply before their own range checks -- the pool
+	// balance check and assertWithinAuthorized both run afterwards -- so a
+	// hostile amount reaches the panic. Today baseapp's recovery turns that
+	// into a failed tx, but Handle only has to be reached once from a
+	// non-tx context (an EndBlocker retry queue, an upgrade handler) for the
+	// same input to halt the chain. Refuse it here instead.
+	if erc20.BigInt().BitLen()+bits.Len64(atosPerErc20) > 256 {
+		return math.ZeroInt(), fmt.Errorf(
+			"%w: a %d-bit ERC20 amount at a peg of %d overflows 256 bits",
+			ErrInvalidAmount, erc20.BigInt().BitLen(), atosPerErc20)
+	}
+	return erc20.MulRaw(int64(atosPerErc20)), nil //nolint:gosec // G115: Params.Validate bounds this to MaxInt64
 }
 
 // ----- Params -----

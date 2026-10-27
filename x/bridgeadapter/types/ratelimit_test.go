@@ -1,6 +1,7 @@
 package types_test
 
 import (
+	"math/big"
 	"testing"
 
 	"cosmossdk.io/math"
@@ -182,8 +183,35 @@ func TestPegRoundTrip(t *testing.T) {
 		a := atos(n)
 		e, err := types.AtosToErc20(a, types.DefaultAtosPerErc20)
 		require.NoError(t, err)
-		require.Equal(t, a.String(), types.Erc20ToAtos(e, types.DefaultAtosPerErc20).String())
+		back, err := types.Erc20ToAtos(e, types.DefaultAtosPerErc20)
+		require.NoError(t, err)
+		require.Equal(t, a.String(), back.String())
 	}
+}
+
+// TestErc20ToAtos_OverflowErrorsRatherThanPanics — the ERC20 figure arrives as
+// an unbounded uint256 from the message body, and both callers multiply by the
+// peg BEFORE their own range checks (the pool balance check and
+// assertWithinAuthorized both run afterwards). cosmossdk.io/math panics on a
+// product wider than 256 bits, so a hostile amount used to reach that panic.
+// baseapp's recovery currently turns it into a failed tx, but Handle only has
+// to be reached once from a non-tx context for the same input to halt a block.
+func TestErc20ToAtos_OverflowErrorsRatherThanPanics(t *testing.T) {
+	// The largest uint256 a message body can carry.
+	maxU256 := math.NewIntFromBigInt(new(big.Int).Sub(
+		new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)))
+
+	require.NotPanics(t, func() {
+		got, err := types.Erc20ToAtos(maxU256, types.DefaultAtosPerErc20)
+		require.ErrorIs(t, err, types.ErrInvalidAmount)
+		require.True(t, got.IsZero())
+	})
+
+	// Just inside the boundary still converts.
+	safe := math.NewIntFromBigInt(new(big.Int).Lsh(big.NewInt(1), 248))
+	got, err := types.Erc20ToAtos(safe, types.DefaultAtosPerErc20)
+	require.NoError(t, err)
+	require.True(t, got.IsPositive())
 }
 
 // ----- asset payload -----
@@ -250,6 +278,38 @@ func TestParams_BridgeEnablingRequiresConfiguration(t *testing.T) {
 	p.MailboxId = make([]byte, types.HexAddressLen)
 	p.RemoteBridgeVault = make([]byte, types.HexAddressLen)
 	require.NoError(t, p.Validate())
+}
+
+// TestResolveLimits_ConfiguredShareNeverRoundsToUnlimited — a positive bps
+// that multiplies out to less than one unit used to truncate to zero, and
+// CheckOutbound/CheckInbound read a zero per-address or inbound limit as "not
+// configured, no limit". So a limit the operator did set silently became no
+// limit at all, while a zero Global means the opposite (fully throttled). The
+// three derived figures have to agree on what zero means.
+func TestResolveLimits_ConfiguredShareNeverRoundsToUnlimited(t *testing.T) {
+	p := types.DefaultParams()
+	p.GlobalDailyCap = math.NewInt(127) // far below BpsDenominator
+	p.GlobalDailyCapBpsOfPool = 0
+	p.PerAddressDailyBps = 35
+	p.InboundDailyCap = math.ZeroInt()
+	p.InboundDailyCapBpsOfPool = 35
+	// Out of the way: this test is about the derived shares, not the floor.
+	p.MinTransferOut = math.OneInt()
+	p.SmallTransferThreshold = math.ZeroInt()
+
+	l := types.ResolveLimits(p, math.NewInt(127), math.NewInt(1_000_000))
+
+	require.True(t, l.PerAddress.IsPositive(),
+		"a configured per-address share must stay binding, not become unlimited")
+	require.True(t, l.Inbound.IsPositive(),
+		"a configured inbound share must stay binding, not become unlimited")
+
+	// And it still actually limits: one unit in, the next unit out.
+	require.NoError(t, types.CheckOutbound(l, math.OneInt(),
+		math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
+	require.ErrorIs(t,
+		types.CheckOutbound(l, math.OneInt(), math.ZeroInt(), math.ZeroInt(), l.PerAddress),
+		types.ErrAddressCapReached)
 }
 
 // TestParams_EnablingRequiresAnIsm — the pin is the only thing authenticating
