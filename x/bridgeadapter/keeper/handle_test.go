@@ -163,6 +163,8 @@ func setup(t *testing.T, authMiner, authProject math.Int) (keeper.Keeper, sdk.Co
 	p.EthereumDomain = ethDomain
 	v := vaultAddr()
 	p.TierReleaseVault = v[:]
+	mb := configuredMailbox()
+	p.MailboxId = mb[:]
 	require.NoError(t, k.SetParams(ctx, p))
 
 	// Assign an app id directly; genesis assignment is covered separately.
@@ -173,6 +175,23 @@ func setup(t *testing.T, authMiner, authProject math.Int) (keeper.Keeper, sdk.Co
 	require.NoError(t, k.SetReceiptState(ctx, st))
 
 	return k, ctx, xk, tk
+}
+
+// configuredMailbox is the mailbox id setup writes into params. Handle accepts
+// messages only from this one, so every test that expects a delivery to succeed
+// has to pass it.
+func configuredMailbox() util.HexAddress {
+	var a util.HexAddress
+	copy(a[:], []byte("atoshi-configured-mailbox------"))
+	return a
+}
+
+// attackerMailbox stands in for a mailbox created by MsgCreateMailbox, which is
+// permissionless. Nothing about it is malformed — it is simply not ours.
+func attackerMailbox() util.HexAddress {
+	var a util.HexAddress
+	copy(a[:], []byte("attacker-created-mailbox-------"))
+	return a
 }
 
 // tierAppID is the recipient the tier-release channel listens on. Must match
@@ -208,7 +227,7 @@ func TestHandle_RejectsForeignOrigin(t *testing.T) {
 	k, ctx, xk, _ := setup(t, atosFor(1_000), atosFor(1_000))
 
 	msg := receipt(t, otherDomain, vaultAddr(), erc20(500), erc20(500))
-	require.ErrorIs(t, k.Handle(ctx, util.HexAddress{}, msg), types.ErrWrongOrigin)
+	require.ErrorIs(t, k.Handle(ctx, configuredMailbox(), msg), types.ErrWrongOrigin)
 
 	require.Empty(t, xk.pooled, "nothing may be released on a foreign-origin message")
 	require.True(t, k.GetReceiptState(ctx).AppliedToBridge.IsZero())
@@ -221,7 +240,7 @@ func TestHandle_RejectsImpostorSender(t *testing.T) {
 	k, ctx, xk, _ := setup(t, atosFor(1_000), atosFor(1_000))
 
 	msg := receipt(t, ethDomain, impostorAddr(), erc20(500), erc20(500))
-	require.ErrorIs(t, k.Handle(ctx, util.HexAddress{}, msg), types.ErrWrongSender)
+	require.ErrorIs(t, k.Handle(ctx, configuredMailbox(), msg), types.ErrWrongSender)
 
 	require.Empty(t, xk.pooled, "nothing may be released for a sender that is not the vault")
 }
@@ -236,8 +255,72 @@ func TestHandle_RejectsWhenDisabled(t *testing.T) {
 	require.NoError(t, k.SetParams(ctx, p))
 
 	msg := receipt(t, ethDomain, vaultAddr(), erc20(500), erc20(500))
-	require.ErrorIs(t, k.Handle(ctx, util.HexAddress{}, msg), types.ErrDisabled)
+	require.ErrorIs(t, k.Handle(ctx, configuredMailbox(), msg), types.ErrDisabled)
 	require.Empty(t, xk.pooled)
+}
+
+// ---------- mailbox provenance ----------
+
+// TestHandle_RejectsAForeignMailbox reproduces the 2026-10-26 incident.
+//
+// Everything about the message is genuine: the right origin, the right sender,
+// a payload that would be accepted. The only difference is the mailbox it came
+// through. x/core de-duplicates on (mailboxId, messageId), so replaying through
+// a mailbox the attacker created produces a key the chain has never seen and
+// the delivery reaches this module a second time. Rejecting on the mailbox id
+// is the only thing standing in the way.
+func TestHandle_RejectsAForeignMailbox(t *testing.T) {
+	k, ctx, xk, tk := setup(t, atosFor(10_000), atosFor(10_000))
+	msg := receipt(t, ethDomain, vaultAddr(), erc20(300), erc20(300))
+
+	require.ErrorIs(t, k.Handle(ctx, attackerMailbox(), msg), types.ErrWrongMailbox)
+	require.Empty(t, xk.pooled, "a foreign mailbox must release nothing")
+	require.True(t, tk.claimable.IsZero())
+}
+
+// TestHandle_ReplayThroughFreshMailboxesPaysOnce is the incident in miniature:
+// one genuine message, delivered through several attacker-created mailboxes
+// after the legitimate delivery. Only the legitimate one may move funds.
+func TestHandle_ReplayThroughFreshMailboxesPaysOnce(t *testing.T) {
+	k, ctx, xk, tk := setup(t, atosFor(10_000), atosFor(10_000))
+	msg := receipt(t, ethDomain, vaultAddr(), erc20(300), erc20(300))
+
+	require.NoError(t, k.Handle(ctx, configuredMailbox(), msg))
+
+	for i := range byte(5) {
+		var mb util.HexAddress
+		copy(mb[:], []byte("attacker-created-mailbox-------"))
+		mb[31] = i // a different mailbox id each time, as CreateMailbox hands out
+		require.ErrorIs(t, k.Handle(ctx, mb, msg), types.ErrWrongMailbox)
+	}
+
+	require.Equal(t, atosFor(300).String(), xk.pooled[minerPool].String(),
+		"five replays through fresh mailboxes must not release a second time")
+	require.Equal(t, atosFor(300).String(), tk.claimable.String())
+}
+
+// TestHandle_RejectsWhenMailboxUnset refuses to fall open. An unset mailbox id
+// means the module is not configured to receive anything, not that any mailbox
+// will do.
+func TestHandle_RejectsWhenMailboxUnset(t *testing.T) {
+	k, ctx, xk, _ := setup(t, atosFor(10_000), atosFor(10_000))
+	p := k.GetParams(ctx)
+	p.Enabled = false // Validate requires a mailbox while enabled
+	p.MailboxId = nil
+	require.NoError(t, k.SetParams(ctx, p))
+
+	msg := receipt(t, ethDomain, vaultAddr(), erc20(300), erc20(300))
+	require.ErrorIs(t, k.Handle(ctx, configuredMailbox(), msg), types.ErrWrongMailbox)
+	require.Empty(t, xk.pooled)
+}
+
+// TestHandle_MailboxCheckCoversTheAssetBridge pins that the check sits before
+// the recipient switch, so the asset channel is covered too. That channel is
+// the one the attack actually drained.
+func TestHandle_MailboxCheckCoversTheAssetBridge(t *testing.T) {
+	k, ctx := setupInbound(t)
+	require.ErrorIs(t, k.Handle(ctx, attackerMailbox(), inboundMsg(t, erc20(6))),
+		types.ErrWrongMailbox)
 }
 
 // ---------- cumulative-target semantics ----------
@@ -245,7 +328,7 @@ func TestHandle_RejectsWhenDisabled(t *testing.T) {
 func TestHandle_AppliesDeltaAtThePeg(t *testing.T) {
 	k, ctx, xk, tk := setup(t, atosFor(10_000), atosFor(10_000))
 
-	require.NoError(t, k.Handle(ctx, util.HexAddress{},
+	require.NoError(t, k.Handle(ctx, configuredMailbox(),
 		receipt(t, ethDomain, vaultAddr(), erc20(300), erc20(300))))
 
 	require.Equal(t, atosFor(300).String(), xk.pooled[minerPool].String(),
@@ -266,9 +349,9 @@ func TestHandle_DuplicateIsANoOp(t *testing.T) {
 	k, ctx, xk, tk := setup(t, atosFor(10_000), atosFor(10_000))
 	msg := receipt(t, ethDomain, vaultAddr(), erc20(300), erc20(300))
 
-	require.NoError(t, k.Handle(ctx, util.HexAddress{}, msg))
-	require.NoError(t, k.Handle(ctx, util.HexAddress{}, msg), "a duplicate must not error")
-	require.NoError(t, k.Handle(ctx, util.HexAddress{}, msg))
+	require.NoError(t, k.Handle(ctx, configuredMailbox(), msg))
+	require.NoError(t, k.Handle(ctx, configuredMailbox(), msg), "a duplicate must not error")
+	require.NoError(t, k.Handle(ctx, configuredMailbox(), msg))
 
 	require.Equal(t, atosFor(300).String(), xk.pooled[minerPool].String(),
 		"three deliveries of the same total release once")
@@ -281,7 +364,7 @@ func TestHandle_LostReceiptIsRepairedByTheNext(t *testing.T) {
 	k, ctx, xk, _ := setup(t, atosFor(10_000), atosFor(10_000))
 
 	// The receipt for 300 never arrives; the next one reports 900 cumulative.
-	require.NoError(t, k.Handle(ctx, util.HexAddress{},
+	require.NoError(t, k.Handle(ctx, configuredMailbox(),
 		receipt(t, ethDomain, vaultAddr(), erc20(900), erc20(900))))
 
 	require.Equal(t, atosFor(900).String(), xk.pooled[minerPool].String(),
@@ -292,10 +375,10 @@ func TestHandle_LostReceiptIsRepairedByTheNext(t *testing.T) {
 func TestHandle_RejectsBackwardsTarget(t *testing.T) {
 	k, ctx, xk, _ := setup(t, atosFor(10_000), atosFor(10_000))
 
-	require.NoError(t, k.Handle(ctx, util.HexAddress{},
+	require.NoError(t, k.Handle(ctx, configuredMailbox(),
 		receipt(t, ethDomain, vaultAddr(), erc20(900), erc20(900))))
 
-	err := k.Handle(ctx, util.HexAddress{}, receipt(t, ethDomain, vaultAddr(), erc20(400), erc20(900)))
+	err := k.Handle(ctx, configuredMailbox(), receipt(t, ethDomain, vaultAddr(), erc20(400), erc20(900)))
 	require.ErrorIs(t, err, types.ErrTargetWentBackward)
 
 	require.Equal(t, atosFor(900).String(), xk.pooled[minerPool].String(),
@@ -307,7 +390,7 @@ func TestHandle_MonotonicSequenceAccumulates(t *testing.T) {
 	k, ctx, xk, tk := setup(t, atosFor(10_000), atosFor(10_000))
 
 	for _, total := range []int64{100, 250, 250, 700, 1_000} {
-		require.NoError(t, k.Handle(ctx, util.HexAddress{},
+		require.NoError(t, k.Handle(ctx, configuredMailbox(),
 			receipt(t, ethDomain, vaultAddr(), erc20(total), erc20(total))))
 	}
 
@@ -325,12 +408,12 @@ func TestHandle_MonotonicSequenceAccumulates(t *testing.T) {
 func TestHandle_RejectsMoreThanAuthorized(t *testing.T) {
 	k, ctx, xk, _ := setup(t, atosFor(500), atosFor(500))
 
-	err := k.Handle(ctx, util.HexAddress{}, receipt(t, ethDomain, vaultAddr(), erc20(501), erc20(500)))
+	err := k.Handle(ctx, configuredMailbox(), receipt(t, ethDomain, vaultAddr(), erc20(501), erc20(500)))
 	require.ErrorIs(t, err, types.ErrExceedsAuthorized)
 	require.Empty(t, xk.pooled)
 
 	// Exactly at the authorized figure is fine.
-	require.NoError(t, k.Handle(ctx, util.HexAddress{},
+	require.NoError(t, k.Handle(ctx, configuredMailbox(),
 		receipt(t, ethDomain, vaultAddr(), erc20(500), erc20(500))))
 	require.Equal(t, atosFor(500).String(), xk.pooled[minerPool].String())
 }
@@ -338,7 +421,7 @@ func TestHandle_RejectsMoreThanAuthorized(t *testing.T) {
 func TestHandle_RejectsProjectOverAuthorization(t *testing.T) {
 	k, ctx, xk, _ := setup(t, atosFor(1_000), atosFor(100))
 
-	err := k.Handle(ctx, util.HexAddress{}, receipt(t, ethDomain, vaultAddr(), erc20(500), erc20(101)))
+	err := k.Handle(ctx, configuredMailbox(), receipt(t, ethDomain, vaultAddr(), erc20(500), erc20(101)))
 	require.ErrorIs(t, err, types.ErrExceedsAuthorized)
 	require.Empty(t, xk.pooled, "the bridge share must not be released when the project share is invalid")
 }
@@ -351,7 +434,7 @@ func TestHandle_RejectsMalformedPayload(t *testing.T) {
 	for _, size := range []int{0, 32, 63, 65, 128} {
 		msg := receipt(t, ethDomain, vaultAddr(), erc20(1), erc20(1))
 		msg.Body = make([]byte, size)
-		require.ErrorIs(t, k.Handle(ctx, util.HexAddress{}, msg), types.ErrInvalidPayload,
+		require.ErrorIs(t, k.Handle(ctx, configuredMailbox(), msg), types.ErrInvalidPayload,
 			"a %d-byte body must be rejected", size)
 	}
 }
@@ -383,7 +466,7 @@ func TestHandle_NothingIsAppliedWhenTheReleaseFails(t *testing.T) {
 	k, ctx, xk, tk := setup(t, atosFor(1_000), atosFor(1_000))
 	xk.failNow = types.ErrDisabled // stand-in for any pool-side failure
 
-	err := k.Handle(ctx, util.HexAddress{}, receipt(t, ethDomain, vaultAddr(), erc20(300), erc20(300)))
+	err := k.Handle(ctx, configuredMailbox(), receipt(t, ethDomain, vaultAddr(), erc20(300), erc20(300)))
 	require.Error(t, err)
 
 	require.True(t, k.GetReceiptState(ctx).AppliedToBridge.IsZero(),
@@ -469,7 +552,7 @@ func TestPendingConfirmation(t *testing.T) {
 		"everything authorized is pending until a receipt arrives")
 	require.Equal(t, erc20(400).String(), project.String())
 
-	require.NoError(t, k.Handle(ctx, util.HexAddress{},
+	require.NoError(t, k.Handle(ctx, configuredMailbox(),
 		receipt(t, ethDomain, vaultAddr(), erc20(600), erc20(400))))
 
 	bridge, project = k.PendingConfirmation(ctx)
@@ -513,7 +596,7 @@ func setupInbound(t *testing.T) (keeper.Keeper, sdk.Context) {
 	p.RemoteBridgeVault = v[:]
 	// Enabling the bridge requires both routing fields; validation rejects a
 	// half-configured bridge rather than letting it run and fail per-message.
-	mb := tierAppID()
+	mb := configuredMailbox()
 	p.MailboxId = mb[:]
 	require.NoError(t, k.SetParams(ctx, p))
 
@@ -537,11 +620,11 @@ func TestInboundCap_RejectsRatherThanDrops(t *testing.T) {
 	require.NoError(t, k.SetParams(ctx, p))
 
 	// First one fits.
-	require.NoError(t, k.Handle(ctx, util.HexAddress{}, inboundMsg(t, erc20(6))))
+	require.NoError(t, k.Handle(ctx, configuredMailbox(), inboundMsg(t, erc20(6))))
 	require.Equal(t, atosFor(6).String(), k.GetRateLimitState(ctx).UsedInbound.String())
 
 	// Second one exceeds the day's cap.
-	err := k.Handle(ctx, util.HexAddress{}, inboundMsg(t, erc20(6)))
+	err := k.Handle(ctx, configuredMailbox(), inboundMsg(t, erc20(6)))
 	require.ErrorIs(t, err, types.ErrInboundCapReached)
 
 	// Nothing was recorded for the rejected message -- no partial state.
@@ -559,5 +642,5 @@ func TestInboundCap_UnsetMeansUnlimited(t *testing.T) {
 	p.InboundDailyCapBpsOfPool = 0
 	require.NoError(t, k.SetParams(ctx, p))
 
-	require.NoError(t, k.Handle(ctx, util.HexAddress{}, inboundMsg(t, erc20(1_000_000))))
+	require.NoError(t, k.Handle(ctx, configuredMailbox(), inboundMsg(t, erc20(1_000_000))))
 }

@@ -25,4 +25,11 @@ var (
 	ErrIndivisibleAmount = errorsmod.Register(ModuleName, 18, "amount is not a multiple of the ATOS/ERC20 peg")
 	ErrPoolInsufficient  = errorsmod.Register(ModuleName, 19, "migration pool cannot cover the inbound transfer")
 	ErrNotConfigured     = errorsmod.Register(ModuleName, 20, "bridge is not fully configured")
+
+	// ErrWrongMailbox rejects a message that did not arrive through the mailbox
+	// named in params. Creating a mailbox is permissionless and x/core
+	// de-duplicates on (mailboxId, messageId), so without this check one
+	// genuine ISM-verified message can be replayed once per mailbox an
+	// attacker cares to create.
+	ErrWrongMailbox = errorsmod.Register(ModuleName, 22, "message did not arrive through the configured mailbox")
 )
