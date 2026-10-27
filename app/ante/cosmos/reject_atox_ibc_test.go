@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	ibctransfertypes "github.com/cosmos/ibc-go/v8/modules/apps/transfer/types"
 	"github.com/stretchr/testify/require"
@@ -74,6 +75,46 @@ func TestRejectAtoxIBC_AllowsEverythingElse(t *testing.T) {
 func TestRejectAtoxIBC_CatchesAtoxInABundle(t *testing.T) {
 	err := run(t, transferMsg("liao"), transferMsg(atoxDenom))
 	require.ErrorContains(t, err, "cannot be transferred over IBC")
+}
+
+// execMsg wraps messages the way authz does on the wire: packed into Any, which
+// is the only form MsgExec.GetMessages can unpack.
+func execMsg(t *testing.T, inner ...sdk.Msg) *authz.MsgExec {
+	t.Helper()
+	e := authz.NewMsgExec(sdk.AccAddress("grantee-------------"), inner)
+	return &e
+}
+
+// TestRejectAtoxIBC_SeesThroughAuthz is the bypass this decorator shipped with:
+// tx.GetMsgs() returns the MsgExec, not what it carries, so a flat scan misses
+// an ATOX transfer that anyone can wrap in one. Grants are permissionless.
+func TestRejectAtoxIBC_SeesThroughAuthz(t *testing.T) {
+	err := run(t, execMsg(t, transferMsg(atoxDenom)))
+	require.ErrorContains(t, err, "cannot be transferred over IBC")
+}
+
+// TestRejectAtoxIBC_SeesThroughNestedAuthz — a MsgExec may carry another, so one
+// level of unwrapping is not enough.
+func TestRejectAtoxIBC_SeesThroughNestedAuthz(t *testing.T) {
+	err := run(t, execMsg(t, execMsg(t, execMsg(t, transferMsg(atoxDenom)))))
+	require.ErrorContains(t, err, "cannot be transferred over IBC")
+}
+
+// TestRejectAtoxIBC_AuthzWithoutAtoxPasses guards the other direction: authz is
+// an ordinary feature and must keep working for every other denom.
+func TestRejectAtoxIBC_AuthzWithoutAtoxPasses(t *testing.T) {
+	require.NoError(t, run(t, execMsg(t, transferMsg("liao"))))
+}
+
+// TestRejectAtoxIBC_RejectsRunawayNesting — the walk is recursive, so an
+// attacker-chosen depth must be bounded before it reaches the stack. This runs
+// before any gas is charged.
+func TestRejectAtoxIBC_RejectsRunawayNesting(t *testing.T) {
+	msg := sdk.Msg(transferMsg("liao"))
+	for i := 0; i < 10; i++ {
+		msg = execMsg(t, msg)
+	}
+	require.ErrorContains(t, run(t, msg), "too many nested authz messages")
 }
 
 // TestRejectAtoxIBC_UnconfiguredDenomIsANoOp keeps a bare ante chain in unit

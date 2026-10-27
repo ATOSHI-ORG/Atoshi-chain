@@ -4,8 +4,14 @@ import (
 	errorsmod "cosmossdk.io/errors"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	errortypes "github.com/cosmos/cosmos-sdk/types/errors"
+	"github.com/cosmos/cosmos-sdk/x/authz"
 	ibctransfertypes "github.com/cosmos/ibc-go/v8/modules/apps/transfer/types"
 )
+
+// maxNestedAtoxMsgs bounds the MsgExec recursion below. authz lets a MsgExec
+// carry another MsgExec, so an unbounded walk is a cheap way to burn a node's
+// stack before any gas is charged. Matches AuthzLimiterDecorator's limit.
+const maxNestedAtoxMsgs = 7
 
 // RejectAtoxIBCDecorator refuses to let ATOX leave over IBC.
 //
@@ -41,6 +47,13 @@ import (
 // MsgTransfer is the only way ATOX can reach an escrow, and matching on the
 // message is exact -- the alternative, recognising escrow addresses from the
 // bank hook, means enumerating every open channel on every ATOX transfer.
+//
+// The ante chain has one hole, and it is not this decorator's to plug: the ICA
+// host executes a counterparty's messages straight through the Msg router,
+// skipping every decorator here. v20.4 closes that separately by switching the
+// host off; see app/upgrades/v20_4. If it is ever switched back on, its
+// allow_messages list must exclude MsgTransfer or this decorator is bypassable
+// from any chain that opens an ICA channel.
 type RejectAtoxIBCDecorator struct {
 	// AtoxDenom is the base denom to refuse. Injected rather than imported so
 	// this package keeps no dependency on x/atox.
@@ -53,20 +66,48 @@ func (d RejectAtoxIBCDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate 
 		return next(ctx, tx, simulate)
 	}
 
-	for _, msg := range tx.GetMsgs() {
-		transfer, ok := msg.(*ibctransfertypes.MsgTransfer)
-		if !ok {
-			continue
-		}
-		// ibc-go v8.5 carries exactly one Token per MsgTransfer. If a later
-		// version adds a multi-denom field, this check has to grow with it --
-		// the test below pins the single-token shape so the upgrade fails
-		// loudly rather than silently letting ATOX through.
-		if transfer.Token.Denom == d.AtoxDenom {
-			return ctx, atoxIBCError(d.AtoxDenom)
-		}
+	if err := d.reject(tx.GetMsgs(), 1); err != nil {
+		return ctx, err
 	}
 	return next(ctx, tx, simulate)
+}
+
+// reject walks the message tree, descending into authz MsgExec.
+//
+// tx.GetMsgs() returns the top-level messages only, so a MsgTransfer wrapped in
+// a MsgExec is invisible to a flat scan -- and authz grants are permissionless,
+// so wrapping is available to anyone. Everything this decorator blocks would be
+// reachable through one MsgExec without this walk.
+func (d RejectAtoxIBCDecorator) reject(msgs []sdk.Msg, depth int) error {
+	if depth >= maxNestedAtoxMsgs {
+		return errorsmod.Wrapf(errortypes.ErrInvalidRequest,
+			"too many nested authz messages: limit is %d", maxNestedAtoxMsgs)
+	}
+
+	for _, msg := range msgs {
+		switch msg := msg.(type) {
+		case *authz.MsgExec:
+			inner, err := msg.GetMessages()
+			if err != nil {
+				// Undecodable inner messages cannot be cleared, and a tx that
+				// cannot be inspected is not a tx that may carry ATOX.
+				return errorsmod.Wrapf(errortypes.ErrInvalidRequest,
+					"cannot decode authz inner messages: %s", err)
+			}
+			if err := d.reject(inner, depth+1); err != nil {
+				return err
+			}
+		case *ibctransfertypes.MsgTransfer:
+			// ibc-go v8.5 carries exactly one Token per MsgTransfer. If a later
+			// version adds a multi-denom field, this check has to grow with it
+			// -- the test below pins the single-token shape so the upgrade
+			// fails loudly rather than silently letting ATOX through.
+			if msg.Token.Denom == d.AtoxDenom {
+				return atoxIBCError(d.AtoxDenom)
+			}
+		}
+	}
+	return nil
 }
 
 func atoxIBCError(denom string) error {
