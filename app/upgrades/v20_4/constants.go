@@ -31,13 +31,23 @@ const (
 	StuckAtoxDenom = "aatox"
 )
 
-// StuckAtoxRecipient receives the recovered ATOX.
+// StuckAtoxRecipient receives the recovered ATOX: the account that sent it.
 //
-// Left empty deliberately. Fill it in with the address operations confirms,
-// in the same change that sets the upgrade height, so that one review covers
-// both. An empty value skips the migration with a loud log rather than
-// sending a million ATOX somewhere nobody chose.
-const StuckAtoxRecipient = ""
+// Established from the chain rather than from the ticket. Two transfers landed
+// on the holder, both from this address, and together they are the balance to
+// the last unit:
+//
+//	height 223635  2026-10-08 08:49:56 UTC    900,000.00 aatox
+//	height 224997  2026-10-08 10:45:27 UTC    100,000.08 aatox
+//	                                        1,000,000.08 aatox
+//
+// The account is live -- 113 transactions, a published public key, and an ATOX
+// balance of its own -- so this returns the funds to a holder who can use
+// them, not to another address nobody can sign for.
+//
+// An empty value here skips the migration with a loud log rather than sending
+// a million ATOX somewhere nobody chose.
+const StuckAtoxRecipient = "atoshi160nyl9p32gtw9sarddtmt6w4lqf5jwcu49h7nr"
 
 // ---------- 3: clawback ----------
 
