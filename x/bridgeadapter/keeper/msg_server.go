@@ -88,6 +88,53 @@ func (k msgServer) UpdateParams(goCtx context.Context, msg *types.MsgUpdateParam
 	return &types.MsgUpdateParamsResponse{}, nil
 }
 
+// EmergencyHalt closes the bridge from a guardian key instead of a governance
+// vote.
+//
+// Governance is the right owner for every other parameter and the wrong one
+// for this. On 2026-10-26 the Ethereum side was paused within minutes through
+// EmergencyGuard while this side waited three hours for a proposal, and the
+// ledger shows the cost of that gap exactly: every ERC20 the attacker took
+// left the vault before the pause, and nothing left after it.
+//
+// The message can only close. There is no resume counterpart -- reopening goes
+// through UpdateParams, which is governance -- so a guardian key that leaks
+// costs availability, which a proposal restores, and never funds, which it
+// cannot. That asymmetry is what makes this safe to hold in a hot key.
+//
+// Halting an already-halted bridge succeeds rather than erroring. An operator
+// who is not sure of the current state should send this, not go and check.
+func (k msgServer) EmergencyHalt(goCtx context.Context, msg *types.MsgEmergencyHalt) (*types.MsgEmergencyHaltResponse, error) {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+
+	params := k.GetParams(ctx)
+	if !params.IsGuardian(msg.Guardian) {
+		return nil, fmt.Errorf("%w: %s", types.ErrNotGuardian, msg.Guardian)
+	}
+
+	alreadyHalted := !params.Enabled && !params.BridgeEnabled
+	params.Enabled = false
+	params.BridgeEnabled = false
+
+	// Deliberately not SetParams: Validate requires a configured ISM and vault
+	// while either switch is on, and a half-configured chain must still be able
+	// to shut its bridge. Turning both switches off can never make params less
+	// safe, so it does not need the full check.
+	if err := k.setParamsUnchecked(ctx, params); err != nil {
+		return nil, err
+	}
+
+	ctx.EventManager().EmitEvent(sdk.NewEvent(
+		types.EventTypeEmergencyHalt,
+		sdk.NewAttribute(types.AttributeKeyGuardian, msg.Guardian),
+		sdk.NewAttribute(types.AttributeKeyReason, msg.Reason),
+	))
+	k.Logger(ctx).Error("bridge halted by guardian",
+		"guardian", msg.Guardian, "reason", msg.Reason, "already_halted", alreadyHalted)
+
+	return &types.MsgEmergencyHaltResponse{}, nil
+}
+
 // HexAddressLenLocal mirrors types.HexAddressLen for readability at the call
 // site above.
 const HexAddressLenLocal = types.HexAddressLen

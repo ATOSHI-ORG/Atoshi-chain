@@ -111,10 +111,17 @@ func TestCheckOutbound_MinimumTransfer(t *testing.T) {
 	require.NoError(t, types.CheckOutbound(l, atos(1_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
 }
 
-// TestCrisisMode_OnlySmallTransfers — below the floor the remaining liquidity
-// should serve many small holders rather than one large exit.
-func TestCrisisMode_OnlySmallTransfers(t *testing.T) {
+// TestCrisisMode_ThrottlesInboundNotOutbound — below the floor the remaining
+// liquidity should serve many small holders rather than one large payout.
+//
+// It gates INBOUND. The migration pool drains through inbound (a bridge-in
+// pays ATOS out of it) and refills through outbound (a bridge-out locks ATOS
+// into it), so throttling outbound here -- which this used to do -- blocked the
+// one direction that heals the pool while leaving the draining direction open,
+// and stranded holders trying to exit at the worst possible moment.
+func TestCrisisMode_ThrottlesInboundNotOutbound(t *testing.T) {
 	p := limitParams()
+	p.InboundSmallThreshold = atos(20_000)
 
 	// 9% of the pool: below the 10% crisis floor.
 	poolBalance := poolTotal.MulRaw(9).QuoRaw(100)
@@ -122,10 +129,18 @@ func TestCrisisMode_OnlySmallTransfers(t *testing.T) {
 	require.True(t, l.CrisisMode)
 
 	require.ErrorIs(t,
-		types.CheckOutbound(l, atos(50_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		types.CheckInbound(l, atos(50_000), math.ZeroInt(), math.ZeroInt()),
 		types.ErrCrisisMode)
-	require.NoError(t, types.CheckOutbound(l, atos(10_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
-		"small transfers must keep working in crisis mode")
+	require.NoError(t, types.CheckInbound(l, atos(10_000), math.ZeroInt(), math.ZeroInt()),
+		"small inbound transfers must keep working in crisis mode")
+
+	// Outbound is untouched: it is what refills the pool. 15,000 is above the
+	// 10,000 small threshold, so it is a "large" transfer by the old rule and
+	// would have been rejected; it stays under the per-address allowance so
+	// that limit is not what is being measured here.
+	require.NoError(t,
+		types.CheckOutbound(l, atos(15_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		"crisis mode must not block the direction that refills the pool")
 
 	// Exactly at the floor is not crisis.
 	l = types.ResolveLimits(p, poolTotal.MulRaw(10).QuoRaw(100), poolTotal)
@@ -387,11 +402,11 @@ func TestDefaultParams_LimitsAreSane(t *testing.T) {
 func TestCheckInbound_GlobalCapOnly(t *testing.T) {
 	l := types.Limits{Inbound: math.NewInt(1_000)}
 
-	require.NoError(t, types.CheckInbound(l, math.NewInt(600), math.ZeroInt()))
-	require.NoError(t, types.CheckInbound(l, math.NewInt(400), math.NewInt(600)),
+	require.NoError(t, types.CheckInbound(l, math.NewInt(600), math.ZeroInt(), math.ZeroInt()))
+	require.NoError(t, types.CheckInbound(l, math.NewInt(400), math.NewInt(600), math.ZeroInt()),
 		"exactly reaching the cap is allowed")
 	require.ErrorIs(t,
-		types.CheckInbound(l, math.NewInt(1), math.NewInt(1_000)),
+		types.CheckInbound(l, math.NewInt(1), math.NewInt(1_000), math.ZeroInt()),
 		types.ErrInboundCapReached)
 }
 
@@ -409,14 +424,14 @@ func TestCheckInbound_UnsetCapMeansUnlimited(t *testing.T) {
 		{},                         // nil Int
 		{Inbound: math.NewInt(-5)}, // negative
 	} {
-		require.NoError(t, types.CheckInbound(l, math.NewIntWithDecimal(1, 30), math.ZeroInt()))
+		require.NoError(t, types.CheckInbound(l, math.NewIntWithDecimal(1, 30), math.ZeroInt(), math.ZeroInt()))
 	}
 }
 
 func TestCheckInbound_RejectsNonPositive(t *testing.T) {
 	l := types.Limits{Inbound: math.NewInt(1_000)}
-	require.ErrorIs(t, types.CheckInbound(l, math.ZeroInt(), math.ZeroInt()), types.ErrInvalidAmount)
-	require.ErrorIs(t, types.CheckInbound(l, math.NewInt(-1), math.ZeroInt()), types.ErrInvalidAmount)
+	require.ErrorIs(t, types.CheckInbound(l, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()), types.ErrInvalidAmount)
+	require.ErrorIs(t, types.CheckInbound(l, math.NewInt(-1), math.ZeroInt(), math.ZeroInt()), types.ErrInvalidAmount)
 }
 
 // TestResolveLimits_InboundTakesSmallerLeg mirrors the outbound behavior: the
@@ -440,7 +455,7 @@ func TestResolveLimits_InboundTakesSmallerLeg(t *testing.T) {
 func TestInboundHasNoPerAddressLimit(t *testing.T) {
 	l := types.Limits{Inbound: math.NewInt(1_000), PerAddress: math.NewInt(1)}
 	// PerAddress is set, and must be ignored by the inbound path.
-	require.NoError(t, types.CheckInbound(l, math.NewInt(900), math.ZeroInt()))
+	require.NoError(t, types.CheckInbound(l, math.NewInt(900), math.ZeroInt(), math.ZeroInt()))
 }
 
 // TestRateLimits_MasterSwitchLetsEverythingThrough pins the off switch: with
@@ -462,14 +477,14 @@ func TestRateLimits_MasterSwitchLetsEverythingThrough(t *testing.T) {
 	// Enforced: the request is refused (which check fires first does not matter,
 	// the point is that it is refused).
 	require.Error(t, types.CheckOutbound(tight, huge, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
-	require.Error(t, types.CheckInbound(tight, huge, math.ZeroInt()))
+	require.Error(t, types.CheckInbound(tight, huge, math.ZeroInt(), math.ZeroInt()))
 
 	// Same figures, switch off.
 	off := tight
 	off.Disabled = true
 	require.NoError(t, types.CheckOutbound(off, huge, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
 		"disabling the rate limits must let an otherwise-valid outbound transfer through")
-	require.NoError(t, types.CheckInbound(off, huge, math.ZeroInt()),
+	require.NoError(t, types.CheckInbound(off, huge, math.ZeroInt(), math.ZeroInt()),
 		"disabling the rate limits must let an otherwise-valid inbound transfer through")
 
 	// Below the minimum, which is a throttle, is now allowed too.
@@ -479,7 +494,7 @@ func TestRateLimits_MasterSwitchLetsEverythingThrough(t *testing.T) {
 	// still be rejected -- otherwise the switch turns off a validity check.
 	require.ErrorIs(t, types.CheckOutbound(off, math.ZeroInt(), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
 		types.ErrInvalidAmount)
-	require.ErrorIs(t, types.CheckInbound(off, math.NewInt(-1), math.ZeroInt()),
+	require.ErrorIs(t, types.CheckInbound(off, math.NewInt(-1), math.ZeroInt(), math.ZeroInt()),
 		types.ErrInvalidAmount)
 }
 

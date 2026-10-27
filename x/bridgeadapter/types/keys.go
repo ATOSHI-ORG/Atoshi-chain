@@ -43,6 +43,7 @@ const (
 	prefixReceiptState
 	prefixRateLimit
 	prefixAddressUsage
+	prefixInboundAddressUsage
 )
 
 var (
@@ -51,12 +52,25 @@ var (
 	KeyRateLimit    = []byte{prefixRateLimit}
 
 	KeyPrefixAddressUsage = []byte{prefixAddressUsage}
+	// KeyPrefixInboundAddressUsage is separate from the outbound prefix on
+	// purpose. The two directions have independent budgets, so sharing a
+	// counter would let a bridge-out eat into a bridge-in allowance.
+	KeyPrefixInboundAddressUsage = []byte{prefixInboundAddressUsage}
 )
 
 // AddressUsageKey indexes one address's daily outbound usage.
 func AddressUsageKey(addr string) []byte {
-	out := make([]byte, 0, len(KeyPrefixAddressUsage)+len(addr))
-	out = append(out, KeyPrefixAddressUsage...)
+	return usageKey(KeyPrefixAddressUsage, addr)
+}
+
+// InboundAddressUsageKey indexes one recipient's daily inbound usage.
+func InboundAddressUsageKey(addr string) []byte {
+	return usageKey(KeyPrefixInboundAddressUsage, addr)
+}
+
+func usageKey(prefix []byte, addr string) []byte {
+	out := make([]byte, 0, len(prefix)+len(addr))
+	out = append(out, prefix...)
 	out = append(out, addr...)
 	return out
 }

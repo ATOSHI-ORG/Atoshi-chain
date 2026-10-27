@@ -523,6 +523,91 @@ func TestReceiverIsmId_PinnedOrExplicitError(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrUnknownRecipient)
 }
 
+// ---------- emergency halt ----------
+
+func guardianAddr() string {
+	return sdk.AccAddress([]byte("guardian-on-call----")).String()
+}
+
+// TestEmergencyHalt_ClosesBothSwitches — the point of the message is that one
+// transaction from a hot key does what a three-hour proposal did on
+// 2026-10-26, by which time every ERC20 the attacker wanted had already left.
+func TestEmergencyHalt_ClosesBothSwitches(t *testing.T) {
+	k, ctx := setupInbound(t)
+	ms := keeper.NewMsgServerImpl(k)
+
+	p := k.GetParams(ctx)
+	p.Guardians = []string{guardianAddr()}
+	require.NoError(t, k.SetParams(ctx, p))
+	require.True(t, k.GetParams(ctx).Enabled)
+	require.True(t, k.GetParams(ctx).BridgeEnabled)
+
+	_, err := ms.EmergencyHalt(ctx, &types.MsgEmergencyHalt{
+		Guardian: guardianAddr(), Reason: "inbound replay suspected",
+	})
+	require.NoError(t, err)
+
+	require.False(t, k.GetParams(ctx).Enabled)
+	require.False(t, k.GetParams(ctx).BridgeEnabled)
+
+	// Idempotent: an operator unsure of the state should send it, not check.
+	_, err = ms.EmergencyHalt(ctx, &types.MsgEmergencyHalt{
+		Guardian: guardianAddr(), Reason: "again",
+	})
+	require.NoError(t, err)
+}
+
+// TestEmergencyHalt_RejectsNonGuardian — the key is hot, so the list is the
+// only thing standing between it and anyone else.
+func TestEmergencyHalt_RejectsNonGuardian(t *testing.T) {
+	k, ctx := setupInbound(t)
+	ms := keeper.NewMsgServerImpl(k)
+
+	p := k.GetParams(ctx)
+	p.Guardians = []string{guardianAddr()}
+	require.NoError(t, k.SetParams(ctx, p))
+
+	_, err := ms.EmergencyHalt(ctx, &types.MsgEmergencyHalt{
+		Guardian: sdk.AccAddress([]byte("not-a-guardian------")).String(),
+	})
+	require.ErrorIs(t, err, types.ErrNotGuardian)
+	require.True(t, k.GetParams(ctx).BridgeEnabled, "a rejected halt must change nothing")
+}
+
+// TestEmergencyHalt_NoGuardiansMeansNobody — an empty list is the safe
+// default, not an open door.
+func TestEmergencyHalt_NoGuardiansMeansNobody(t *testing.T) {
+	k, ctx := setupInbound(t)
+	ms := keeper.NewMsgServerImpl(k)
+	require.Empty(t, k.GetParams(ctx).Guardians)
+
+	_, err := ms.EmergencyHalt(ctx, &types.MsgEmergencyHalt{Guardian: guardianAddr()})
+	require.ErrorIs(t, err, types.ErrNotGuardian)
+	require.True(t, k.GetParams(ctx).BridgeEnabled)
+}
+
+// TestEmergencyHalt_WorksWhenParamsWouldFailValidation — the halt path must not
+// depend on the configuration being sound. A chain whose ISM or vault is
+// exactly what is under attack still has to be able to shut its bridge.
+func TestEmergencyHalt_WorksWhenParamsWouldFailValidation(t *testing.T) {
+	k, ctx := setupInbound(t)
+	ms := keeper.NewMsgServerImpl(k)
+
+	p := k.GetParams(ctx)
+	p.Guardians = []string{guardianAddr()}
+	require.NoError(t, k.SetParams(ctx, p))
+
+	// Corrupt the ISM behind SetParams's back, the way a bad migration might.
+	broken := k.GetParams(ctx)
+	broken.IsmId = nil
+	require.Error(t, broken.Validate(), "fixture must be in a state SetParams would refuse")
+	require.NoError(t, keeper.SetParamsUncheckedForTest(k, ctx, broken))
+
+	_, err := ms.EmergencyHalt(ctx, &types.MsgEmergencyHalt{Guardian: guardianAddr()})
+	require.NoError(t, err, "a halt must not require params that validate")
+	require.False(t, k.GetParams(ctx).BridgeEnabled)
+}
+
 // TestUpdateParams_CannotClearTheIsm — MsgUpdateParams replaces the whole
 // struct, so a proposal that simply omits ism_id would clear it. Changing the
 // pin is allowed; dropping it is not.

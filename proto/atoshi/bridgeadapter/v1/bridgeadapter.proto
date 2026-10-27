@@ -164,6 +164,66 @@ message Params {
   // limits leaves every other check (authorisation, solvency, denom, message
   // source) exactly where it was.
   bool rate_limits_disabled = 18;
+
+  // max_transfer_in and max_transfer_out cap a SINGLE transfer in each
+  // direction. Zero means no per-transfer ceiling.
+  //
+  // Until now only a floor existed (min_transfer_out) and nothing bounded one
+  // transfer from above. These do not stop the 2026-10-26 replay -- that was
+  // 483 deliveries of 315,943.74 ATOS each, every one of them below the median
+  // -- and nothing in a per-transfer limit would have. They bound a different
+  // shape of fault: one oversized message draining the pool in a single step,
+  // from a corrupted amount field or a counterparty bug.
+  string max_transfer_in = 19 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  string max_transfer_out = 20 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // inbound_per_address_daily_bps is one recipient's share of the inbound daily
+  // cap, as the outbound side has had all along. Zero means no per-recipient
+  // limit.
+  //
+  // The comment on inbound_daily_cap used to argue against exactly this, on the
+  // grounds that addresses are free so a per-address cap stops nobody who is
+  // actually attacking. 2026-10-26 showed the reverse: the attacker took
+  // 152,603,225.60 ATOS into ONE address, because the replayed message named
+  // that recipient and changing it would have changed the message id and
+  // invalidated the signature. A replay is pinned to whatever address the
+  // original message paid, which makes a per-recipient cap the one limit that
+  // bites. It is also the only one of the four that would have cut the loss.
+  uint32 inbound_per_address_daily_bps = 21;
+
+  // inbound_small_threshold is what counts as small on the inbound side during
+  // crisis mode, mirroring small_transfer_threshold on the outbound side.
+  //
+  // It needs its own figure because the two directions differ by an order of
+  // magnitude: over 2026-10-17..26 the median bridge-in was 403,000 ATOS
+  // against 54,000 for bridge-out. Reusing the outbound threshold would reject
+  // most ordinary inbound traffic the moment crisis mode engaged, which is the
+  // opposite of serving many small holders.
+  string inbound_small_threshold = 22 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // guardians may halt the bridge immediately, without a governance vote.
+  //
+  // On 2026-10-26 the Ethereum side was paused in minutes through
+  // EmergencyGuard while this side waited three hours for a proposal, and the
+  // gap is measurable: every ERC20 the attacker took left before the pause,
+  // and nothing left after it.
+  //
+  // A guardian can only CLOSE. Reopening still requires governance. That
+  // asymmetry is the whole design: a stolen guardian key costs availability,
+  // which governance can undo, rather than funds, which it cannot.
+  repeated string guardians = 23;
 }
 
 // ReceiptState tracks what Ethereum has confirmed, in ERC20 units.

@@ -186,9 +186,30 @@ func DefaultParams() Params {
 		SmallTransferThreshold: math.NewIntWithDecimal(1, 23),
 		SmallQuotaBps:          2000,
 
-		// Below 10% of the pool, large exits stop entirely so the remaining
-		// liquidity serves many small holders.
+		// Below 10% of the pool, large INBOUND transfers stop entirely so the
+		// remaining liquidity serves many small holders. The pool drains
+		// through inbound -- that is the direction it pays out -- so this
+		// throttles the direction that is emptying it.
 		CrisisPoolBps: 1000,
+
+		// What counts as small on the inbound side once crisis mode engages.
+		// Separate from small_transfer_threshold because the two directions
+		// differ by an order of magnitude in practice.
+		InboundSmallThreshold: math.NewIntWithDecimal(1, 24), // 1,000,000 ATOS
+
+		// No per-transfer ceiling at genesis, in either direction. These are
+		// tuned from observed traffic once there is some; a figure guessed
+		// before launch would only strand honest transfers.
+		MaxTransferIn:  math.ZeroInt(),
+		MaxTransferOut: math.ZeroInt(),
+
+		// No per-recipient inbound share at genesis, same reasoning.
+		InboundPerAddressDailyBps: 0,
+
+		// No guardians at genesis. The keys do not exist until somebody is on
+		// call to hold them, and an empty list simply means the halt message
+		// has no valid signer.
+		Guardians: nil,
 	}
 }
 
@@ -226,6 +247,20 @@ func (p Params) Validate() error {
 	// switches because both of them accept inbound messages.
 	if (p.Enabled || p.BridgeEnabled) && len(p.IsmId) != HexAddressLen {
 		return fmt.Errorf("ism_id must be set before enabling the adapter or the bridge")
+	}
+	// A malformed guardian address can never sign, so it is not dangerous --
+	// it is just silently useless, which is worse in an emergency. Reject it
+	// while somebody is reading the proposal rather than when the bridge needs
+	// shutting down.
+	seen := make(map[string]struct{}, len(p.Guardians))
+	for _, g := range p.Guardians {
+		if _, err := sdk.AccAddressFromBech32(g); err != nil {
+			return fmt.Errorf("guardian %q is not a valid address: %w", g, err)
+		}
+		if _, dup := seen[g]; dup {
+			return fmt.Errorf("guardian %q is listed twice", g)
+		}
+		seen[g] = struct{}{}
 	}
 
 	for _, c := range []struct {
@@ -353,4 +388,22 @@ func (msg MsgUpdateParams) ValidateBasic() error {
 		return err
 	}
 	return msg.Params.Validate()
+}
+
+// IsGuardian reports whether addr may halt the bridge.
+//
+// An empty guardian list means nobody can, which is the safe default: the
+// message simply has no valid signer until governance appoints one. Comparison
+// is on the bech32 string because that is what the proto carries and what a
+// proposal author reads.
+func (p Params) IsGuardian(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	for _, g := range p.Guardians {
+		if g == addr {
+			return true
+		}
+	}
+	return false
 }
