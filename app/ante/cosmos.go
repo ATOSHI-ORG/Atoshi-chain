@@ -5,6 +5,7 @@ package ante
 
 import (
 	cosmosante "github.com/atoshi-chain/atoshi/v20/app/ante/cosmos"
+	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 	evmante "github.com/atoshi-chain/atoshi/v20/app/ante/evm"
 	energyante "github.com/atoshi-chain/atoshi/v20/x/energy/ante"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
@@ -38,6 +39,11 @@ func newCosmosAnteHandler(options HandlerOptions) sdk.AnteHandler {
 
 	decorators := []sdk.AnteDecorator{
 		cosmosante.RejectMessagesDecorator{}, // reject MsgEthereumTxs
+		// ATOX cannot leave over IBC: it burns a fee on every move and its
+		// value is a claim on this chain's exchange pool, so an escrowed
+		// balance is unbacked from the first transfer and unclaimable forever.
+		// See the decorator. Cheap and first, before anything touches state.
+		cosmosante.RejectAtoxIBCDecorator{AtoxDenom: atoshitypes.AtoxBaseDenom},
 		cosmosante.NewAuthzLimiterDecorator( // disable the Msg types that cannot be included on an authz.MsgExec msgs field
 			sdk.MsgTypeURL(&evmtypes.MsgEthereumTx{}),
 			sdk.MsgTypeURL(&sdkvesting.MsgCreateVestingAccount{}),
