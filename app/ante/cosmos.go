@@ -39,15 +39,20 @@ func newCosmosAnteHandler(options HandlerOptions) sdk.AnteHandler {
 
 	decorators := []sdk.AnteDecorator{
 		cosmosante.RejectMessagesDecorator{}, // reject MsgEthereumTxs
-		// ATOX cannot leave over IBC: it burns a fee on every move and its
-		// value is a claim on this chain's exchange pool, so an escrowed
-		// balance is unbacked from the first transfer and unclaimable forever.
-		// See the decorator. Cheap and first, before anything touches state.
-		cosmosante.RejectAtoxIBCDecorator{AtoxDenom: atoshitypes.AtoxBaseDenom},
 		cosmosante.NewAuthzLimiterDecorator( // disable the Msg types that cannot be included on an authz.MsgExec msgs field
 			sdk.MsgTypeURL(&evmtypes.MsgEthereumTx{}),
 			sdk.MsgTypeURL(&sdkvesting.MsgCreateVestingAccount{}),
 		),
+		// ATOX cannot leave over IBC: it burns a fee on every move and its
+		// value is a claim on this chain's exchange pool, so an escrowed
+		// balance is unbacked from the first transfer and unclaimable forever.
+		// See the decorator.
+		//
+		// After the authz limiter, not before. Both walk MsgExec to the same
+		// depth, so whichever runs first owns the error a too-deeply-nested tx
+		// gets back. That verdict belongs to the limiter, whose job it is.
+		// Still cheap, and still ahead of everything that touches state.
+		cosmosante.RejectAtoxIBCDecorator{AtoxDenom: atoshitypes.AtoxBaseDenom},
 		ante.NewSetUpContextDecorator(),
 		ante.NewExtensionOptionsDecorator(options.ExtensionOptionChecker),
 		ante.NewValidateBasicDecorator(),
