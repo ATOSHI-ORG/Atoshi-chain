@@ -72,6 +72,15 @@ func (k msgServer) UpdateParams(goCtx context.Context, msg *types.MsgUpdateParam
 			"cannot retarget tier_release_vault while enabled: disable the adapter first")
 	}
 
+	// Clearing a configured ISM pin is never a deliberate act. MsgUpdateParams
+	// replaces the whole struct, so a proposal that just forgets the field
+	// clears it -- and the pin is the only thing authenticating inbound
+	// messages. Changing it to a different ISM is allowed; dropping it is not.
+	if len(current.IsmId) == HexAddressLenLocal && len(msg.Params.IsmId) != HexAddressLenLocal {
+		return nil, fmt.Errorf(
+			"cannot clear a configured ism_id: carry it over or set a replacement")
+	}
+
 	if err := k.SetParams(ctx, msg.Params); err != nil {
 		return nil, err
 	}

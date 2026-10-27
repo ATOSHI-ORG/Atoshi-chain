@@ -32,10 +32,26 @@ func (k Keeper) Exists(ctx context.Context, recipient util.HexAddress) (bool, er
 // ReceiverIsmId pins the interchain security module used to verify messages
 // addressed to this app.
 //
-// Returning nil falls back to the mailbox default ISM. Pinning it in params
-// instead means a later change to the mailbox default — a different proposal,
-// possibly for an unrelated route — cannot silently weaken the verification
-// standing between Ethereum and a tier release.
+// Pinning it in params means a later change to the mailbox default — a
+// different proposal, possibly for an unrelated route — cannot silently weaken
+// the verification standing between Ethereum and a tier release.
+//
+// An unset pin is a hard error, and the two obvious alternatives are both
+// worse:
+//
+//   - Returning (nil, nil) panics. Upstream dereferences the pointer without a
+//     nil check (hyperlane-cosmos v1.1.0, x/core/keeper/keeper.go:99), so an
+//     unset pin takes the whole inbound channel down. Params.Validate does not
+//     currently force IsmId when Enabled, and DefaultParams leaves it nil, so
+//     this is a single mistyped proposal away.
+//   - Returning ErrNoReceiverISM falls back to mailbox.DefaultIsm
+//     (logic_message.go:65-67). After 2026-10-26 we know who owns the other
+//     mailboxes on this chain: the attacker created 99 of them. Falling back
+//     would hand verification to an ISM they control, turning a replay into
+//     arbitrary forgery.
+//
+// So: an explicit error, distinct from both.
+//
 // The name is dictated by Hyperlane's app-router interface, so it keeps the
 // Id spelling revive would rather have as ID.
 func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*util.HexAddress, error) { //nolint:revive,stylecheck // interface method name fixed by Hyperlane
@@ -50,7 +66,7 @@ func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*
 
 	ismID := k.GetParams(sdkCtx).IsmId
 	if len(ismID) != types.HexAddressLen {
-		return nil, nil
+		return nil, types.ErrIsmNotConfigured
 	}
 	var out util.HexAddress
 	copy(out[:], ismID)

@@ -165,6 +165,8 @@ func setup(t *testing.T, authMiner, authProject math.Int) (keeper.Keeper, sdk.Co
 	p.TierReleaseVault = v[:]
 	mb := configuredMailbox()
 	p.MailboxId = mb[:]
+	ism := configuredIsm()
+	p.IsmId = ism[:]
 	require.NoError(t, k.SetParams(ctx, p))
 
 	// Assign an app id directly; genesis assignment is covered separately.
@@ -183,6 +185,14 @@ func setup(t *testing.T, authMiner, authProject math.Int) (keeper.Keeper, sdk.Co
 func configuredMailbox() util.HexAddress {
 	var a util.HexAddress
 	copy(a[:], []byte("atoshi-configured-mailbox------"))
+	return a
+}
+
+// configuredIsm is the ISM pin setup writes into params. Enabling either
+// switch now requires one, so every fixture has to set it.
+func configuredIsm() util.HexAddress {
+	var a util.HexAddress
+	copy(a[:], []byte("atoshi-configured-ism----------"))
 	return a
 }
 
@@ -491,15 +501,10 @@ func TestExists_OnlyMatchesOurAppId(t *testing.T) {
 	require.False(t, ok, "an address we do not own must not be claimed")
 }
 
-func TestReceiverIsmId_PinnedOrDefault(t *testing.T) {
+func TestReceiverIsmId_PinnedOrExplicitError(t *testing.T) {
 	k, ctx, _, _ := setup(t, atosFor(1), atosFor(1))
 	var ours util.HexAddress
 	copy(ours[:], k.GetReceiptState(ctx).AppId)
-
-	// Unset: fall back to the mailbox default.
-	got, err := k.ReceiverIsmId(ctx, ours)
-	require.NoError(t, err)
-	require.Nil(t, got)
 
 	// Pinned: a later change to the mailbox default cannot weaken verification
 	// for tier releases.
@@ -509,13 +514,65 @@ func TestReceiverIsmId_PinnedOrDefault(t *testing.T) {
 	p.IsmId = ism
 	require.NoError(t, k.SetParams(ctx, p))
 
-	got, err = k.ReceiverIsmId(ctx, ours)
+	got, err := k.ReceiverIsmId(ctx, ours)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, ism, got[:])
 
 	_, err = k.ReceiverIsmId(ctx, impostorAddr())
 	require.ErrorIs(t, err, types.ErrUnknownRecipient)
+}
+
+// TestUpdateParams_CannotClearTheIsm — MsgUpdateParams replaces the whole
+// struct, so a proposal that simply omits ism_id would clear it. Changing the
+// pin is allowed; dropping it is not.
+func TestUpdateParams_CannotClearTheIsm(t *testing.T) {
+	k, ctx, _, _ := setup(t, atosFor(1), atosFor(1))
+	ms := keeper.NewMsgServerImpl(k)
+
+	p := k.GetParams(ctx)
+	require.Len(t, p.IsmId, types.HexAddressLen, "fixture must start with a pin")
+
+	cleared := p
+	cleared.IsmId = nil
+	_, err := ms.UpdateParams(ctx, &types.MsgUpdateParams{
+		Authority: k.GetAuthority(), Params: cleared,
+	})
+	require.ErrorContains(t, err, "cannot clear a configured ism_id")
+
+	// Replacing it with a different pin stays allowed.
+	replaced := p
+	other := make([]byte, types.HexAddressLen)
+	copy(other, []byte("a-different-multisig-ism-------"))
+	replaced.IsmId = other
+	_, err = ms.UpdateParams(ctx, &types.MsgUpdateParams{
+		Authority: k.GetAuthority(), Params: replaced,
+	})
+	require.NoError(t, err)
+	require.Equal(t, other, k.GetParams(ctx).IsmId)
+}
+
+// TestReceiverIsmId_UnsetIsAnExplicitError pins the two things an unset pin
+// must NOT do. Returning (nil, nil) panics upstream, which dereferences the
+// pointer without checking (hyperlane-cosmos v1.1.0, x/core/keeper/keeper.go:99).
+// Returning ErrNoReceiverISM makes upstream fall back to the DELIVERING
+// mailbox's default ISM -- and after 2026-10-26 we know the attacker owns 99
+// mailboxes on this chain, so that would hand verification to them.
+func TestReceiverIsmId_UnsetIsAnExplicitError(t *testing.T) {
+	k, ctx, _, _ := setup(t, atosFor(1), atosFor(1))
+	var ours util.HexAddress
+	copy(ours[:], k.GetReceiptState(ctx).AppId)
+
+	p := k.GetParams(ctx)
+	p.Enabled = false // Validate now requires a pin while enabled
+	p.IsmId = nil
+	require.NoError(t, k.SetParams(ctx, p))
+
+	require.NotPanics(t, func() {
+		got, err := k.ReceiverIsmId(ctx, ours)
+		require.ErrorIs(t, err, types.ErrIsmNotConfigured)
+		require.Nil(t, got)
+	})
 }
 
 // ---------- params ----------
@@ -531,6 +588,8 @@ func TestParams_EnablingRequiresAVault(t *testing.T) {
 
 	v := vaultAddr()
 	p.TierReleaseVault = v[:]
+	ism := configuredIsm()
+	p.IsmId = ism[:]
 	require.NoError(t, p.Validate())
 }
 

@@ -204,6 +204,15 @@ func (p Params) Validate() error {
 	if p.Enabled && len(p.TierReleaseVault) != HexAddressLen {
 		return fmt.Errorf("tier_release_vault must be set before enabling the adapter")
 	}
+	// The ISM pin is what authenticates an inbound message, and DefaultParams
+	// leaves it nil. MsgUpdateParams replaces the whole struct, so a proposal
+	// that merely omits the field clears it -- and an unset pin leaves the
+	// inbound channel either erroring on every message or, with the wrong fix,
+	// verifying against a mailbox default we do not own. Required for both
+	// switches because both of them accept inbound messages.
+	if (p.Enabled || p.BridgeEnabled) && len(p.IsmId) != HexAddressLen {
+		return fmt.Errorf("ism_id must be set before enabling the adapter or the bridge")
+	}
 
 	for _, c := range []struct {
 		name string

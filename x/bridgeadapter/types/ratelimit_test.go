@@ -243,12 +243,39 @@ func TestParams_BridgeEnablingRequiresConfiguration(t *testing.T) {
 	require.NoError(t, p.Validate())
 
 	p.BridgeEnabled = true
+	p.IsmId = make([]byte, types.HexAddressLen)
 	require.ErrorContains(t, p.Validate(), "mailbox_id and remote_bridge_vault must be set",
 		"with no counterparty the inbound sender check has nothing to compare against")
 
 	p.MailboxId = make([]byte, types.HexAddressLen)
 	p.RemoteBridgeVault = make([]byte, types.HexAddressLen)
 	require.NoError(t, p.Validate())
+}
+
+// TestParams_EnablingRequiresAnIsm — the pin is the only thing authenticating
+// an inbound message, and DefaultParams leaves it nil, so a proposal that just
+// omits the field would otherwise enable an unauthenticated channel.
+func TestParams_EnablingRequiresAnIsm(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*types.Params)
+	}{
+		{"adapter", func(p *types.Params) { p.Enabled = true }},
+		{"bridge", func(p *types.Params) { p.BridgeEnabled = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := types.DefaultParams()
+			p.TierReleaseVault = make([]byte, types.HexAddressLen)
+			p.MailboxId = make([]byte, types.HexAddressLen)
+			p.RemoteBridgeVault = make([]byte, types.HexAddressLen)
+			tc.set(&p)
+
+			require.ErrorContains(t, p.Validate(), "ism_id must be set")
+
+			p.IsmId = make([]byte, types.HexAddressLen)
+			require.NoError(t, p.Validate())
+		})
+	}
 }
 
 // TestParams_FullSmallReserveIsRejected — a 100% reserve leaves large transfers

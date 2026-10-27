@@ -32,4 +32,10 @@ var (
 	// genuine ISM-verified message can be replayed once per mailbox an
 	// attacker cares to create.
 	ErrWrongMailbox = errorsmod.Register(ModuleName, 22, "message did not arrive through the configured mailbox")
+
+	// ErrIsmNotConfigured is returned by ReceiverIsmId when params.IsmId is
+	// unset. It must be neither nil (upstream dereferences the pointer and
+	// panics) nor ErrNoReceiverISM (upstream then falls back to the delivering
+	// mailbox's default ISM, which on this chain may belong to an attacker).
+	ErrIsmNotConfigured = errorsmod.Register(ModuleName, 23, "interchain security module is not configured")
 )
