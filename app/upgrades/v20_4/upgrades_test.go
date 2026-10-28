@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"cosmossdk.io/math"
+	storetypes "cosmossdk.io/store/types"
+	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
@@ -262,8 +264,14 @@ func TestClawback_ReportsAShortfallRatherThanOverreaching(t *testing.T) {
 		vals: map[string]stakingtypes.Validator{v1: oneToOneValidator(v1, atos(1_000_000))},
 	}
 
-	err := clawback(testCtx(), newFakeBank(), sk, &fakeLogger{})
-	require.ErrorContains(t, err, "still outstanding")
+	log := &fakeLogger{}
+	err := clawback(testCtx(), newFakeBank(), sk, log)
+
+	// Reported through the log, not the return value: isolate discards the
+	// work of any step that returns an error, so a shortfall returned as an
+	// error would throw away the part that was recovered.
+	require.NoError(t, err)
+	require.NotEmpty(t, log.errs, "the shortfall must be logged loudly")
 	require.Equal(t, atos(1_000_000).String(), sk.unbonded[v1].String(),
 		"what was reachable must still be recovered")
 }
@@ -464,10 +472,11 @@ func TestClawbackUnbonding_SkipsEntriesHeldByAnotherModule(t *testing.T) {
 		}},
 	}
 
-	err := clawback(testCtx(), bk, sk, &fakeLogger{})
+	log := &fakeLogger{}
+	err := clawback(testCtx(), bk, sk, log)
 
-	require.Error(t, err, "nothing was reachable, so the handler must report a shortfall")
-	require.ErrorContains(t, err, "still outstanding")
+	require.NoError(t, err)
+	require.NotEmpty(t, log.errs, "nothing was reachable, so the shortfall must be logged")
 	require.Empty(t, sk.ubdSet, "a held entry must not be rewritten")
 	require.Empty(t, sk.ubdGone)
 	require.True(t, bk.moduleTo[tokenomicstypes.MigrationPoolName].IsZero())
@@ -601,4 +610,104 @@ func TestDropICS20Precompile_SurvivesAnUnwiredKeeper(t *testing.T) {
 	log := &fakeLogger{}
 	require.NotPanics(t, func() { dropICS20Precompile(sdk.Context{}, nil, log) })
 	require.NotEmpty(t, log.errs)
+}
+
+// ===== isolate =====
+
+// storeCtx builds a context with a real multistore, which isolate needs:
+// CacheContext has nothing to branch from otherwise.
+func storeCtx(t *testing.T) (sdk.Context, *storetypes.KVStoreKey) {
+	t.Helper()
+	key := storetypes.NewKVStoreKey("isolate_test")
+	return testutil.DefaultContext(key, storetypes.NewTransientStoreKey("t_isolate")), key
+}
+
+// The point of the whole function: a panic deep in staking or distribution
+// must not become every node crashing at the same height.
+func TestIsolate_APanicDoesNotReachTheCaller(t *testing.T) {
+	ctx, _ := storeCtx(t)
+	log := &fakeLogger{}
+
+	var err error
+	require.NotPanics(t, func() {
+		err = isolate(ctx, "boom", log, func(sdk.Context) error {
+			panic("staking did not like that")
+		})
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "boom panicked")
+	require.Contains(t, err.Error(), "staking did not like that")
+	require.NotEmpty(t, log.errs)
+}
+
+// A panic must leave no state behind, not even what ran before it.
+func TestIsolate_APanicCommitsNothing(t *testing.T) {
+	ctx, key := storeCtx(t)
+
+	_ = isolate(ctx, "half a write", &fakeLogger{}, func(c sdk.Context) error {
+		c.KVStore(key).Set([]byte("moved"), []byte("coins"))
+		panic("and then it broke")
+	})
+
+	require.Nil(t, ctx.KVStore(key).Get([]byte("moved")),
+		"a panicking step must not leave the part it finished")
+}
+
+// Same for an ordinary error: a clawback that drains two delegations and then
+// fails on the third must not leave the first two moved.
+func TestIsolate_AFailedStepCommitsNothing(t *testing.T) {
+	ctx, key := storeCtx(t)
+
+	err := isolate(ctx, "partial clawback", &fakeLogger{}, func(c sdk.Context) error {
+		c.KVStore(key).Set([]byte("delegation-1"), []byte("drained"))
+		c.KVStore(key).Set([]byte("delegation-2"), []byte("drained"))
+		return errors.New("validator 3 is not there")
+	})
+
+	require.Error(t, err)
+	require.Nil(t, ctx.KVStore(key).Get([]byte("delegation-1")))
+	require.Nil(t, ctx.KVStore(key).Get([]byte("delegation-2")))
+}
+
+func TestIsolate_SuccessIsCommitted(t *testing.T) {
+	ctx, key := storeCtx(t)
+
+	require.NoError(t, isolate(ctx, "clawback", &fakeLogger{}, func(c sdk.Context) error {
+		c.KVStore(key).Set([]byte("clawed"), []byte("44000000"))
+		return nil
+	}))
+
+	require.Equal(t, []byte("44000000"), ctx.KVStore(key).Get([]byte("clawed")))
+}
+
+// A shortfall must not be reported as an error. isolate discards everything a
+// step returns an error from, so doing that would throw the whole recovery
+// away to register a wei.
+//
+// Driven through isolate, because that interaction is the actual hazard: the
+// assertion is that the recovered coins are still there afterwards.
+func TestClawback_AOneWeiShortfallKeepsTheRecovery(t *testing.T) {
+	ctx, _ := storeCtx(t)
+	log := &fakeLogger{}
+
+	// One delegation, one wei short of what is wanted. Nothing else to take.
+	short := math.NewInt(ClawbackAtos).Mul(math.NewIntWithDecimal(1, 18)).SubRaw(1)
+	bank := newFakeBank()
+	bank.balances[ClawbackTarget] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, short))
+
+	err := isolate(ctx, "clawback", log, func(c sdk.Context) error {
+		return clawback(c, bank, &fakeStaking{}, log)
+	})
+
+	require.NoError(t, err, "a shortfall must not surface as an error")
+	require.NotEmpty(t, log.errs, "but it must be logged loudly")
+
+	var saw bool
+	for _, l := range log.lines {
+		if l == "clawed back liquid balance" {
+			saw = true
+		}
+	}
+	require.True(t, saw, "what was recovered must still have been taken")
 }
