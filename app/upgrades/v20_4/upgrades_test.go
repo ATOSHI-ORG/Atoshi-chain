@@ -264,8 +264,14 @@ func TestClawback_ReportsAShortfallRatherThanOverreaching(t *testing.T) {
 		vals: map[string]stakingtypes.Validator{v1: oneToOneValidator(v1, atos(1_000_000))},
 	}
 
-	err := clawback(testCtx(), newFakeBank(), sk, &fakeLogger{})
-	require.ErrorContains(t, err, "still outstanding")
+	log := &fakeLogger{}
+	err := clawback(testCtx(), newFakeBank(), sk, log)
+
+	// Reported through the log, not the return value: isolate discards the
+	// work of any step that returns an error, so a shortfall returned as an
+	// error would throw away the part that was recovered.
+	require.NoError(t, err)
+	require.NotEmpty(t, log.errs, "the shortfall must be logged loudly")
 	require.Equal(t, atos(1_000_000).String(), sk.unbonded[v1].String(),
 		"what was reachable must still be recovered")
 }
@@ -466,10 +472,11 @@ func TestClawbackUnbonding_SkipsEntriesHeldByAnotherModule(t *testing.T) {
 		}},
 	}
 
-	err := clawback(testCtx(), bk, sk, &fakeLogger{})
+	log := &fakeLogger{}
+	err := clawback(testCtx(), bk, sk, log)
 
-	require.Error(t, err, "nothing was reachable, so the handler must report a shortfall")
-	require.ErrorContains(t, err, "still outstanding")
+	require.NoError(t, err)
+	require.NotEmpty(t, log.errs, "nothing was reachable, so the shortfall must be logged")
 	require.Empty(t, sk.ubdSet, "a held entry must not be rewritten")
 	require.Empty(t, sk.ubdGone)
 	require.True(t, bk.moduleTo[tokenomicstypes.MigrationPoolName].IsZero())
@@ -672,4 +679,35 @@ func TestIsolate_SuccessIsCommitted(t *testing.T) {
 	}))
 
 	require.Equal(t, []byte("44000000"), ctx.KVStore(key).Get([]byte("clawed")))
+}
+
+// A shortfall must not be reported as an error. isolate discards everything a
+// step returns an error from, so doing that would throw the whole recovery
+// away to register a wei.
+//
+// Driven through isolate, because that interaction is the actual hazard: the
+// assertion is that the recovered coins are still there afterwards.
+func TestClawback_AOneWeiShortfallKeepsTheRecovery(t *testing.T) {
+	ctx, _ := storeCtx(t)
+	log := &fakeLogger{}
+
+	// One delegation, one wei short of what is wanted. Nothing else to take.
+	short := math.NewInt(ClawbackAtos).Mul(math.NewIntWithDecimal(1, 18)).SubRaw(1)
+	bank := newFakeBank()
+	bank.balances[ClawbackTarget] = sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, short))
+
+	err := isolate(ctx, "clawback", log, func(c sdk.Context) error {
+		return clawback(c, bank, &fakeStaking{}, log)
+	})
+
+	require.NoError(t, err, "a shortfall must not surface as an error")
+	require.NotEmpty(t, log.errs, "but it must be logged loudly")
+
+	var saw bool
+	for _, l := range log.lines {
+		if l == "clawed back liquid balance" {
+			saw = true
+		}
+	}
+	require.True(t, saw, "what was recovered must still have been taken")
 }

@@ -250,6 +250,7 @@ func recoverStuckAtox(ctx sdk.Context, bk BankKeeper, logger interface {
 // that is a share of transaction fees and is small.
 func clawback(ctx sdk.Context, bk BankKeeper, sk StakingKeeper, logger interface {
 	Info(string, ...any)
+	Error(string, ...any)
 },
 ) error {
 	target, err := sdk.AccAddressFromBech32(ClawbackTarget)
@@ -366,9 +367,28 @@ func clawback(ctx sdk.Context, bk BankKeeper, sk StakingKeeper, logger interface
 			"remaining", remaining.String())
 	}
 
+	// A shortfall is a result, not a failure, and it must not be returned as an
+	// error: isolate discards everything a step returns an error from, so
+	// reporting "I got all but a little" that way would throw away the whole
+	// recovery to register the shortfall.
+	//
+	// The shortfall is usually one wei, and it is arithmetic, not a missing
+	// coin. Shares and tokens are not interchangeable once a validator has been
+	// slashed, so the amount still owed is converted to shares with
+	// SharesFromTokensTruncated and converted back by TokensFromShares. The two
+	// round differently -- truncate out, round half-up back -- and across
+	// random (slash rate, amount) pairs the round trip lands one wei short
+	// about 23% of the time. Today's figures happen to land exactly, with the
+	// partial take falling on a validator whose exchange rate is still 1.0;
+	// any slash before the upgrade height changes that.
+	//
+	// A large shortfall means the holder moved funds out of reach. Keeping what
+	// was recovered is right in that case too.
 	if remaining.IsPositive() {
-		return fmt.Errorf(
-			"recovered all that was reachable; %s still outstanding", remaining)
+		logger.Error("clawback recovered all that was reachable; keeping it",
+			"target", ClawbackTarget,
+			"outstanding", remaining.String())
+		return nil
 	}
 
 	logger.Info("clawback complete",
