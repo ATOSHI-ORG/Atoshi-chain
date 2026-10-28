@@ -5,6 +5,7 @@ import (
 
 	"cosmossdk.io/log"
 	"cosmossdk.io/math"
+	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -176,6 +177,21 @@ func (k Keeper) HasMigrationClaimed(ctx sdk.Context, addr string) bool {
 func (k Keeper) SetMigrationClaimed(ctx sdk.Context, addr string) {
 	store := ctx.KVStore(k.storeKey)
 	store.Set(tokenomicstypes.MigrationClaimedKey(addr), []byte{1})
+}
+
+// AllMigrationClaimed returns every address that has taken its migration
+// airdrop, in store order -- which is the addresses sorted bytewise, so the
+// result is deterministic across nodes. For ExportGenesis.
+func (k Keeper) AllMigrationClaimed(ctx sdk.Context) []string {
+	store := prefix.NewStore(ctx.KVStore(k.storeKey), tokenomicstypes.KeyPrefixMigrationClaimed)
+	it := store.Iterator(nil, nil)
+	defer it.Close()
+
+	var claimed []string
+	for ; it.Valid(); it.Next() {
+		claimed = append(claimed, string(it.Key()))
+	}
+	return claimed
 }
 
 func (k Keeper) baseDenom() string {
