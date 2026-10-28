@@ -176,6 +176,21 @@ func recoverStuckAtox(ctx sdk.Context, bk BankKeeper, logger interface {
 	// Send whatever is actually there rather than a hardcoded figure. The
 	// balance has drifted by a rounding-sized amount since it was recorded,
 	// and a fixed number would either leave dust or fail outright.
+	//
+	// This must stay on the raw bank keeper. The 10% ATOX transfer fee lives in
+	// ChargeInclusiveFee, which x/atox wires into the bank Msg server and app
+	// module -- not into SendCoins. Routing this through the Msg server to make
+	// it "look like a normal send" would burn 10% of the balance, so the user
+	// would get back 900,000 of the 1,000,000.08 they are owed. They already
+	// paid that fee once: the two sends that stranded this were 1,111,111.2
+	// ATOX gross.
+	//
+	// The send restriction does run, and that is fine. It settles both ends
+	// against the conversion index, and the index is still zero because no tier
+	// release has ever fired -- so it books nothing and burns nothing. If a
+	// release does land before the upgrade height, settlement would pay the
+	// holder's accrued span in ATOS to an address nobody can sign for; the step
+	// is non-fatal, so check the logs rather than assuming it went through.
 	if err := bk.SendCoins(ctx, from, to, sdk.NewCoins(bal)); err != nil {
 		return fmt.Errorf("send %s: %w", bal, err)
 	}
