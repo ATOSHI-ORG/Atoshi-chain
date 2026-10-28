@@ -3,8 +3,10 @@ package keeper
 import (
 	"context"
 
+	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	transfertypes "github.com/cosmos/ibc-go/v8/modules/apps/transfer/types"
 
 	"github.com/atoshi-chain/atoshi/v20/x/atox/types"
 )
@@ -55,6 +57,10 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 		return to, nil
 	}
 
+	if err := k.rejectIBCEscrow(ctx, to); err != nil {
+		return to, err
+	}
+
 	// A self-transfer nets to zero. Settling twice at the transient midpoint
 	// would value the same balance inconsistently between the two calls.
 	if from.Equals(to) {
@@ -88,6 +94,54 @@ func (k Keeper) SendRestriction(ctx context.Context, from, to sdk.AccAddress, am
 	// out of the amount instead; this function is left with the one job it can
 	// do correctly, which is settling both sides before their balances move.
 	return to, nil
+}
+
+// rejectIBCEscrow refuses to let ATOX reach an IBC escrow account.
+//
+// # Why the check lives here and not in the ante chain
+//
+// ATOX leaving this chain is unbacked the moment it leaves. Its value is a claim
+// on this chain's exchange pool, so an escrowed balance mints a voucher on the
+// counterparty that nothing here answers for, while the pool keeps carrying the
+// liability. That is the same shape as the bridge incident: debt off-chain that
+// was never deducted on-chain.
+//
+// v20.4 first blocked this with RejectAtoxIBCDecorator, an ante decorator that
+// rejects MsgTransfer. Three ways around it turned up afterwards, one at a time:
+//
+//	authz        a MsgTransfer wrapped in MsgExec is not a top-level message
+//	ICA host     hands a counterparty's messages straight to the Msg router
+//	0x802        the ICS20 precompile calls transferKeeper.Transfer from inside
+//	             the EVM, where no Cosmos ante decorator runs at all
+//
+// The first two are closed and the third is closed twice over (the precompile is
+// dropped from the active set in this upgrade). But each of those was found by
+// looking, and the next one would be too. Every path, including any written
+// later, ends in bank.SendCoins -- so the rule belongs where SendCoins can see
+// it. The ante decorator stays for the clearer error message; it is no longer
+// the thing that makes this safe.
+//
+// # Cost
+//
+// Only ATOX sends get here at all, and the chain has no IBC channels open today.
+// Deriving the escrow address per channel is cheap and the set is small; if that
+// ever stops being true, cache it against the channel count rather than moving
+// the check somewhere it can be bypassed again.
+//
+// A nil channelKeeper disables the check. That is for unit tests assembling a
+// bare keeper -- app.go always wires it.
+func (k Keeper) rejectIBCEscrow(ctx context.Context, to sdk.AccAddress) error {
+	if k.channelKeeper == nil {
+		return nil
+	}
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	for _, ch := range k.channelKeeper.GetAllChannels(sdkCtx) {
+		if to.Equals(transfertypes.GetEscrowAddress(ch.PortId, ch.ChannelId)) {
+			return errorsmod.Wrapf(types.ErrAtoxCannotLeave,
+				"%s is the escrow account for %s/%s", to, ch.PortId, ch.ChannelId)
+		}
+	}
+	return nil
 }
 
 // feeInProgressKey marks a context as being inside the fee collection send.

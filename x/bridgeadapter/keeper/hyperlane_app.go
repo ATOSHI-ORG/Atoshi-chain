@@ -32,10 +32,26 @@ func (k Keeper) Exists(ctx context.Context, recipient util.HexAddress) (bool, er
 // ReceiverIsmId pins the interchain security module used to verify messages
 // addressed to this app.
 //
-// Returning nil falls back to the mailbox default ISM. Pinning it in params
-// instead means a later change to the mailbox default — a different proposal,
-// possibly for an unrelated route — cannot silently weaken the verification
-// standing between Ethereum and a tier release.
+// Pinning it in params means a later change to the mailbox default — a
+// different proposal, possibly for an unrelated route — cannot silently weaken
+// the verification standing between Ethereum and a tier release.
+//
+// An unset pin is a hard error, and the two obvious alternatives are both
+// worse:
+//
+//   - Returning (nil, nil) panics. Upstream dereferences the pointer without a
+//     nil check (hyperlane-cosmos v1.1.0, x/core/keeper/keeper.go:99), so an
+//     unset pin takes the whole inbound channel down. Params.Validate does not
+//     currently force IsmId when Enabled, and DefaultParams leaves it nil, so
+//     this is a single mistyped proposal away.
+//   - Returning ErrNoReceiverISM falls back to mailbox.DefaultIsm
+//     (logic_message.go:65-67). After 2026-10-26 we know who owns the other
+//     mailboxes on this chain: the attacker created 99 of them. Falling back
+//     would hand verification to an ISM they control, turning a replay into
+//     arbitrary forgery.
+//
+// So: an explicit error, distinct from both.
+//
 // The name is dictated by Hyperlane's app-router interface, so it keeps the
 // Id spelling revive would rather have as ID.
 func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*util.HexAddress, error) { //nolint:revive,stylecheck // interface method name fixed by Hyperlane
@@ -50,7 +66,7 @@ func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*
 
 	ismID := k.GetParams(sdkCtx).IsmId
 	if len(ismID) != types.HexAddressLen {
-		return nil, nil
+		return nil, types.ErrIsmNotConfigured
 	}
 	var out util.HexAddress
 	copy(out[:], ismID)
@@ -68,9 +84,30 @@ func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*
 //
 // Three checks, and each closes a hole the others do not:
 //
-//  1. The mailbox is the only caller. Guaranteed by construction: nothing else
-//     holds a reference to this method, and x/core routes only ISM-verified
-//     messages.
+//  1. mailboxId == params.MailboxId. The message must have arrived through the
+//     mailbox this module was configured with.
+//
+//     An earlier version of this function discarded the mailbox id and claimed
+//     here that "the mailbox is the only caller, guaranteed by construction".
+//     That was wrong, and it cost 196,284,881 ATOS on 2026-10-26.
+//     MsgCreateMailbox is permissionless — no owner check, no deposit, no rate
+//     limit — and x/core keys its replay protection on (mailboxId, messageId)
+//     rather than on messageId alone (hyperlane-cosmos v1.1.0,
+//     x/core/keeper/logic_message.go:50). An attacker created 99 mailboxes,
+//     pointed each at our own pinned ISM, and resubmitted two genuine,
+//     correctly signed messages through them: 493 extra deliveries, each with
+//     a replay-protection key the chain had never seen, each paid out again.
+//     No signature was forged and no ISM was bypassed — every delivery
+//     verified honestly. The pair key is what made the same message new.
+//
+//     The ISM cannot close this. A Hyperlane message has seven fields
+//     (util/hyperlane_message.go:24) and the mailbox is not among them, so the
+//     id validators sign says nothing about which mailbox carried it. Binding
+//     a message to a mailbox is the application's job; upstream does exactly
+//     this in its own warp module (x/warp/keeper/keeper.go:117).
+//
+//     The check sits before the recipient routing switch so it covers both the
+//     asset bridge and the tier release.
 //  2. origin == params.EthereumDomain. Hyperlane connects dozens of chains, and
 //     without this a contract on any cheap L2 could address a message here and
 //     claim a release.
@@ -98,8 +135,15 @@ func (k Keeper) ReceiverIsmId(ctx context.Context, recipient util.HexAddress) (*
 // bridge vault. That ordering is the whole point of the receipt: releasing first
 // and confirming later would leave holders able to convert ATOX into ATOS that
 // nothing backs.
-func (k Keeper) Handle(ctx context.Context, _ util.HexAddress, message util.HyperlaneMessage) error {
+func (k Keeper) Handle(ctx context.Context, mailboxId util.HexAddress, message util.HyperlaneMessage) error { //nolint:revive,stylecheck // parameter name fixed by Hyperlane's interface
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
+
+	// Check 1. See the Provenance section above for why this is not redundant.
+	// Keep it first: it is the cheapest check and the one a replay fails.
+	if cfg := k.GetParams(sdkCtx).MailboxId; len(cfg) != types.HexAddressLen ||
+		!bytes.Equal(cfg, mailboxId[:]) {
+		return fmt.Errorf("%w: got %s", types.ErrWrongMailbox, mailboxId.String())
+	}
 
 	// Route by which recipient the message was addressed to. Keeping the two
 	// channels on separate addresses means a message for one is never parsed as
@@ -161,8 +205,14 @@ func (k Keeper) Handle(ctx context.Context, _ util.HexAddress, message util.Hype
 		return k.SetReceiptState(sdkCtx, state)
 	}
 
-	atosToPool := types.Erc20ToAtos(deltaBridge, params.AtosPerErc20)
-	atosToProject := types.Erc20ToAtos(deltaProject, params.AtosPerErc20)
+	atosToPool, err := types.Erc20ToAtos(deltaBridge, params.AtosPerErc20)
+	if err != nil {
+		return err
+	}
+	atosToProject, err := types.Erc20ToAtos(deltaProject, params.AtosPerErc20)
+	if err != nil {
+		return err
+	}
 
 	if err := k.assertWithinAuthorized(sdkCtx, targetBridge, targetProject, params.AtosPerErc20); err != nil {
 		return err

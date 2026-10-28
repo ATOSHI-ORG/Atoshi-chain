@@ -25,6 +25,10 @@ service Msg {
   // UpdateParams sets the module parameters. Governance only -- it carries the
   // bridge kill switch, the rate limits and the Ethereum-side addresses.
   rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+
+  // EmergencyHalt closes the bridge immediately, from a guardian key rather
+  // than a governance vote. It can only close; reopening stays with governance.
+  rpc EmergencyHalt(MsgEmergencyHalt) returns (MsgEmergencyHaltResponse);
 }
 
 message MsgUpdateParams {
@@ -39,6 +43,35 @@ message MsgUpdateParams {
 }
 
 message MsgUpdateParamsResponse {}
+
+// MsgEmergencyHalt switches enabled and bridge_enabled off in one transaction,
+// signed by an address listed in params.guardians.
+//
+// It exists because governance is too slow for this. On 2026-10-26 the
+// Ethereum side was paused within minutes through EmergencyGuard while this
+// side waited three hours for a proposal to pass, and the difference shows in
+// the ledger: every ERC20 the attacker took left the vault before that pause,
+// and nothing left after it.
+//
+// Deliberately one-way. There is no MsgEmergencyResume: turning the bridge
+// back on goes through UpdateParams, which is governance. A guardian key that
+// leaks can therefore cost availability, which a proposal can restore, but not
+// funds, which it cannot. That trade is the reason this message is safe to
+// hand to a hot key.
+//
+// Halting an already-halted bridge succeeds. An operator who is unsure should
+// send it, not check first.
+message MsgEmergencyHalt {
+  option (cosmos.msg.v1.signer) = "guardian";
+
+  string guardian = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // reason is recorded in the event so the incident log says why, in the
+  // operator's words, without needing a second system.
+  string reason = 2;
+}
+
+message MsgEmergencyHaltResponse {}
 
 // MsgBridgeOut locks ATOS and dispatches a Hyperlane message so the matching
 // ERC20 is released on Ethereum.

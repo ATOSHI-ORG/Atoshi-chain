@@ -64,12 +64,20 @@ func (k Keeper) setRateLimitState(ctx sdk.Context, s types.RateLimitState) error
 	return nil
 }
 
-// GetAddressUsage returns one address's usage today, zero if the record belongs
-// to an earlier day.
+// GetAddressUsage returns one address's OUTBOUND usage today, zero if the
+// record belongs to an earlier day.
 func (k Keeper) GetAddressUsage(ctx sdk.Context, addr string) math.Int {
-	today := types.DayOf(ctx.BlockTime().Unix())
+	return k.usageAt(ctx, types.AddressUsageKey(addr))
+}
 
-	bz := ctx.KVStore(k.storeKey).Get(types.AddressUsageKey(addr))
+// GetInboundAddressUsage returns one recipient's INBOUND usage today. Tracked
+// separately from outbound: the two directions have independent budgets.
+func (k Keeper) GetInboundAddressUsage(ctx sdk.Context, addr string) math.Int {
+	return k.usageAt(ctx, types.InboundAddressUsageKey(addr))
+}
+
+func (k Keeper) usageAt(ctx sdk.Context, key []byte) math.Int {
+	bz := ctx.KVStore(k.storeKey).Get(key)
 	if bz == nil {
 		return math.ZeroInt()
 	}
@@ -77,19 +85,29 @@ func (k Keeper) GetAddressUsage(ctx sdk.Context, addr string) math.Int {
 	if err := k.cdc.Unmarshal(bz, &u); err != nil {
 		panic(fmt.Errorf("failed to unmarshal bridge address usage: %w", err))
 	}
-	if u.Day != today || u.Used.IsNil() {
+	// A record from an earlier day reads as zero, which is how the counters
+	// roll over without an EndBlocker sweep.
+	if u.Day != types.DayOf(ctx.BlockTime().Unix()) || u.Used.IsNil() {
 		return math.ZeroInt()
 	}
 	return u.Used
 }
 
 func (k Keeper) setAddressUsage(ctx sdk.Context, addr string, used math.Int) error {
+	return k.setUsageAt(ctx, types.AddressUsageKey(addr), used)
+}
+
+func (k Keeper) setInboundAddressUsage(ctx sdk.Context, addr string, used math.Int) error {
+	return k.setUsageAt(ctx, types.InboundAddressUsageKey(addr), used)
+}
+
+func (k Keeper) setUsageAt(ctx sdk.Context, key []byte, used math.Int) error {
 	u := types.AddressUsage{Day: types.DayOf(ctx.BlockTime().Unix()), Used: used}
 	bz, err := k.cdc.Marshal(&u)
 	if err != nil {
 		return err
 	}
-	ctx.KVStore(k.storeKey).Set(types.AddressUsageKey(addr), bz)
+	ctx.KVStore(k.storeKey).Set(key, bz)
 	return nil
 }
 
@@ -260,7 +278,10 @@ func (k Keeper) handleAssetTransfer(ctx sdk.Context, message util.HyperlaneMessa
 		return err
 	}
 
-	atosAmount := types.Erc20ToAtos(erc20Amount, params.AtosPerErc20)
+	atosAmount, err := types.Erc20ToAtos(erc20Amount, params.AtosPerErc20)
+	if err != nil {
+		return err
+	}
 
 	available := k.tokenomicsKeeper.MigrationPoolBalance(ctx)
 	if available.LT(atosAmount) {
@@ -277,12 +298,14 @@ func (k Keeper) handleAssetTransfer(ctx sdk.Context, message util.HyperlaneMessa
 	// widening backoff and dry-runs first, so the wait costs no gas and a
 	// same-day retry lands once the counter rolls over at UTC midnight.
 	rl := k.GetRateLimitState(ctx)
-	if err := types.CheckInbound(k.Limits(ctx), atosAmount, rl.UsedInbound); err != nil {
+	recipientUsed := k.GetInboundAddressUsage(ctx, recipient.String())
+	if err := types.CheckInbound(k.Limits(ctx), atosAmount, rl.UsedInbound, recipientUsed); err != nil {
 		ctx.EventManager().EmitEvent(sdk.NewEvent(
 			types.EventTypeInboundCapped,
 			sdk.NewAttribute(types.AttributeKeyAmount, atosAmount.String()),
 			sdk.NewAttribute(types.AttributeKeyUsedInbound, rl.UsedInbound.String()),
 			sdk.NewAttribute(types.AttributeKeyInboundCap, k.Limits(ctx).Inbound.String()),
+			sdk.NewAttribute(types.AttributeKeyRecipient, recipient.String()),
 			sdk.NewAttribute(types.AttributeKeyMessageID, message.Id().String()),
 		))
 		return err
@@ -304,6 +327,11 @@ func (k Keeper) handleAssetTransfer(ctx sdk.Context, message util.HyperlaneMessa
 	// Re-read rather than reusing `rl`: GetRateLimitState rolls the day over
 	// lazily, and the coin movement above cannot change it, but re-reading keeps
 	// this correct if anything is ever inserted between the two.
+	if err := k.setInboundAddressUsage(ctx, recipient.String(),
+		recipientUsed.Add(atosAmount)); err != nil {
+		return err
+	}
+
 	rl = k.GetRateLimitState(ctx)
 	rl.UsedInbound = rl.UsedInbound.Add(atosAmount)
 	if err := k.setRateLimitState(ctx, rl); err != nil {

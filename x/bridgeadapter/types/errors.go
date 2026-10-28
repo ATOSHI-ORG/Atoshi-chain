@@ -25,4 +25,26 @@ var (
 	ErrIndivisibleAmount = errorsmod.Register(ModuleName, 18, "amount is not a multiple of the ATOS/ERC20 peg")
 	ErrPoolInsufficient  = errorsmod.Register(ModuleName, 19, "migration pool cannot cover the inbound transfer")
 	ErrNotConfigured     = errorsmod.Register(ModuleName, 20, "bridge is not fully configured")
+
+	// ErrWrongMailbox rejects a message that did not arrive through the mailbox
+	// named in params. Creating a mailbox is permissionless and x/core
+	// de-duplicates on (mailboxId, messageId), so without this check one
+	// genuine ISM-verified message can be replayed once per mailbox an
+	// attacker cares to create.
+	ErrWrongMailbox = errorsmod.Register(ModuleName, 22, "message did not arrive through the configured mailbox")
+
+	// ErrIsmNotConfigured is returned by ReceiverIsmId when params.IsmId is
+	// unset. It must be neither nil (upstream dereferences the pointer and
+	// panics) nor ErrNoReceiverISM (upstream then falls back to the delivering
+	// mailbox's default ISM, which on this chain may belong to an attacker).
+	ErrIsmNotConfigured = errorsmod.Register(ModuleName, 23, "interchain security module is not configured")
+
+	// ErrAboveMaximum rejects a single transfer over the per-transfer ceiling,
+	// in either direction. Distinct from the daily caps: retrying tomorrow does
+	// not help, splitting the transfer does.
+	ErrAboveMaximum = errorsmod.Register(ModuleName, 24, "amount above the per-transfer maximum")
+
+	// ErrNotGuardian rejects MsgEmergencyHalt from an address that is not in
+	// params.guardians.
+	ErrNotGuardian = errorsmod.Register(ModuleName, 25, "signer is not a configured guardian")
 )

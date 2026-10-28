@@ -31,12 +31,33 @@ type Limits struct {
 	LargeBudget math.Int
 	// PerAddress is one address's share of Global.
 	PerAddress math.Int
-	// SmallThreshold is the amount at or below which a transfer counts as small.
+	// SmallThreshold is the amount at or below which an OUTBOUND transfer
+	// counts as small, for the small-transfer reserve.
 	SmallThreshold math.Int
-	// MinTransfer is the floor on a single transfer.
+	// MinTransfer is the floor on a single outbound transfer.
 	MinTransfer math.Int
+	// MaxTransferOut is the ceiling on a single outbound transfer. Zero means
+	// no ceiling.
+	MaxTransferOut math.Int
+	// MaxTransferIn is the ceiling on a single inbound transfer. Zero means no
+	// ceiling.
+	MaxTransferIn math.Int
+	// InboundPerAddress is one recipient's share of Inbound. Zero means no
+	// per-recipient limit.
+	InboundPerAddress math.Int
+	// InboundSmallThreshold is the amount at or below which an INBOUND
+	// transfer counts as small during crisis mode. Separate from
+	// SmallThreshold because inbound amounts run an order of magnitude larger.
+	InboundSmallThreshold math.Int
 	// CrisisMode is true when the pool has fallen below the crisis floor, in
-	// which case only small transfers are allowed at all.
+	// which case only small INBOUND transfers are accepted.
+	//
+	// It gates inbound, not outbound, because inbound is the direction that
+	// drains the pool: a bridge-in pays ATOS out of it, a bridge-out locks ATOS
+	// into it. Throttling outbound here -- which is what this used to do --
+	// blocked the one direction that refills the pool while leaving the
+	// draining direction wide open, and stranded holders trying to exit at
+	// exactly the moment they most wanted to.
 	CrisisMode bool
 	// Inbound is the day's ceiling on ATOS paid out to bridge-ins. Resolved the
 	// same way as Global -- the smaller of the fixed parameter and a fraction of
@@ -60,11 +81,23 @@ type Limits struct {
 // allowance shrinks with it, instead of holding a stale figure until someone
 // files a proposal.
 func ResolveLimits(p Params, poolBalance, poolTotal math.Int) Limits {
+	// A configured share never rounds down to zero.
+	//
+	// Several checks read a resolved zero as "not configured, no limit", while
+	// a zero Global means "fully throttled". So when a positive bps multiplies
+	// out to less than one unit -- base is under 10000 wei, or the pool is
+	// nearly empty -- truncation would flip that limit from binding to absent
+	// without anyone changing it. One unit is as close to "allow nothing" as
+	// this can get while staying on the enforcing side of that distinction.
 	bps := func(v math.Int, b uint32) math.Int {
 		if v.IsNil() || !v.IsPositive() || b == 0 {
 			return math.ZeroInt()
 		}
-		return v.MulRaw(int64(b)).QuoRaw(BpsDenominator)
+		out := v.MulRaw(int64(b)).QuoRaw(BpsDenominator)
+		if !out.IsPositive() {
+			return math.OneInt()
+		}
+		return out
 	}
 
 	global := p.GlobalDailyCap
@@ -107,21 +140,47 @@ func ResolveLimits(p Params, poolBalance, poolTotal math.Int) Limits {
 		}
 	}
 
+	nonNegative := func(v math.Int) math.Int {
+		if v.IsNil() || v.IsNegative() {
+			return math.ZeroInt()
+		}
+		return v
+	}
+
 	return Limits{
-		Disabled:       p.RateLimitsDisabled,
-		Inbound:        inbound,
-		Global:         global,
-		LargeBudget:    largeBudget,
-		PerAddress:     bps(global, p.PerAddressDailyBps),
-		SmallThreshold: smallThreshold,
-		MinTransfer:    minTransfer,
-		CrisisMode:     crisis,
+		Disabled:              p.RateLimitsDisabled,
+		Inbound:               inbound,
+		Global:                global,
+		LargeBudget:           largeBudget,
+		PerAddress:            bps(global, p.PerAddressDailyBps),
+		SmallThreshold:        smallThreshold,
+		MinTransfer:           minTransfer,
+		MaxTransferOut:        nonNegative(p.MaxTransferOut),
+		MaxTransferIn:         nonNegative(p.MaxTransferIn),
+		InboundPerAddress:     bps(inbound, p.InboundPerAddressDailyBps),
+		InboundSmallThreshold: nonNegative(p.InboundSmallThreshold),
+		CrisisMode:            crisis,
 	}
 }
 
-// IsSmall reports whether an amount counts as a small transfer.
+// set reports whether a limit field is configured.
+//
+// math.Int's zero value wraps a nil big.Int and IsPositive panics on it, while
+// a Limits assembled as a struct literal -- which every test does, and which
+// nothing stops production code from doing -- leaves unmentioned fields exactly
+// that way. Checking IsNil first means an omitted field reads as "no limit"
+// rather than taking down the block that happened to touch it.
+func set(v math.Int) bool { return !v.IsNil() && v.IsPositive() }
+
+// IsSmall reports whether an amount counts as a small OUTBOUND transfer.
 func (l Limits) IsSmall(amount math.Int) bool {
-	return !l.SmallThreshold.IsPositive() || amount.LTE(l.SmallThreshold)
+	return !set(l.SmallThreshold) || amount.LTE(l.SmallThreshold)
+}
+
+// IsSmallInbound reports whether an amount counts as small on the inbound side
+// during crisis mode.
+func (l Limits) IsSmallInbound(amount math.Int) bool {
+	return !set(l.InboundSmallThreshold) || amount.LTE(l.InboundSmallThreshold)
 }
 
 // CheckOutbound applies all five layers to one proposed transfer.
@@ -133,13 +192,14 @@ func (l Limits) IsSmall(amount math.Int) bool {
 // The layers, and what each one is for:
 //
 //  1. Per-transfer floor — dust costs a cross-chain message like anything else.
-//  2. Crisis mode — below the pool floor, remaining liquidity serves many small
-//     holders rather than one large exit.
+//  2. Per-transfer ceiling — no single exit drains the vault in one step.
 //  3. Global daily cap — bounds a single day's total drain.
 //  4. Large-transfer budget — the global cap minus the small reserve. This is
 //     what keeps a few whales from consuming the day's allowance in the first
 //     minutes and locking ordinary holders out exactly when they most want out.
 //  5. Per-address daily cap — one actor cannot take the whole day alone.
+//
+// Crisis mode is NOT here any more; it gates inbound. See Limits.CrisisMode.
 func CheckOutbound(
 	l Limits,
 	amount math.Int,
@@ -155,19 +215,18 @@ func CheckOutbound(
 		return nil
 	}
 
-	if l.MinTransfer.IsPositive() && amount.LT(l.MinTransfer) {
+	if set(l.MinTransfer) && amount.LT(l.MinTransfer) {
 		return fmt.Errorf("%w: %s is below the %s minimum", ErrBelowMinimum, amount, l.MinTransfer)
+	}
+
+	if set(l.MaxTransferOut) && amount.GT(l.MaxTransferOut) {
+		return fmt.Errorf("%w: %s exceeds the %s per-transfer ceiling",
+			ErrAboveMaximum, amount, l.MaxTransferOut)
 	}
 
 	small := l.IsSmall(amount)
 
-	if l.CrisisMode && !small {
-		return fmt.Errorf(
-			"%w: migration pool is below the crisis floor, only transfers up to %s are accepted",
-			ErrCrisisMode, l.SmallThreshold)
-	}
-
-	if !l.Global.IsPositive() {
+	if !set(l.Global) {
 		return fmt.Errorf("%w: outbound bridging is fully throttled", ErrDailyCapReached)
 	}
 	if globalUsed.Add(amount).GT(l.Global) {
@@ -180,7 +239,7 @@ func CheckOutbound(
 			ErrLargeQuotaReached, globalUsedLarge, l.LargeBudget, l.SmallThreshold)
 	}
 
-	if l.PerAddress.IsPositive() && addressUsed.Add(amount).GT(l.PerAddress) {
+	if set(l.PerAddress) && addressUsed.Add(amount).GT(l.PerAddress) {
 		return fmt.Errorf("%w: this address has used %s of its %s daily allowance",
 			ErrAddressCapReached, addressUsed, l.PerAddress)
 	}
@@ -188,33 +247,64 @@ func CheckOutbound(
 	return nil
 }
 
-// CheckInbound applies the one inbound layer to a proposed bridge-in payout.
+// CheckInbound applies the inbound layers to a proposed bridge-in payout.
 //
-// Only a global daily total, deliberately. The pairing that makes the outbound
-// per-address cap useful -- a fixed set of holders competing for one day's
-// allowance -- does not exist inbound: addresses are free, so an attacker simply
-// splits across new ones, while an honest large transfer gets stranded with its
-// ERC20 already locked on Ethereum.
+// The layers, in order:
 //
-// A zero or unset cap means inbound is unlimited, not blocked. Outbound treats a
-// zero Global as "fully throttled" because a chain with no outbound cap
-// configured should not be paying out; inbound has the opposite default because
-// the migration pool balance is already a hard ceiling, and failing closed here
-// would strand every bridge-in on a chain that simply had not set the parameter.
-func CheckInbound(l Limits, amount, usedInbound math.Int) error {
+//  1. Per-transfer ceiling — one oversized message cannot drain the pool in a
+//     single step.
+//  2. Crisis mode — below the pool floor, only small bridge-ins are paid, so
+//     the remaining liquidity serves many holders rather than one.
+//  3. Per-recipient daily cap — bounds what any one address can receive.
+//  4. Global daily cap — bounds the day's total payout.
+//
+// Layer 3 was argued against here for a long time, on the grounds that
+// addresses are free so a per-recipient cap stops nobody who is attacking.
+// 2026-10-26 refuted that. A replay cannot change the recipient: the recipient
+// is inside the signed message, so changing it changes the message id and
+// invalidates the signature. The attacker therefore had to funnel
+// 152,603,225.60 ATOS through a single address, and of the limits available
+// this is the only one that would have bitten.
+//
+// A zero or unset cap means that layer is off, not that inbound is blocked.
+// Outbound treats a zero Global as "fully throttled" because a chain with no
+// outbound cap configured should not be paying out; inbound defaults the other
+// way because the migration pool balance is already a hard ceiling, and
+// failing closed would strand every bridge-in on a chain that had simply not
+// set the parameter.
+func CheckInbound(l Limits, amount, usedInbound, recipientUsed math.Int) error {
 	if amount.IsNil() || !amount.IsPositive() {
 		return ErrInvalidAmount
 	}
 	if l.Disabled {
 		return nil
 	}
-	if l.Inbound.IsNil() || !l.Inbound.IsPositive() {
-		return nil
-	}
 	if usedInbound.IsNil() {
 		usedInbound = math.ZeroInt()
 	}
-	if usedInbound.Add(amount).GT(l.Inbound) {
+	if recipientUsed.IsNil() {
+		recipientUsed = math.ZeroInt()
+	}
+
+	if set(l.MaxTransferIn) && amount.GT(l.MaxTransferIn) {
+		return fmt.Errorf("%w: %s exceeds the %s per-transfer ceiling",
+			ErrAboveMaximum, amount, l.MaxTransferIn)
+	}
+
+	// Crisis mode gates this direction, not outbound: inbound is what drains
+	// the pool, outbound is what refills it.
+	if l.CrisisMode && !l.IsSmallInbound(amount) {
+		return fmt.Errorf(
+			"%w: migration pool is below the crisis floor, only inbound transfers up to %s are accepted",
+			ErrCrisisMode, l.InboundSmallThreshold)
+	}
+
+	if set(l.InboundPerAddress) && recipientUsed.Add(amount).GT(l.InboundPerAddress) {
+		return fmt.Errorf("%w: this recipient has received %s of its %s daily allowance",
+			ErrAddressCapReached, recipientUsed, l.InboundPerAddress)
+	}
+
+	if set(l.Inbound) && usedInbound.Add(amount).GT(l.Inbound) {
 		return fmt.Errorf("%w: %s of %s used today, %s more requested",
 			ErrInboundCapReached, usedInbound, l.Inbound, amount)
 	}

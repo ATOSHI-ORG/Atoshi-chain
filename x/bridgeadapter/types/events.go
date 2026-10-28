@@ -3,6 +3,10 @@ package types
 const (
 	EventTypeReceiptApplied = "bridge_receipt_applied"
 	EventTypeUpdateParams   = "bridge_adapter_update_params"
+	// EventTypeEmergencyHalt fires when a guardian closes the bridge without a
+	// governance vote. Alerting should treat it as page-worthy: by the time it
+	// is emitted somebody has already decided something is badly wrong.
+	EventTypeEmergencyHalt = "bridge_emergency_halt"
 	EventTypeBridgeOut      = "bridge_out"
 	EventTypeBridgeIn       = "bridge_in"
 	// EventTypeInboundCapped fires when the daily inbound circuit breaker
@@ -17,6 +21,8 @@ const (
 	AttributeKeyCumulativeBridge  = "cumulative_bridge_erc20"
 	AttributeKeyCumulativeProject = "cumulative_project_erc20"
 	AttributeKeySender            = "sender"
+	AttributeKeyGuardian          = "guardian"
+	AttributeKeyReason            = "reason"
 	AttributeKeyRecipient         = "recipient"
 	AttributeKeyAmount            = "amount"
 	AttributeKeyErc20Amount       = "erc20_amount"

@@ -355,6 +355,12 @@ func (k Keeper) AtoxSupplyCap(ctx sdk.Context) math.Int {
 	return k.GetParams(ctx).SupplyCap
 }
 
+// AtoxEnabled reports whether issuance is switched on, so a caller that mints
+// every block can stop instead of collecting ErrAtoxDisabled forever.
+func (k Keeper) AtoxEnabled(ctx sdk.Context) bool {
+	return k.GetParams(ctx).Enabled
+}
+
 // MintedAgainstCap is what MintAtox measures against SupplyCap: the live supply
 // plus everything conversion has destroyed.
 //

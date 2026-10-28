@@ -5,6 +5,7 @@ import (
 	"fmt"
 	stdmath "math"
 	"math/big"
+	"math/bits"
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -116,11 +117,24 @@ func ParseTierRelease(payload []byte) (cumulativeMiner, cumulativeProject math.I
 
 // Erc20ToAtos converts an ERC20 amount to ATOS at the configured peg. Both are
 // 18-decimal, so this is a plain multiply.
-func Erc20ToAtos(erc20 math.Int, atosPerErc20 uint64) math.Int {
+func Erc20ToAtos(erc20 math.Int, atosPerErc20 uint64) (math.Int, error) {
 	if erc20.IsNil() || !erc20.IsPositive() || atosPerErc20 == 0 {
-		return math.ZeroInt()
+		return math.ZeroInt(), nil
 	}
-	return erc20.MulRaw(int64(atosPerErc20)) //nolint:gosec // G115: Params.Validate bounds this to MaxInt64
+	// The ERC20 figure comes off the wire as a uint256 that nothing has
+	// bounded yet, and cosmossdk.io/math panics on a product wider than 256
+	// bits. Both callers multiply before their own range checks -- the pool
+	// balance check and assertWithinAuthorized both run afterwards -- so a
+	// hostile amount reaches the panic. Today baseapp's recovery turns that
+	// into a failed tx, but Handle only has to be reached once from a
+	// non-tx context (an EndBlocker retry queue, an upgrade handler) for the
+	// same input to halt the chain. Refuse it here instead.
+	if erc20.BigInt().BitLen()+bits.Len64(atosPerErc20) > 256 {
+		return math.ZeroInt(), fmt.Errorf(
+			"%w: a %d-bit ERC20 amount at a peg of %d overflows 256 bits",
+			ErrInvalidAmount, erc20.BigInt().BitLen(), atosPerErc20)
+	}
+	return erc20.MulRaw(int64(atosPerErc20)), nil //nolint:gosec // G115: Params.Validate bounds this to MaxInt64
 }
 
 // ----- Params -----
@@ -172,9 +186,30 @@ func DefaultParams() Params {
 		SmallTransferThreshold: math.NewIntWithDecimal(1, 23),
 		SmallQuotaBps:          2000,
 
-		// Below 10% of the pool, large exits stop entirely so the remaining
-		// liquidity serves many small holders.
+		// Below 10% of the pool, large INBOUND transfers stop entirely so the
+		// remaining liquidity serves many small holders. The pool drains
+		// through inbound -- that is the direction it pays out -- so this
+		// throttles the direction that is emptying it.
 		CrisisPoolBps: 1000,
+
+		// What counts as small on the inbound side once crisis mode engages.
+		// Separate from small_transfer_threshold because the two directions
+		// differ by an order of magnitude in practice.
+		InboundSmallThreshold: math.NewIntWithDecimal(1, 24), // 1,000,000 ATOS
+
+		// No per-transfer ceiling at genesis, in either direction. These are
+		// tuned from observed traffic once there is some; a figure guessed
+		// before launch would only strand honest transfers.
+		MaxTransferIn:  math.ZeroInt(),
+		MaxTransferOut: math.ZeroInt(),
+
+		// No per-recipient inbound share at genesis, same reasoning.
+		InboundPerAddressDailyBps: 0,
+
+		// No guardians at genesis. The keys do not exist until somebody is on
+		// call to hold them, and an empty list simply means the halt message
+		// has no valid signer.
+		Guardians: nil,
 	}
 }
 
@@ -203,6 +238,29 @@ func (p Params) Validate() error {
 	// against.
 	if p.Enabled && len(p.TierReleaseVault) != HexAddressLen {
 		return fmt.Errorf("tier_release_vault must be set before enabling the adapter")
+	}
+	// The ISM pin is what authenticates an inbound message, and DefaultParams
+	// leaves it nil. MsgUpdateParams replaces the whole struct, so a proposal
+	// that merely omits the field clears it -- and an unset pin leaves the
+	// inbound channel either erroring on every message or, with the wrong fix,
+	// verifying against a mailbox default we do not own. Required for both
+	// switches because both of them accept inbound messages.
+	if (p.Enabled || p.BridgeEnabled) && len(p.IsmId) != HexAddressLen {
+		return fmt.Errorf("ism_id must be set before enabling the adapter or the bridge")
+	}
+	// A malformed guardian address can never sign, so it is not dangerous --
+	// it is just silently useless, which is worse in an emergency. Reject it
+	// while somebody is reading the proposal rather than when the bridge needs
+	// shutting down.
+	seen := make(map[string]struct{}, len(p.Guardians))
+	for _, g := range p.Guardians {
+		if _, err := sdk.AccAddressFromBech32(g); err != nil {
+			return fmt.Errorf("guardian %q is not a valid address: %w", g, err)
+		}
+		if _, dup := seen[g]; dup {
+			return fmt.Errorf("guardian %q is listed twice", g)
+		}
+		seen[g] = struct{}{}
 	}
 
 	for _, c := range []struct {
@@ -330,4 +388,22 @@ func (msg MsgUpdateParams) ValidateBasic() error {
 		return err
 	}
 	return msg.Params.Validate()
+}
+
+// IsGuardian reports whether addr may halt the bridge.
+//
+// An empty guardian list means nobody can, which is the safe default: the
+// message simply has no valid signer until governance appoints one. Comparison
+// is on the bech32 string because that is what the proto carries and what a
+// proposal author reads.
+func (p Params) IsGuardian(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	for _, g := range p.Guardians {
+		if g == addr {
+			return true
+		}
+	}
+	return false
 }

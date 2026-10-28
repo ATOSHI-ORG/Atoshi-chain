@@ -21,4 +21,13 @@ message GenesisState {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+  // migration_claimed lists the addresses that have already taken their
+  // migration airdrop.
+  //
+  // This set is the only thing standing between the Merkle tree and the
+  // migration pool: ClaimMigrationTokens checks it and nothing else records a
+  // claim. Left out of genesis, an export/import -- disaster recovery, a hard
+  // fork, a rebuild after an incident -- would let every address in the tree
+  // claim a second time and empty the pool.
+  repeated string migration_claimed = 6;
 }

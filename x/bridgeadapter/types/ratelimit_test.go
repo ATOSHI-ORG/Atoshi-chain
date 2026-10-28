@@ -1,6 +1,7 @@
 package types_test
 
 import (
+	"math/big"
 	"testing"
 
 	"cosmossdk.io/math"
@@ -110,10 +111,17 @@ func TestCheckOutbound_MinimumTransfer(t *testing.T) {
 	require.NoError(t, types.CheckOutbound(l, atos(1_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
 }
 
-// TestCrisisMode_OnlySmallTransfers — below the floor the remaining liquidity
-// should serve many small holders rather than one large exit.
-func TestCrisisMode_OnlySmallTransfers(t *testing.T) {
+// TestCrisisMode_ThrottlesInboundNotOutbound — below the floor the remaining
+// liquidity should serve many small holders rather than one large payout.
+//
+// It gates INBOUND. The migration pool drains through inbound (a bridge-in
+// pays ATOS out of it) and refills through outbound (a bridge-out locks ATOS
+// into it), so throttling outbound here -- which this used to do -- blocked the
+// one direction that heals the pool while leaving the draining direction open,
+// and stranded holders trying to exit at the worst possible moment.
+func TestCrisisMode_ThrottlesInboundNotOutbound(t *testing.T) {
 	p := limitParams()
+	p.InboundSmallThreshold = atos(20_000)
 
 	// 9% of the pool: below the 10% crisis floor.
 	poolBalance := poolTotal.MulRaw(9).QuoRaw(100)
@@ -121,10 +129,18 @@ func TestCrisisMode_OnlySmallTransfers(t *testing.T) {
 	require.True(t, l.CrisisMode)
 
 	require.ErrorIs(t,
-		types.CheckOutbound(l, atos(50_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		types.CheckInbound(l, atos(50_000), math.ZeroInt(), math.ZeroInt()),
 		types.ErrCrisisMode)
-	require.NoError(t, types.CheckOutbound(l, atos(10_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
-		"small transfers must keep working in crisis mode")
+	require.NoError(t, types.CheckInbound(l, atos(10_000), math.ZeroInt(), math.ZeroInt()),
+		"small inbound transfers must keep working in crisis mode")
+
+	// Outbound is untouched: it is what refills the pool. 15,000 is above the
+	// 10,000 small threshold, so it is a "large" transfer by the old rule and
+	// would have been rejected; it stays under the per-address allowance so
+	// that limit is not what is being measured here.
+	require.NoError(t,
+		types.CheckOutbound(l, atos(15_000), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
+		"crisis mode must not block the direction that refills the pool")
 
 	// Exactly at the floor is not crisis.
 	l = types.ResolveLimits(p, poolTotal.MulRaw(10).QuoRaw(100), poolTotal)
@@ -182,8 +198,35 @@ func TestPegRoundTrip(t *testing.T) {
 		a := atos(n)
 		e, err := types.AtosToErc20(a, types.DefaultAtosPerErc20)
 		require.NoError(t, err)
-		require.Equal(t, a.String(), types.Erc20ToAtos(e, types.DefaultAtosPerErc20).String())
+		back, err := types.Erc20ToAtos(e, types.DefaultAtosPerErc20)
+		require.NoError(t, err)
+		require.Equal(t, a.String(), back.String())
 	}
+}
+
+// TestErc20ToAtos_OverflowErrorsRatherThanPanics — the ERC20 figure arrives as
+// an unbounded uint256 from the message body, and both callers multiply by the
+// peg BEFORE their own range checks (the pool balance check and
+// assertWithinAuthorized both run afterwards). cosmossdk.io/math panics on a
+// product wider than 256 bits, so a hostile amount used to reach that panic.
+// baseapp's recovery currently turns it into a failed tx, but Handle only has
+// to be reached once from a non-tx context for the same input to halt a block.
+func TestErc20ToAtos_OverflowErrorsRatherThanPanics(t *testing.T) {
+	// The largest uint256 a message body can carry.
+	maxU256 := math.NewIntFromBigInt(new(big.Int).Sub(
+		new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)))
+
+	require.NotPanics(t, func() {
+		got, err := types.Erc20ToAtos(maxU256, types.DefaultAtosPerErc20)
+		require.ErrorIs(t, err, types.ErrInvalidAmount)
+		require.True(t, got.IsZero())
+	})
+
+	// Just inside the boundary still converts.
+	safe := math.NewIntFromBigInt(new(big.Int).Lsh(big.NewInt(1), 248))
+	got, err := types.Erc20ToAtos(safe, types.DefaultAtosPerErc20)
+	require.NoError(t, err)
+	require.True(t, got.IsPositive())
 }
 
 // ----- asset payload -----
@@ -243,12 +286,71 @@ func TestParams_BridgeEnablingRequiresConfiguration(t *testing.T) {
 	require.NoError(t, p.Validate())
 
 	p.BridgeEnabled = true
+	p.IsmId = make([]byte, types.HexAddressLen)
 	require.ErrorContains(t, p.Validate(), "mailbox_id and remote_bridge_vault must be set",
 		"with no counterparty the inbound sender check has nothing to compare against")
 
 	p.MailboxId = make([]byte, types.HexAddressLen)
 	p.RemoteBridgeVault = make([]byte, types.HexAddressLen)
 	require.NoError(t, p.Validate())
+}
+
+// TestResolveLimits_ConfiguredShareNeverRoundsToUnlimited — a positive bps
+// that multiplies out to less than one unit used to truncate to zero, and
+// CheckOutbound/CheckInbound read a zero per-address or inbound limit as "not
+// configured, no limit". So a limit the operator did set silently became no
+// limit at all, while a zero Global means the opposite (fully throttled). The
+// three derived figures have to agree on what zero means.
+func TestResolveLimits_ConfiguredShareNeverRoundsToUnlimited(t *testing.T) {
+	p := types.DefaultParams()
+	p.GlobalDailyCap = math.NewInt(127) // far below BpsDenominator
+	p.GlobalDailyCapBpsOfPool = 0
+	p.PerAddressDailyBps = 35
+	p.InboundDailyCap = math.ZeroInt()
+	p.InboundDailyCapBpsOfPool = 35
+	// Out of the way: this test is about the derived shares, not the floor.
+	p.MinTransferOut = math.OneInt()
+	p.SmallTransferThreshold = math.ZeroInt()
+
+	l := types.ResolveLimits(p, math.NewInt(127), math.NewInt(1_000_000))
+
+	require.True(t, l.PerAddress.IsPositive(),
+		"a configured per-address share must stay binding, not become unlimited")
+	require.True(t, l.Inbound.IsPositive(),
+		"a configured inbound share must stay binding, not become unlimited")
+
+	// And it still actually limits: one unit in, the next unit out.
+	require.NoError(t, types.CheckOutbound(l, math.OneInt(),
+		math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
+	require.ErrorIs(t,
+		types.CheckOutbound(l, math.OneInt(), math.ZeroInt(), math.ZeroInt(), l.PerAddress),
+		types.ErrAddressCapReached)
+}
+
+// TestParams_EnablingRequiresAnIsm — the pin is the only thing authenticating
+// an inbound message, and DefaultParams leaves it nil, so a proposal that just
+// omits the field would otherwise enable an unauthenticated channel.
+func TestParams_EnablingRequiresAnIsm(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*types.Params)
+	}{
+		{"adapter", func(p *types.Params) { p.Enabled = true }},
+		{"bridge", func(p *types.Params) { p.BridgeEnabled = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := types.DefaultParams()
+			p.TierReleaseVault = make([]byte, types.HexAddressLen)
+			p.MailboxId = make([]byte, types.HexAddressLen)
+			p.RemoteBridgeVault = make([]byte, types.HexAddressLen)
+			tc.set(&p)
+
+			require.ErrorContains(t, p.Validate(), "ism_id must be set")
+
+			p.IsmId = make([]byte, types.HexAddressLen)
+			require.NoError(t, p.Validate())
+		})
+	}
 }
 
 // TestParams_FullSmallReserveIsRejected — a 100% reserve leaves large transfers
@@ -300,11 +402,11 @@ func TestDefaultParams_LimitsAreSane(t *testing.T) {
 func TestCheckInbound_GlobalCapOnly(t *testing.T) {
 	l := types.Limits{Inbound: math.NewInt(1_000)}
 
-	require.NoError(t, types.CheckInbound(l, math.NewInt(600), math.ZeroInt()))
-	require.NoError(t, types.CheckInbound(l, math.NewInt(400), math.NewInt(600)),
+	require.NoError(t, types.CheckInbound(l, math.NewInt(600), math.ZeroInt(), math.ZeroInt()))
+	require.NoError(t, types.CheckInbound(l, math.NewInt(400), math.NewInt(600), math.ZeroInt()),
 		"exactly reaching the cap is allowed")
 	require.ErrorIs(t,
-		types.CheckInbound(l, math.NewInt(1), math.NewInt(1_000)),
+		types.CheckInbound(l, math.NewInt(1), math.NewInt(1_000), math.ZeroInt()),
 		types.ErrInboundCapReached)
 }
 
@@ -322,14 +424,14 @@ func TestCheckInbound_UnsetCapMeansUnlimited(t *testing.T) {
 		{},                         // nil Int
 		{Inbound: math.NewInt(-5)}, // negative
 	} {
-		require.NoError(t, types.CheckInbound(l, math.NewIntWithDecimal(1, 30), math.ZeroInt()))
+		require.NoError(t, types.CheckInbound(l, math.NewIntWithDecimal(1, 30), math.ZeroInt(), math.ZeroInt()))
 	}
 }
 
 func TestCheckInbound_RejectsNonPositive(t *testing.T) {
 	l := types.Limits{Inbound: math.NewInt(1_000)}
-	require.ErrorIs(t, types.CheckInbound(l, math.ZeroInt(), math.ZeroInt()), types.ErrInvalidAmount)
-	require.ErrorIs(t, types.CheckInbound(l, math.NewInt(-1), math.ZeroInt()), types.ErrInvalidAmount)
+	require.ErrorIs(t, types.CheckInbound(l, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()), types.ErrInvalidAmount)
+	require.ErrorIs(t, types.CheckInbound(l, math.NewInt(-1), math.ZeroInt(), math.ZeroInt()), types.ErrInvalidAmount)
 }
 
 // TestResolveLimits_InboundTakesSmallerLeg mirrors the outbound behavior: the
@@ -353,7 +455,7 @@ func TestResolveLimits_InboundTakesSmallerLeg(t *testing.T) {
 func TestInboundHasNoPerAddressLimit(t *testing.T) {
 	l := types.Limits{Inbound: math.NewInt(1_000), PerAddress: math.NewInt(1)}
 	// PerAddress is set, and must be ignored by the inbound path.
-	require.NoError(t, types.CheckInbound(l, math.NewInt(900), math.ZeroInt()))
+	require.NoError(t, types.CheckInbound(l, math.NewInt(900), math.ZeroInt(), math.ZeroInt()))
 }
 
 // TestRateLimits_MasterSwitchLetsEverythingThrough pins the off switch: with
@@ -375,14 +477,14 @@ func TestRateLimits_MasterSwitchLetsEverythingThrough(t *testing.T) {
 	// Enforced: the request is refused (which check fires first does not matter,
 	// the point is that it is refused).
 	require.Error(t, types.CheckOutbound(tight, huge, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()))
-	require.Error(t, types.CheckInbound(tight, huge, math.ZeroInt()))
+	require.Error(t, types.CheckInbound(tight, huge, math.ZeroInt(), math.ZeroInt()))
 
 	// Same figures, switch off.
 	off := tight
 	off.Disabled = true
 	require.NoError(t, types.CheckOutbound(off, huge, math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
 		"disabling the rate limits must let an otherwise-valid outbound transfer through")
-	require.NoError(t, types.CheckInbound(off, huge, math.ZeroInt()),
+	require.NoError(t, types.CheckInbound(off, huge, math.ZeroInt(), math.ZeroInt()),
 		"disabling the rate limits must let an otherwise-valid inbound transfer through")
 
 	// Below the minimum, which is a throttle, is now allowed too.
@@ -392,7 +494,7 @@ func TestRateLimits_MasterSwitchLetsEverythingThrough(t *testing.T) {
 	// still be rejected -- otherwise the switch turns off a validity check.
 	require.ErrorIs(t, types.CheckOutbound(off, math.ZeroInt(), math.ZeroInt(), math.ZeroInt(), math.ZeroInt()),
 		types.ErrInvalidAmount)
-	require.ErrorIs(t, types.CheckInbound(off, math.NewInt(-1), math.ZeroInt()),
+	require.ErrorIs(t, types.CheckInbound(off, math.NewInt(-1), math.ZeroInt(), math.ZeroInt()),
 		types.ErrInvalidAmount)
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
+	atoxtypes "github.com/atoshi-chain/atoshi/v20/x/atox/types"
 	oracletypes "github.com/atoshi-chain/atoshi/v20/x/oracle/types"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
@@ -189,22 +190,35 @@ type testAtoxKeeper struct {
 	addPoolErr  error
 	totalMinted math.Int
 	totalPooled math.Int
+	// conversionBurned is ATOX destroyed by ATOX->ATOS conversion. It counts
+	// against the cap but is not live supply, which is the gap F-1 fell into.
+	conversionBurned math.Int
+	disabled         bool
 }
 
 func newTestAtoxKeeper() *testAtoxKeeper {
 	return &testAtoxKeeper{
 		minted:      map[string]math.Int{},
 		pooled:      map[string]math.Int{},
-		supply:      math.ZeroInt(),
-		cap:         math.NewIntWithDecimal(1, 30),
-		totalMinted: math.ZeroInt(),
-		totalPooled: math.ZeroInt(),
+		supply:           math.ZeroInt(),
+		cap:              math.NewIntWithDecimal(1, 30),
+		totalMinted:      math.ZeroInt(),
+		totalPooled:      math.ZeroInt(),
+		conversionBurned: math.ZeroInt(),
 	}
 }
 
-func (a *testAtoxKeeper) MintAtoxToModule(_ sdk.Context, module string, amount math.Int) error {
+func (a *testAtoxKeeper) MintAtoxToModule(ctx sdk.Context, module string, amount math.Int) error {
 	if a.mintErr != nil {
 		return a.mintErr
+	}
+	// Mirror the real keeper's two rejections, so a caller that clamps against
+	// the wrong figure is caught here rather than only in production.
+	if a.disabled {
+		return atoxtypes.ErrAtoxDisabled
+	}
+	if a.MintedAgainstCap(ctx).Add(amount).GT(a.cap) {
+		return atoxtypes.ErrSupplyCapReached
 	}
 	cur, ok := a.minted[module]
 	if !ok {
@@ -231,6 +245,92 @@ func (a *testAtoxKeeper) AddToExchangePool(_ sdk.Context, fromModule string, amo
 
 func (a *testAtoxKeeper) AtoxSupply(_ sdk.Context) math.Int    { return a.supply }
 func (a *testAtoxKeeper) AtoxSupplyCap(_ sdk.Context) math.Int { return a.cap }
+
+// MintedAgainstCap mirrors the real keeper: live supply plus conversion burn,
+// since conversion burn does not free minting headroom.
+func (a *testAtoxKeeper) MintedAgainstCap(_ sdk.Context) math.Int {
+	if a.conversionBurned.IsNil() {
+		return a.supply
+	}
+	return a.supply.Add(a.conversionBurned)
+}
+
+func (a *testAtoxKeeper) AtoxEnabled(_ sdk.Context) bool { return !a.disabled }
+
+// beginBlockerFixture wires a keeper with one bonded validator and a reward
+// schedule, which is the minimum for BeginBlocker to reach the mint.
+func beginBlockerFixture(t *testing.T) (Keeper, sdk.Context, *testAtoxKeeper) {
+	t.Helper()
+	bk := newTestBankKeeper()
+	minerAddr := authtypes.NewModuleAddress(tokenomicstypes.MinerPoolName)
+	bk.balances[minerAddr.String()] = sdk.NewCoins(
+		sdk.NewCoin(atoshitypes.BaseDenom, math.NewIntWithDecimal(1, 20)))
+
+	v1 := stakingtypes.Validator{
+		OperatorAddress: "atoshivaloper1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Tokens:          math.NewInt(100),
+	}
+	k, ctx := newKeeperForTest(t, bk,
+		testStakingKeeper{totalBonded: math.NewInt(400), validators: []stakingtypes.Validator{v1}},
+		testOracleKeeper{})
+
+	params := k.GetParams(ctx)
+	params.InitialBlockReward = math.NewInt(100)
+	params.HalvingIntervalBlocks = 100
+	require.NoError(t, k.SetParams(ctx, params))
+
+	return k, ctx, k.atoxKeeper.(*testAtoxKeeper)
+}
+
+// TestBeginBlocker_DisablingAtoxDoesNotHaltTheChain — bug F-2.
+//
+// Governance pausing ATOX issuance used to return ErrAtoxDisabled out of
+// BeginBlock. A BeginBlock error fails FinalizeBlock on every node at the same
+// height, deterministically, so a proposal meant to pause issuance halted the
+// chain instead -- and the fix would have needed another proposal on a chain
+// that was no longer producing blocks.
+func TestBeginBlocker_DisablingAtoxDoesNotHaltTheChain(t *testing.T) {
+	k, ctx, xk := beginBlockerFixture(t)
+	xk.disabled = true
+
+	require.NoError(t, k.BeginBlocker(ctx),
+		"a disabled atox module must stop emission, not halt the chain")
+	require.True(t, xk.totalMinted.IsZero(), "nothing may be minted while disabled")
+
+	// And it recovers by itself once governance switches issuance back on.
+	xk.disabled = false
+	require.NoError(t, k.BeginBlocker(ctx))
+	require.True(t, xk.totalMinted.IsPositive())
+}
+
+// TestBeginBlocker_ConversionBurnDoesNotHaltTheChain — bug F-1.
+//
+// The clamp measured SupplyCap - AtoxSupply while the mint measured
+// SupplyCap - MintedAgainstCap, and MintedAgainstCap adds conversion burn
+// because conversion burn does not free headroom. Once TotalBurned was
+// non-zero the clamp saw room the mint did not, the mint returned
+// ErrSupplyCapReached, and BeginBlock halted the chain. No attacker needed:
+// ordinary conversion traffic reaches this on its own.
+func TestBeginBlocker_ConversionBurnDoesNotHaltTheChain(t *testing.T) {
+	k, ctx, xk := beginBlockerFixture(t)
+
+	// Live supply is well under the cap, but supply plus conversion burn is
+	// one unit short of it -- exactly the window the old clamp missed.
+	xk.cap = math.NewInt(1_000)
+	xk.supply = math.NewInt(400)
+	xk.conversionBurned = math.NewInt(599)
+
+	require.NoError(t, k.BeginBlocker(ctx),
+		"emission must stop at the cap, not error out of BeginBlock")
+	require.True(t, xk.MintedAgainstCap(ctx).LTE(xk.cap),
+		"the clamp must never let the mint exceed the cap")
+
+	// Fully exhausted: still no error, still nothing minted.
+	xk.conversionBurned = math.NewInt(600)
+	before := xk.totalMinted
+	require.NoError(t, k.BeginBlocker(ctx))
+	require.Equal(t, before.String(), xk.totalMinted.String())
+}
 
 // TestBeginBlocker_MintsAtoxToFeeCollector replaces the old immediate/locked ATOS
 // split test. Block rewards are ATOX now, minted into the fee collector so

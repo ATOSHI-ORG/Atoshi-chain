@@ -19,6 +19,7 @@ type Keeper struct {
 	storeKey      storetypes.StoreKey
 	accountKeeper types.AccountKeeper
 	bankKeeper    types.BankKeeper
+	channelKeeper types.ChannelKeeper // may be nil; see SendRestriction
 	authority     string
 	baseDenom     string // ATOS, paid out of the exchange pool
 	atoxDenom     string // ATOX, the token that accrues the claim
@@ -29,6 +30,7 @@ func NewKeeper(
 	storeKey storetypes.StoreKey,
 	ak types.AccountKeeper,
 	bk types.BankKeeper,
+	ck types.ChannelKeeper,
 	authority string,
 	baseDenom string,
 	atoxDenom string,
@@ -41,6 +43,7 @@ func NewKeeper(
 		storeKey:      storeKey,
 		accountKeeper: ak,
 		bankKeeper:    bk,
+		channelKeeper: ck,
 		authority:     authority,
 		baseDenom:     baseDenom,
 		atoxDenom:     atoxDenom,

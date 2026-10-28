@@ -75,6 +75,20 @@ func (k Keeper) SetParams(ctx sdk.Context, p types.Params) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
+	return k.setParamsUnchecked(ctx, p)
+}
+
+// setParamsUnchecked writes params without running Validate.
+//
+// Only for turning the switches OFF. Validate insists on a configured ISM,
+// vault and mailbox while either switch is on, which is right for enabling and
+// wrong for an emergency halt: a chain that is half-configured, or whose
+// configuration is exactly what is under attack, still has to be able to shut
+// its bridge. Clearing both switches cannot make params less safe, so it does
+// not need the check that exists to stop them being turned on carelessly.
+//
+// Not exported. Every other writer goes through SetParams.
+func (k Keeper) setParamsUnchecked(ctx sdk.Context, p types.Params) error {
 	bz, err := k.cdc.Marshal(&p)
 	if err != nil {
 		return err

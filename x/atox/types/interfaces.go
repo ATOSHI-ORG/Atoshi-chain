@@ -4,7 +4,17 @@ import (
 	"context"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	channeltypes "github.com/cosmos/ibc-go/v8/modules/core/04-channel/types"
 )
+
+// ChannelKeeper expected interface.
+//
+// Needed only to enumerate the escrow addresses ATOX must never reach. See
+// Keeper.SendRestriction. Optional: a nil ChannelKeeper disables the check,
+// which is what unit tests that assemble a bare keeper want.
+type ChannelKeeper interface {
+	GetAllChannels(ctx sdk.Context) []channeltypes.IdentifiedChannel
+}
 
 // AccountKeeper expected interface.
 //
