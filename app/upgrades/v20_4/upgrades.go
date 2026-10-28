@@ -95,11 +95,17 @@ func CreateUpgradeHandler(
 		closeICAHost(ctx, icak, logger)
 		dropICS20Precompile(ctx, ek, logger)
 
-		if err := recoverStuckAtox(ctx, bk, logger); err != nil {
+		// The two fund movements run isolated: all-or-nothing, and a panic
+		// cannot take the chain down with it. See isolate.
+		if err := isolate(ctx, "stuck ATOX recovery", logger, func(ctx sdk.Context) error {
+			return recoverStuckAtox(ctx, bk, logger)
+		}); err != nil {
 			logger.Error("stuck ATOX recovery skipped", "err", err)
 		}
 
-		if err := clawback(ctx, bk, sk, logger); err != nil {
+		if err := isolate(ctx, "clawback", logger, func(ctx sdk.Context) error {
+			return clawback(ctx, bk, sk, logger)
+		}); err != nil {
 			logger.Error("clawback skipped", "err", err)
 		}
 
@@ -528,6 +534,58 @@ func closeICAHost(ctx sdk.Context, icak ICAHostKeeper, logger interface {
 	logger.Info("ICA host closed",
 		"was_enabled", before.HostEnabled,
 		"was_allow_messages", fmt.Sprintf("%v", before.AllowMessages))
+}
+
+// isolate runs one step of the upgrade so that neither a returned error nor a
+// panic can harm the chain.
+//
+// # Why a panic has to be caught
+//
+// The two fund movements call into x/staking and x/bank, and those call on
+// into x/distribution through the delegation hooks. Several of those paths
+// panic rather than return an error -- SendCoinsFromModuleToModule panics on a
+// missing module account, and the distribution hooks Unbond triggers have
+// panic branches of their own. A panic inside an upgrade handler is not a
+// failed recovery: it is every node crashing at the same height, with no later
+// height to fix it from. The chain would need a coordinated rollback to come
+// back at all.
+//
+// Recovering money is worth far less than the chain staying up. If one of
+// these steps cannot run, the right outcome is a loud log line and a normal
+// block -- the funds are still there to recover in v20.5.
+//
+// # Why the work is also isolated
+//
+// Without the cache, a step that fails halfway leaves the half it already did
+// written: a clawback that drains two delegations and then fails on the third
+// would have moved coins and rewritten unbonding records, with the account's
+// books only partly adjusted and no record of where it stopped. Running
+// against a cached context and committing only on success makes each step
+// all-or-nothing, so a failure leaves state exactly as the block began.
+//
+// Not used for RunMigrations or retuneRateLimits. Those two are supposed to be
+// fatal: a module left un-migrated, or rate limits left at the values that did
+// not hold during the incident, is not a state anyone should run on.
+func isolate(ctx sdk.Context, name string, logger interface {
+	Error(string, ...any)
+}, fn func(sdk.Context) error,
+) (err error) {
+	cacheCtx, commit := ctx.CacheContext()
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%s panicked: %v", name, r)
+			logger.Error("recovered from a panic; the chain continues",
+				"step", name, "panic", fmt.Sprintf("%v", r))
+		}
+	}()
+
+	if err := fn(cacheCtx); err != nil {
+		return err
+	}
+
+	commit()
+	return nil
 }
 
 // dropICS20Precompile removes 0x802 from the active static precompile set.

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"cosmossdk.io/math"
+	storetypes "cosmossdk.io/store/types"
+	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
@@ -601,4 +603,73 @@ func TestDropICS20Precompile_SurvivesAnUnwiredKeeper(t *testing.T) {
 	log := &fakeLogger{}
 	require.NotPanics(t, func() { dropICS20Precompile(sdk.Context{}, nil, log) })
 	require.NotEmpty(t, log.errs)
+}
+
+// ===== isolate =====
+
+// storeCtx builds a context with a real multistore, which isolate needs:
+// CacheContext has nothing to branch from otherwise.
+func storeCtx(t *testing.T) (sdk.Context, *storetypes.KVStoreKey) {
+	t.Helper()
+	key := storetypes.NewKVStoreKey("isolate_test")
+	return testutil.DefaultContext(key, storetypes.NewTransientStoreKey("t_isolate")), key
+}
+
+// The point of the whole function: a panic deep in staking or distribution
+// must not become every node crashing at the same height.
+func TestIsolate_APanicDoesNotReachTheCaller(t *testing.T) {
+	ctx, _ := storeCtx(t)
+	log := &fakeLogger{}
+
+	var err error
+	require.NotPanics(t, func() {
+		err = isolate(ctx, "boom", log, func(sdk.Context) error {
+			panic("staking did not like that")
+		})
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "boom panicked")
+	require.Contains(t, err.Error(), "staking did not like that")
+	require.NotEmpty(t, log.errs)
+}
+
+// A panic must leave no state behind, not even what ran before it.
+func TestIsolate_APanicCommitsNothing(t *testing.T) {
+	ctx, key := storeCtx(t)
+
+	_ = isolate(ctx, "half a write", &fakeLogger{}, func(c sdk.Context) error {
+		c.KVStore(key).Set([]byte("moved"), []byte("coins"))
+		panic("and then it broke")
+	})
+
+	require.Nil(t, ctx.KVStore(key).Get([]byte("moved")),
+		"a panicking step must not leave the part it finished")
+}
+
+// Same for an ordinary error: a clawback that drains two delegations and then
+// fails on the third must not leave the first two moved.
+func TestIsolate_AFailedStepCommitsNothing(t *testing.T) {
+	ctx, key := storeCtx(t)
+
+	err := isolate(ctx, "partial clawback", &fakeLogger{}, func(c sdk.Context) error {
+		c.KVStore(key).Set([]byte("delegation-1"), []byte("drained"))
+		c.KVStore(key).Set([]byte("delegation-2"), []byte("drained"))
+		return errors.New("validator 3 is not there")
+	})
+
+	require.Error(t, err)
+	require.Nil(t, ctx.KVStore(key).Get([]byte("delegation-1")))
+	require.Nil(t, ctx.KVStore(key).Get([]byte("delegation-2")))
+}
+
+func TestIsolate_SuccessIsCommitted(t *testing.T) {
+	ctx, key := storeCtx(t)
+
+	require.NoError(t, isolate(ctx, "clawback", &fakeLogger{}, func(c sdk.Context) error {
+		c.KVStore(key).Set([]byte("clawed"), []byte("44000000"))
+		return nil
+	}))
+
+	require.Equal(t, []byte("44000000"), ctx.KVStore(key).Get([]byte("clawed")))
 }
