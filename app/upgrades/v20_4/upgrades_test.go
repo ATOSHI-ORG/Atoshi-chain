@@ -87,6 +87,24 @@ type fakeStaking struct {
 	vals      map[string]stakingtypes.Validator
 	unbonded  map[string]math.Int
 	unbondErr error
+
+	ubds    []stakingtypes.UnbondingDelegation
+	ubdSet  []stakingtypes.UnbondingDelegation // every SetUnbondingDelegation, in order
+	ubdGone []string                           // validators whose record was removed
+}
+
+func (s *fakeStaking) GetUnbondingDelegations(_ context.Context, _ sdk.AccAddress, _ uint16) ([]stakingtypes.UnbondingDelegation, error) {
+	return s.ubds, nil
+}
+
+func (s *fakeStaking) SetUnbondingDelegation(_ context.Context, ubd stakingtypes.UnbondingDelegation) error {
+	s.ubdSet = append(s.ubdSet, ubd)
+	return nil
+}
+
+func (s *fakeStaking) RemoveUnbondingDelegation(_ context.Context, ubd stakingtypes.UnbondingDelegation) error {
+	s.ubdGone = append(s.ubdGone, ubd.ValidatorAddress)
+	return nil
 }
 
 func (s *fakeStaking) GetDelegatorDelegations(_ context.Context, _ sdk.AccAddress, _ uint16) ([]stakingtypes.Delegation, error) {
@@ -336,4 +354,147 @@ func TestCloseICAHost_SurvivesAnUnwiredKeeper(t *testing.T) {
 	log := &fakeLogger{}
 	require.NotPanics(t, func() { closeICAHost(testCtx(), nil, log) })
 	require.NotEmpty(t, log.errs)
+}
+
+// ---------- clawback: unbonding entries ----------
+
+func ubdEntry(height int64, id uint64, bal math.Int) stakingtypes.UnbondingDelegationEntry {
+	return stakingtypes.UnbondingDelegationEntry{
+		CreationHeight: height,
+		UnbondingId:    id,
+		InitialBalance: bal,
+		Balance:        bal,
+	}
+}
+
+// TestClawbackUnbonding_TakesTheInFlightEntryFirst reproduces what mainnet
+// actually holds: one entry of 6,539,444.95 ATOS maturing 2026-11-08, with the
+// rest still bonded. The entry is the part that walks out on its own, so it has
+// to go first -- and taking it leaves every validator's voting power alone.
+func TestClawbackUnbonding_TakesTheInFlightEntryFirst(t *testing.T) {
+	v1 := "atoshivaloper1vu3mmh7z9xzpeh30ytvm86t3fjewayfvps5rw6"
+	v3 := "atoshivaloper15h9u90s9ay8du5tk4qza953a289r7sy35tegq0"
+	bk := newFakeBank()
+	sk := &fakeStaking{
+		ubds: []stakingtypes.UnbondingDelegation{{
+			DelegatorAddress: ClawbackTarget,
+			ValidatorAddress: v3,
+			Entries:          []stakingtypes.UnbondingDelegationEntry{ubdEntry(397303, 1463, atos(6_539_444))},
+		}},
+		dels: []stakingtypes.Delegation{
+			{DelegatorAddress: ClawbackTarget, ValidatorAddress: v1, Shares: math.LegacyNewDecFromInt(atos(40_000_000))},
+		},
+		vals: map[string]stakingtypes.Validator{v1: oneToOneValidator(v1, atos(40_000_000))},
+	}
+
+	require.NoError(t, clawback(testCtx(), bk, sk, &fakeLogger{}))
+
+	require.Contains(t, sk.ubdGone, v3, "a fully drained entry leaves no record behind")
+
+	fromBonded := math.ZeroInt()
+	for _, v := range sk.unbonded {
+		fromBonded = fromBonded.Add(v)
+	}
+	require.Equal(t, atos(ClawbackAtos).Sub(atos(6_539_444)).String(), fromBonded.String(),
+		"bonded stake covers only what the unbonding entry did not")
+
+	require.Equal(t, atos(ClawbackAtos).String(),
+		bk.moduleTo[tokenomicstypes.MigrationPoolName].AmountOf(atoshitypes.BaseDenom).String(),
+		"the migration pool is made whole either way")
+}
+
+// TestClawbackUnbonding_LeavesThePartItDoesNotNeed — an entry larger than what
+// is owed is reduced, not taken. The remainder is still the holder's.
+func TestClawbackUnbonding_LeavesThePartItDoesNotNeed(t *testing.T) {
+	v3 := "atoshivaloper15h9u90s9ay8du5tk4qza953a289r7sy35tegq0"
+	bk := newFakeBank()
+	sk := &fakeStaking{
+		ubds: []stakingtypes.UnbondingDelegation{{
+			DelegatorAddress: ClawbackTarget,
+			ValidatorAddress: v3,
+			Entries:          []stakingtypes.UnbondingDelegationEntry{ubdEntry(397303, 1463, atos(50_000_000))},
+		}},
+	}
+
+	require.NoError(t, clawback(testCtx(), bk, sk, &fakeLogger{}))
+
+	require.Empty(t, sk.ubdGone, "a partially taken entry must survive")
+	require.Len(t, sk.ubdSet, 1)
+	e := sk.ubdSet[0].Entries[0]
+	require.Equal(t, atos(50_000_000-ClawbackAtos).String(), e.Balance.String(),
+		"the holder keeps what the over-issue did not cover")
+	require.Equal(t, atos(50_000_000).String(), e.InitialBalance.String(),
+		"InitialBalance is the historical record and must not be rewritten")
+}
+
+// TestClawbackUnbonding_SkipsEntriesHeldByAnotherModule. A positive
+// UnbondingOnHoldRefCount means another module is holding the entry open and
+// expects the balance to still be there. Editing it would corrupt that
+// module's accounting.
+func TestClawbackUnbonding_SkipsEntriesHeldByAnotherModule(t *testing.T) {
+	v3 := "atoshivaloper15h9u90s9ay8du5tk4qza953a289r7sy35tegq0"
+	held := ubdEntry(397303, 1463, atos(50_000_000))
+	held.UnbondingOnHoldRefCount = 1
+
+	bk := newFakeBank()
+	sk := &fakeStaking{
+		ubds: []stakingtypes.UnbondingDelegation{{
+			DelegatorAddress: ClawbackTarget,
+			ValidatorAddress: v3,
+			Entries:          []stakingtypes.UnbondingDelegationEntry{held},
+		}},
+	}
+
+	err := clawback(testCtx(), bk, sk, &fakeLogger{})
+
+	require.Error(t, err, "nothing was reachable, so the handler must report a shortfall")
+	require.ErrorContains(t, err, "still outstanding")
+	require.Empty(t, sk.ubdSet, "a held entry must not be rewritten")
+	require.Empty(t, sk.ubdGone)
+	require.True(t, bk.moduleTo[tokenomicstypes.MigrationPoolName].IsZero())
+}
+
+// TestClawbackUnbonding_IsDeterministic — entries arrive in whatever order the
+// store yields. Two nodes draining different entries produce different app
+// hashes and halt the chain.
+func TestClawbackUnbonding_IsDeterministic(t *testing.T) {
+	v1 := "atoshivaloper1vu3mmh7z9xzpeh30ytvm86t3fjewayfvps5rw6"
+	v3 := "atoshivaloper15h9u90s9ay8du5tk4qza953a289r7sy35tegq0"
+
+	build := func(order int) *fakeStaking {
+		a := stakingtypes.UnbondingDelegation{
+			DelegatorAddress: ClawbackTarget, ValidatorAddress: v1,
+			Entries: []stakingtypes.UnbondingDelegationEntry{
+				ubdEntry(500, 2, atos(20_000_000)),
+				ubdEntry(400, 1, atos(20_000_000)),
+			},
+		}
+		b := stakingtypes.UnbondingDelegation{
+			DelegatorAddress: ClawbackTarget, ValidatorAddress: v3,
+			Entries: []stakingtypes.UnbondingDelegationEntry{ubdEntry(600, 3, atos(20_000_000))},
+		}
+		if order == 0 {
+			return &fakeStaking{ubds: []stakingtypes.UnbondingDelegation{a, b}}
+		}
+		return &fakeStaking{ubds: []stakingtypes.UnbondingDelegation{b, a}}
+	}
+
+	var got []string
+	for order := 0; order < 2; order++ {
+		sk := build(order)
+		require.NoError(t, clawback(testCtx(), newFakeBank(), sk, &fakeLogger{}))
+
+		trace := ""
+		for _, u := range sk.ubdSet {
+			for _, e := range u.Entries {
+				trace += fmt.Sprintf("%s/%d=%s;", u.ValidatorAddress, e.UnbondingId, e.Balance)
+			}
+		}
+		for _, v := range sk.ubdGone {
+			trace += "gone:" + v + ";"
+		}
+		got = append(got, trace)
+	}
+	require.Equal(t, got[0], got[1],
+		"store order must not change which entries are drained")
 }

@@ -37,6 +37,9 @@ type StakingKeeper interface {
 	GetDelegatorDelegations(ctx context.Context, delegator sdk.AccAddress, maxRetrieve uint16) ([]stakingtypes.Delegation, error)
 	GetValidator(ctx context.Context, addr sdk.ValAddress) (stakingtypes.Validator, error)
 	Unbond(ctx context.Context, delAddr sdk.AccAddress, valAddr sdk.ValAddress, shares math.LegacyDec) (math.Int, error)
+	GetUnbondingDelegations(ctx context.Context, delegator sdk.AccAddress, maxRetrieve uint16) ([]stakingtypes.UnbondingDelegation, error)
+	SetUnbondingDelegation(ctx context.Context, ubd stakingtypes.UnbondingDelegation) error
+	RemoveUnbondingDelegation(ctx context.Context, ubd stakingtypes.UnbondingDelegation) error
 }
 
 // CreateUpgradeHandler returns the v20.4 upgrade handler.
@@ -206,6 +209,12 @@ func recoverStuckAtox(ctx sdk.Context, bk BankKeeper, logger interface {
 // through Undelegate, which would start a 21-day timer and leave the amount
 // claimable by the same address at the end of it.
 //
+// Three sources, in this order: liquid balance, in-flight unbonding entries,
+// then bonded delegations. Unbonding comes before bonded because those are the
+// funds that leave on their own -- an entry matures on its timer and lands
+// spendable in the holder's account -- and because taking them moves no
+// validator's voting power.
+//
 // What is taken is bounded by ClawbackAtos and nothing else. The address holds
 // roughly 10.7 million ATOS of its own that predates the incident, and that is
 // not ours to touch -- this corrects an over-issue, it does not confiscate a
@@ -236,6 +245,31 @@ func clawback(ctx sdk.Context, bk BankKeeper, sk StakingKeeper, logger interface
 	}
 
 	if !remaining.IsPositive() {
+		return nil
+	}
+
+	// Unbonding entries before bonded delegations, for two reasons.
+	//
+	// These are the funds that leave on their own. An entry completes on its
+	// own timer and the balance lands in the holder's account, spendable, with
+	// no further action from them -- the address already has one in flight,
+	// 6,539,444.95 ATOS completing 2026-11-08. Anything the holder starts from
+	// here lands 21 days later. If the upgrade is still pending when an entry
+	// matures, that amount stops being recoverable by this handler at all.
+	//
+	// And taking from an unbonding entry costs nothing in consensus terms: the
+	// stake has already left the bonded pool, so no validator's voting power
+	// moves. Unbonding a bonded delegation does move it. Draining the free one
+	// first means the upgrade disturbs the active set as little as the amount
+	// allows.
+	remaining, err = clawbackUnbonding(ctx, bk, sk, target, remaining, logger)
+	if err != nil {
+		return err
+	}
+
+	if !remaining.IsPositive() {
+		logger.Info("clawback complete from unbonding entries alone",
+			"target", ClawbackTarget)
 		return nil
 	}
 
@@ -313,6 +347,114 @@ func clawback(ctx sdk.Context, bk BankKeeper, sk StakingKeeper, logger interface
 		"target", ClawbackTarget,
 		"atos", math.NewInt(ClawbackAtos).String())
 	return nil
+}
+
+// clawbackUnbonding takes what it can from the holder's in-flight unbonding
+// entries and returns what is still owed.
+//
+// The coins behind an unbonding entry already sit in the not-bonded pool -- the
+// entry is only a record of who may claim them and when -- so recovering one is
+// a bookkeeping edit plus a pool-to-pool transfer, with no shares and no
+// exchange rate involved.
+//
+// Entries are visited in (validator, creation height, unbonding id) order so
+// every node takes the same ones in the same order. Partial entries are left
+// behind with a reduced balance rather than removed, because the holder is
+// still owed the part this clawback does not cover.
+//
+// InitialBalance is deliberately left alone. Only Balance governs what pays out
+// at maturity; InitialBalance is the historical record of what was unbonded,
+// and rewriting it would make the entry claim the clawback never happened.
+func clawbackUnbonding(
+	ctx sdk.Context,
+	bk BankKeeper,
+	sk StakingKeeper,
+	target sdk.AccAddress,
+	remaining math.Int,
+	logger interface{ Info(string, ...any) },
+) (math.Int, error) {
+	ubds, err := sk.GetUnbondingDelegations(ctx, target, 100)
+	if err != nil {
+		return remaining, fmt.Errorf("read unbonding delegations: %w", err)
+	}
+	sort.Slice(ubds, func(i, j int) bool {
+		return ubds[i].ValidatorAddress < ubds[j].ValidatorAddress
+	})
+
+	for _, ubd := range ubds {
+		if !remaining.IsPositive() {
+			break
+		}
+
+		sort.Slice(ubd.Entries, func(i, j int) bool {
+			if ubd.Entries[i].CreationHeight != ubd.Entries[j].CreationHeight {
+				return ubd.Entries[i].CreationHeight < ubd.Entries[j].CreationHeight
+			}
+			return ubd.Entries[i].UnbondingId < ubd.Entries[j].UnbondingId
+		})
+
+		taken := math.ZeroInt()
+		kept := ubd.Entries[:0]
+		for _, e := range ubd.Entries {
+			switch {
+			case !remaining.IsPositive(), !e.Balance.IsPositive():
+				kept = append(kept, e)
+				continue
+			case e.UnbondingOnHoldRefCount > 0:
+				// Another module is holding this entry open and expects the
+				// balance to still be there when it releases it. Editing it
+				// here would corrupt that module's accounting for a few ATOS.
+				logger.Info("skipped an unbonding entry held by another module",
+					"validator", ubd.ValidatorAddress,
+					"unbonding_id", e.UnbondingId,
+					"balance", e.Balance.String())
+				kept = append(kept, e)
+				continue
+			}
+
+			take := math.MinInt(e.Balance, remaining)
+			e.Balance = e.Balance.Sub(take)
+			remaining = remaining.Sub(take)
+			taken = taken.Add(take)
+
+			// A fully drained entry is dropped: leaving a zero-balance record
+			// means the staking EndBlocker will mature it and pay out nothing,
+			// which is noise in every log and query that reads it.
+			if e.Balance.IsPositive() {
+				kept = append(kept, e)
+			}
+		}
+
+		if !taken.IsPositive() {
+			continue
+		}
+		ubd.Entries = kept
+
+		if len(ubd.Entries) == 0 {
+			if err := sk.RemoveUnbondingDelegation(ctx, ubd); err != nil {
+				return remaining, fmt.Errorf(
+					"remove unbonding delegation at %s: %w", ubd.ValidatorAddress, err)
+			}
+		} else if err := sk.SetUnbondingDelegation(ctx, ubd); err != nil {
+			return remaining, fmt.Errorf(
+				"rewrite unbonding delegation at %s: %w", ubd.ValidatorAddress, err)
+		}
+
+		coins := sdk.NewCoins(sdk.NewCoin(atoshitypes.BaseDenom, taken))
+		if err := bk.SendCoinsFromModuleToModule(
+			ctx, stakingtypes.NotBondedPoolName,
+			tokenomicstypes.MigrationPoolName, coins); err != nil {
+			return remaining, fmt.Errorf(
+				"return %s from the not-bonded pool: %w", taken, err)
+		}
+
+		logger.Info("clawed back from an unbonding entry",
+			"validator", ubd.ValidatorAddress,
+			"amount", taken.String(),
+			"remaining", remaining.String())
+	}
+
+	return remaining, nil
 }
 
 // closeICAHost switches off the interchain-accounts host.
