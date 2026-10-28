@@ -568,6 +568,9 @@ func NewAtoshi(
 		keys[atoxtypes.StoreKey],
 		app.AccountKeeper,
 		app.BankKeeper,
+		// Only to recognize IBC escrow accounts, which ATOX must never reach.
+		// IBCKeeper is constructed above, so this is already usable.
+		app.IBCKeeper.ChannelKeeper,
 		authtypes.NewModuleAddress(govtypes.ModuleName).String(),
 		atoshitypes.BaseDenom,
 		atoshitypes.AtoxBaseDenom,
@@ -1628,6 +1631,7 @@ func (app *Atoshi) setupUpgradeHandlers() {
 			app.StakingKeeper,
 			app.BridgeAdapterKeeper,
 			app.ICAHostKeeper,
+			app.EvmKeeper,
 		),
 	)
 

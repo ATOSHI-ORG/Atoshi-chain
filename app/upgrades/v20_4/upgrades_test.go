@@ -2,8 +2,10 @@ package v20_4
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"testing"
 
 	"cosmossdk.io/math"
@@ -15,6 +17,7 @@ import (
 
 	cmdcfg "github.com/atoshi-chain/atoshi/v20/cmd/config"
 	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
+	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
 
@@ -42,6 +45,22 @@ type fakeICAHost struct{ params icahosttypes.Params }
 func (f *fakeICAHost) GetParams(sdk.Context) icahosttypes.Params { return f.params }
 func (f *fakeICAHost) SetParams(_ sdk.Context, p icahosttypes.Params) {
 	f.params = p
+}
+
+type fakeEVM struct {
+	params  evmtypes.Params
+	setErr  error
+	setCall int
+}
+
+func (f *fakeEVM) GetParams(sdk.Context) evmtypes.Params { return f.params }
+func (f *fakeEVM) SetParams(_ sdk.Context, p evmtypes.Params) error {
+	f.setCall++
+	if f.setErr != nil {
+		return f.setErr
+	}
+	f.params = p
+	return nil
 }
 
 type fakeBank struct {
@@ -497,4 +516,89 @@ func TestClawbackUnbonding_IsDeterministic(t *testing.T) {
 	}
 	require.Equal(t, got[0], got[1],
 		"store order must not change which entries are drained")
+}
+
+// ===== dropICS20Precompile =====
+
+// mainnetPrecompiles is DefaultStaticPrecompiles as mainnet has it: 0x802 is in
+// the set because that is how upstream Evmos ships, and nothing has ever taken
+// it out.
+func mainnetPrecompiles() []string {
+	return []string{
+		"0x0000000000000000000000000000000000000100", // p256
+		"0x0000000000000000000000000000000000000400", // bech32
+		"0x0000000000000000000000000000000000000800", // staking
+		"0x0000000000000000000000000000000000000801", // distribution
+		"0x0000000000000000000000000000000000000802", // ics20  <- the one that goes
+		"0x0000000000000000000000000000000000000803", // vesting
+		"0x0000000000000000000000000000000000000804", // bank
+		"0x0000000000000000000000000000000000000805", // gov
+		"0x0000000000000000000000000000000000000808", // bridgeadapter
+	}
+}
+
+func TestDropICS20Precompile_RemovesTheEVMRouteOffChain(t *testing.T) {
+	ek := &fakeEVM{params: evmtypes.Params{ActiveStaticPrecompiles: mainnetPrecompiles()}}
+	log := &fakeLogger{}
+
+	dropICS20Precompile(sdk.Context{}, ek, log)
+
+	require.NotContains(t, ek.params.ActiveStaticPrecompiles, ics20PrecompileAddress)
+	require.Len(t, ek.params.ActiveStaticPrecompiles, len(mainnetPrecompiles())-1)
+}
+
+// ValidatePrecompiles requires the list to stay sorted, for determinism.
+// Removing an entry must not disturb the rest.
+func TestDropICS20Precompile_LeavesTheListSorted(t *testing.T) {
+	ek := &fakeEVM{params: evmtypes.Params{ActiveStaticPrecompiles: mainnetPrecompiles()}}
+
+	dropICS20Precompile(sdk.Context{}, ek, &fakeLogger{})
+
+	require.True(t, sort.StringsAreSorted(ek.params.ActiveStaticPrecompiles))
+	require.NoError(t, evmtypes.ValidatePrecompiles(ek.params.ActiveStaticPrecompiles))
+}
+
+// Everything else stays. A handler that quietly dropped the bridgeadapter
+// precompile would make bridging unreachable from every EVM wallet.
+func TestDropICS20Precompile_TouchesNothingElse(t *testing.T) {
+	ek := &fakeEVM{params: evmtypes.Params{ActiveStaticPrecompiles: mainnetPrecompiles()}}
+
+	dropICS20Precompile(sdk.Context{}, ek, &fakeLogger{})
+
+	for _, addr := range mainnetPrecompiles() {
+		if addr == ics20PrecompileAddress {
+			continue
+		}
+		require.Contains(t, ek.params.ActiveStaticPrecompiles, addr)
+	}
+}
+
+func TestDropICS20Precompile_IsIdempotent(t *testing.T) {
+	ek := &fakeEVM{params: evmtypes.Params{ActiveStaticPrecompiles: mainnetPrecompiles()}}
+
+	dropICS20Precompile(sdk.Context{}, ek, &fakeLogger{})
+	first := ek.setCall
+	dropICS20Precompile(sdk.Context{}, ek, &fakeLogger{})
+
+	require.Equal(t, first, ek.setCall, "second run must not write params again")
+	require.NotContains(t, ek.params.ActiveStaticPrecompiles, ics20PrecompileAddress)
+}
+
+// A failed write must not stop the chain starting, like the rest of this
+// handler's params work. The send restriction is the lock that matters.
+func TestDropICS20Precompile_SurvivesAFailedWrite(t *testing.T) {
+	ek := &fakeEVM{
+		params: evmtypes.Params{ActiveStaticPrecompiles: mainnetPrecompiles()},
+		setErr: errors.New("store is sad"),
+	}
+	log := &fakeLogger{}
+
+	require.NotPanics(t, func() { dropICS20Precompile(sdk.Context{}, ek, log) })
+	require.NotEmpty(t, log.errs)
+}
+
+func TestDropICS20Precompile_SurvivesAnUnwiredKeeper(t *testing.T) {
+	log := &fakeLogger{}
+	require.NotPanics(t, func() { dropICS20Precompile(sdk.Context{}, nil, log) })
+	require.NotEmpty(t, log.errs)
 }

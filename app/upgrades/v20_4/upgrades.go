@@ -12,11 +12,17 @@ import (
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 	icahosttypes "github.com/cosmos/ibc-go/v8/modules/apps/27-interchain-accounts/host/types"
+	"github.com/ethereum/go-ethereum/common"
 
 	atoshitypes "github.com/atoshi-chain/atoshi/v20/types"
 	bakeeper "github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/keeper"
+	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 	tokenomicstypes "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types"
 )
+
+// ics20PrecompileAddress is precompiles/ics20.PrecompileAddress, repeated
+// rather than imported so this package does not pull the precompile in.
+const ics20PrecompileAddress = "0x0000000000000000000000000000000000000802"
 
 // BankKeeper is the subset of x/bank this upgrade needs.
 type BankKeeper interface {
@@ -30,6 +36,12 @@ type BankKeeper interface {
 type ICAHostKeeper interface {
 	GetParams(ctx sdk.Context) icahosttypes.Params
 	SetParams(ctx sdk.Context, params icahosttypes.Params)
+}
+
+// EVMKeeper is the subset of x/evm this upgrade needs.
+type EVMKeeper interface {
+	GetParams(ctx sdk.Context) evmtypes.Params
+	SetParams(ctx sdk.Context, params evmtypes.Params) error
 }
 
 // StakingKeeper is the subset of x/staking this upgrade needs.
@@ -65,6 +77,7 @@ func CreateUpgradeHandler(
 	sk StakingKeeper,
 	bak bakeeper.Keeper,
 	icak ICAHostKeeper,
+	ek EVMKeeper,
 ) upgradetypes.UpgradeHandler {
 	return func(c context.Context, _ upgradetypes.Plan, vm module.VersionMap) (module.VersionMap, error) {
 		ctx := sdk.UnwrapSDKContext(c)
@@ -80,6 +93,7 @@ func CreateUpgradeHandler(
 		}
 
 		closeICAHost(ctx, icak, logger)
+		dropICS20Precompile(ctx, ek, logger)
 
 		if err := recoverStuckAtox(ctx, bk, logger); err != nil {
 			logger.Error("stuck ATOX recovery skipped", "err", err)
@@ -514,6 +528,61 @@ func closeICAHost(ctx sdk.Context, icak ICAHostKeeper, logger interface {
 	logger.Info("ICA host closed",
 		"was_enabled", before.HostEnabled,
 		"was_allow_messages", fmt.Sprintf("%v", before.AllowMessages))
+}
+
+// dropICS20Precompile removes 0x802 from the active static precompile set.
+//
+// # Why
+//
+// 0x802 is the ICS20 transfer precompile, and it is in DefaultStaticPrecompiles
+// because that is how upstream Evmos ships. Its Transfer method calls
+// transferKeeper.Transfer directly from inside EVM execution, where no Cosmos
+// ante decorator runs -- so RejectAtoxIBCDecorator, which this release added to
+// keep ATOX from being escrowed, never sees a transfer made this way. The denom
+// is a plain string argument: "aatox" works.
+//
+// x/atox's send restriction now refuses any ATOX send whose recipient is an IBC
+// escrow account, which closes this path and every other one at bank level.
+// This removal is the second lock, not the only one. It is worth having anyway:
+// the chain has no IBC counterparty and no use for an EVM-callable ICS20 route,
+// so the precompile is attack surface with nothing on the other side of it.
+//
+// Governance can put it back with MsgUpdateParams if an IBC integration ever
+// lands. The list must stay sorted -- ValidatePrecompiles enforces that for
+// determinism -- and removing an entry preserves the order of the rest.
+//
+// Non-fatal, like the other params work here.
+func dropICS20Precompile(ctx sdk.Context, ek EVMKeeper, logger interface {
+	Info(string, ...any)
+	Error(string, ...any)
+},
+) {
+	if ek == nil {
+		logger.Error("EVM keeper not wired; leaving the precompile set alone")
+		return
+	}
+
+	p := ek.GetParams(ctx)
+	kept := make([]string, 0, len(p.ActiveStaticPrecompiles))
+	for _, addr := range p.ActiveStaticPrecompiles {
+		if common.HexToAddress(addr) == common.HexToAddress(ics20PrecompileAddress) {
+			continue
+		}
+		kept = append(kept, addr)
+	}
+
+	if len(kept) == len(p.ActiveStaticPrecompiles) {
+		logger.Info("ICS20 precompile already inactive; nothing to do")
+		return
+	}
+
+	p.ActiveStaticPrecompiles = kept
+	if err := ek.SetParams(ctx, p); err != nil {
+		logger.Error("could not drop the ICS20 precompile", "err", err)
+		return
+	}
+
+	logger.Info("ICS20 precompile deactivated", "address", ics20PrecompileAddress)
 }
 
 // authModuleAddress derives a module account address without needing the
