@@ -215,11 +215,19 @@ func recoverStuckAtox(ctx sdk.Context, bk BankKeeper, logger interface {
 // spendable in the holder's account -- and because taking them moves no
 // validator's voting power.
 //
-// What is taken is bounded by ClawbackAtos and nothing else. The address holds
-// roughly 10.7 million ATOS of its own that predates the incident, and that is
-// not ours to touch -- this corrects an over-issue, it does not confiscate a
-// balance. Delegations are visited in validator-address order so the outcome
-// is identical on every node.
+// What is taken is bounded by ClawbackAtos and nothing else. Measured on
+// 2026-10-28 the address holds 61,244,945.01 ATOS across the three sources, so
+// 17,244,945.01 stays with it -- that part predates the incident and is not
+// ours to touch. This corrects an over-issue; it does not confiscate a balance.
+// Delegations are visited in validator-address order so the outcome is
+// identical on every node.
+//
+// Unbond runs the distribution hooks, so the holder's accrued staking rewards
+// are paid out to them as part of this. That is correct -- they are rewards on
+// stake, and the handler is not a punishment -- but it lands after the liquid
+// sweep above, so the address finishes the upgrade with a small liquid balance
+// rather than zero. Block rewards are denominated in ATOX, so the ATOS part of
+// that is a share of transaction fees and is small.
 func clawback(ctx sdk.Context, bk BankKeeper, sk StakingKeeper, logger interface {
 	Info(string, ...any)
 },
