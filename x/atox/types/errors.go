@@ -10,4 +10,5 @@ var (
 	ErrSupplyCapReached = errorsmod.Register(ModuleName, 6, "atox supply cap reached")
 	ErrPoolInsolvent    = errorsmod.Register(ModuleName, 7, "exchange pool balance below settled obligations")
 	ErrInvalidIndex     = errorsmod.Register(ModuleName, 8, "invalid conversion index")
+	ErrAtoxCannotLeave  = errorsmod.Register(ModuleName, 9, "atox cannot be escrowed for transfer off this chain")
 )

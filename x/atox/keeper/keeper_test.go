@@ -253,6 +253,7 @@ func setup(t *testing.T) (keeper.Keeper, sdk.Context, *fakeBank) {
 	registry := codectypes.NewInterfaceRegistry()
 	k := keeper.NewKeeper(
 		codec.NewProtoCodec(registry), storeKey, ak, bank,
+		nil, // no channel keeper: these tests never send to an IBC escrow
 		authtypes.NewModuleAddress("gov").String(), atosDenom, atoxDenom,
 	)
 	bank.hook = k.SendRestriction
