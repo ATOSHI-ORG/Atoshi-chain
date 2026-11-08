@@ -7,6 +7,7 @@ const (
 	EventTypeClaimProjectReward    = "claim_project_reward"
 	EventTypeClaimMigration        = "claim_migration"
 	EventTypeUpdateParams          = "update_tokenomics_params"
+	EventTypeSpendSlashPool        = "spend_slash_pool"
 
 	// Daily sampling. One DailySample per reading consumed, one DailyCheck per
 	// UTC day when the day settles. Both are emitted because the two questions
@@ -31,4 +32,7 @@ const (
 	AttributeKeyVolume          = "volume"
 
 	AttributeKeyRemainingAuthorisation = "remaining_authorisation"
+	// AttributeKeyRemaining reports what is left in slash_pool after a spend, so
+	// the running balance is readable from the event stream without a second query.
+	AttributeKeyRemaining = "remaining"
 )

@@ -231,6 +231,12 @@ var (
 		tokenomicstypes.MinerPoolName:     {authtypes.Minter},
 		tokenomicstypes.ProjectPoolName:   {authtypes.Minter},
 		tokenomicstypes.MigrationPoolName: {authtypes.Minter},
+		// No permissions, and that is the point. slash_pool receives confiscated
+		// validator stake from x/staking's Slash override and gives it up only
+		// through MsgSpendSlashPool, which is governance. Burner would let the
+		// penalty be destroyed, which is the behaviour being replaced; Minter
+		// would let it be conjured.
+		tokenomicstypes.SlashPoolName: nil,
 		// Minter to emit ATOX as block rewards; Burner because the ATOX transfer
 		// fee is burned, which is what recycles it back into the mining pool.
 		atoxtypes.ModuleName:       {authtypes.Minter, authtypes.Burner},

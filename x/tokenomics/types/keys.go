@@ -8,6 +8,15 @@ const (
 	MinerPoolName     = "miner_pool"
 	ProjectPoolName   = "project_pool"
 	MigrationPoolName = "migration_pool"
+
+	// SlashPoolName holds stake confiscated from slashed validators.
+	//
+	// It lives here rather than in x/staking so every pool this chain owns is
+	// named in one place, and so x/staking/keeper can reach it without the
+	// dependency pointing the other way. Unlike the three above it is granted no
+	// permissions in maccPerms: it only ever receives, and the single way out is
+	// MsgSpendSlashPool, which is governance.
+	SlashPoolName = "slash_pool"
 )
 
 const (
