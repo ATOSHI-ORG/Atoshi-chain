@@ -47,4 +47,10 @@ var (
 	// ErrNotGuardian rejects MsgEmergencyHalt from an address that is not in
 	// params.guardians.
 	ErrNotGuardian = errorsmod.Register(ModuleName, 25, "signer is not a configured guardian")
+
+	// ErrInsufficientDispatchFee means this module's own account cannot cover
+	// the interchain gas a tier release offers to pay. Unlike the user-facing
+	// errors above, nobody sees this one returned: tier releases run from
+	// EndBlock. It travels with a log line and an event for that reason.
+	ErrInsufficientDispatchFee = errorsmod.Register(ModuleName, 26, "module account cannot cover the tier dispatch fee")
 )

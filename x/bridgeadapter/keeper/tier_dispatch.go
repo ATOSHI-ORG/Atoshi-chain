@@ -5,6 +5,7 @@ import (
 
 	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 
 	"github.com/bcp-innovations/hyperlane-cosmos/util"
 
@@ -67,6 +68,46 @@ func (k Keeper) DispatchTierRelease(
 	copy(vault[:], params.TierReleaseVault)
 	copy(appID[:], state.AppId)
 
+	// A tier release is triggered by the chain, not by a user, so there is no
+	// account to charge: this module's own account pays, and it has to be funded
+	// out of band for that to work.
+	//
+	// Both halves matter once any paying hook is attached to the mailbox. An
+	// empty maxFee is rejected outright (hyperlane-cosmos v1.1.0,
+	// x/core/02_post_dispatch/keeper/hook_igp.go:46), and an empty payer address
+	// has no balance to debit. Neither shows up anywhere an operator looks: this
+	// runs from EndBlock, where a failure produces no transaction result, so the
+	// release simply stops happening.
+	maxFee := sdk.NewCoins()
+	// Derived, not looked up: this module is deliberately absent from maccPerms,
+	// so there is no module account to fetch. Absent is the right state -- the
+	// address must stay fundable by an ordinary transfer, and BlockedAddrs is
+	// built from maccPerms, so registering it would make it unfundable.
+	payer := authtypes.NewModuleAddress(types.ModuleName)
+	if fee := params.EffectiveTierDispatchMaxFee(); fee.IsPositive() {
+		maxFee = sdk.NewCoins(sdk.NewCoin(k.tokenomicsKeeper.BaseDenom(), fee))
+		// Checked here rather than left to the bank, because the bank's error
+		// would surface in the same place the rest of this does: nowhere.
+		balance := k.bankKeeper.GetBalance(ctx, payer, k.tokenomicsKeeper.BaseDenom())
+		if balance.Amount.LT(fee) {
+			k.Logger(ctx).Error(
+				"tier release dispatch is underfunded; the release will not reach Ethereum",
+				"module_account", payer.String(),
+				"balance", balance.String(),
+				"required", fee.String(),
+			)
+			ctx.EventManager().EmitEvent(sdk.NewEvent(
+				types.EventTypeTierDispatchUnderfunded,
+				sdk.NewAttribute(types.AttributeKeyAddress, payer.String()),
+				sdk.NewAttribute(types.AttributeKeyBalance, balance.Amount.String()),
+				sdk.NewAttribute(types.AttributeKeyRequired, fee.String()),
+			))
+			return util.HexAddress{}, fmt.Errorf(
+				"%w: %s holds %s, tier dispatch needs %s",
+				types.ErrInsufficientDispatchFee, payer, balance.Amount, fee)
+		}
+	}
+
 	// Sender is this app's own router address, the same one Ethereum is
 	// configured to accept, so the contract's sender check has something stable
 	// to compare against. Receipts arrive addressed to it too.
@@ -74,16 +115,14 @@ func (k Keeper) DispatchTierRelease(
 		ctx,
 		mailboxID,
 		appID,
-		// The module pays no interchain gas here: tier releases are triggered by
-		// the chain itself, not by a user with an account to charge, so there is
-		// no fee payer. An IGP hook that demands payment therefore has to be
-		// left off this route; the doc's deployment step 4 configures a plain
-		// mailbox without one.
-		sdk.NewCoins(),
+		maxFee,
 		params.EthereumDomain,
 		vault,
 		body,
-		util.StandardHookMetadata{},
+		util.StandardHookMetadata{
+			Address:  payer,
+			GasLimit: params.EffectiveDestinationGas(),
+		},
 		nil,
 	)
 	if err != nil {

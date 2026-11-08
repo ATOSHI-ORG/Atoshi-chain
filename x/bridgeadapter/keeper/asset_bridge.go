@@ -196,7 +196,19 @@ func (k Keeper) ExecuteBridgeOut(
 		params.EthereumDomain,
 		vault,
 		body,
-		util.StandardHookMetadata{Address: sender},
+		// GasLimit has to be set even while no paying hook is attached. It is a
+		// math.Int, whose zero value is a nil big.Int, and an interchain gas
+		// paymaster adds gas_overhead to it before anything else (hook_igp.go:118)
+		// -- which panics on nil rather than erroring. Leaving it out would make
+		// the first bridge-out after a hook is attached abort, pointing at
+		// hyperlane rather than at this line.
+		util.StandardHookMetadata{
+			Address:  sender,
+			GasLimit: params.EffectiveDestinationGas(),
+		},
+		// nil: use the mailbox's configured default hook. Never a hook chosen
+		// here -- the parameter is the documented way to bypass a hook, and the
+		// one hook that must not be bypassed is whichever one charges.
 		nil,
 	)
 	if err != nil {

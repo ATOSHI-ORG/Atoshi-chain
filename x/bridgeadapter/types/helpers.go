@@ -15,6 +15,12 @@ import (
 // makes 10 trillion ATOS correspond to 100 billion ERC20.
 const DefaultAtosPerErc20 = 100
 
+// DefaultDestinationGas is the gas limit declared for AtosCollateral.handle on
+// Ethereum, measured between 150,000 and 250,000. Used when params leave
+// destination_gas unset, which is the state every chain started before this
+// field existed is in.
+const DefaultDestinationGas = 200_000
+
 // DefaultEthereumDomain is Ethereum mainnet's Hyperlane domain, by convention
 // its chain id.
 const DefaultEthereumDomain = 1
@@ -210,6 +216,17 @@ func DefaultParams() Params {
 		// call to hold them, and an empty list simply means the halt message
 		// has no valid signer.
 		Guardians: nil,
+
+		// Covers AtosCollateral.handle, measured at 150,000-250,000 gas. Declared
+		// rather than consumed: nothing on this chain spends it, and the only
+		// reader is an interchain gas paymaster deciding what to quote. Raising
+		// it raises the quote; it cannot make a transfer run out of gas here.
+		DestinationGas: DefaultDestinationGas,
+
+		// Zero, because no paying hook is attached. The figure only matters once
+		// one is, and the right value then depends on the quote -- see the proto
+		// comment for why it must be non-zero before that happens.
+		TierDispatchMaxFee: math.ZeroInt(),
 	}
 }
 
@@ -309,7 +326,48 @@ func (p Params) Validate() error {
 	if p.SmallQuotaBps == BpsDenominator {
 		return fmt.Errorf("small_quota_bps must be below %d, or large transfers are banned outright", BpsDenominator)
 	}
+	// Negative is rejected; nil and zero are not. Both of the interchain gas
+	// fields read through the Effective* accessors below precisely so that a
+	// proposal written against the older parameter struct -- including the
+	// re-open template an operator reaches for during a halt -- still validates.
+	// Refusing it here would turn an omitted field into a failed emergency
+	// proposal, and MsgUpdateParams replaces the whole struct, so omitting one
+	// is easy to do.
+	if !p.TierDispatchMaxFee.IsNil() && p.TierDispatchMaxFee.IsNegative() {
+		return fmt.Errorf("tier_dispatch_max_fee must not be negative")
+	}
 	return nil
+}
+
+// EffectiveDestinationGas is the gas limit to declare for the Ethereum-side
+// call, with the default substituted for an unset field.
+//
+// Never returns a nil or zero Int, and that is the whole point. The figure
+// travels in StandardHookMetadata.GasLimit, and an interchain gas paymaster's
+// first act is gasLimit.Add(gas_overhead) (hyperlane-cosmos v1.1.0,
+// x/core/02_post_dispatch/keeper/hook_igp.go:118). math.Int's zero value holds a
+// nil big.Int, so that addition panics rather than erroring. Reading the field
+// directly anywhere a dispatch can reach is therefore a latent panic waiting for
+// the day somebody attaches a paying hook.
+func (p Params) EffectiveDestinationGas() math.Int {
+	if p.DestinationGas == 0 {
+		return math.NewInt(DefaultDestinationGas)
+	}
+	return math.NewIntFromUint64(p.DestinationGas)
+}
+
+// EffectiveTierDispatchMaxFee is the ceiling to offer for a tier release, with
+// nil normalised to zero.
+//
+// Zero is correct while no paying hook is attached: the fee is only consulted by
+// a hook that charges, and with none the dispatch costs nothing. Once one is
+// attached this must be set, or every tier release fails inside EndBlock where
+// no transaction result carries the error.
+func (p Params) EffectiveTierDispatchMaxFee() math.Int {
+	if p.TierDispatchMaxFee.IsNil() {
+		return math.ZeroInt()
+	}
+	return p.TierDispatchMaxFee
 }
 
 // VaultMatches reports whether a message sender is the configured vault.

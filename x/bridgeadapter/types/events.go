@@ -12,6 +12,11 @@ const (
 	// EventTypeInboundCapped fires when the daily inbound circuit breaker
 	// rejects a bridge-in. The message is NOT lost -- Hyperlane retries it.
 	EventTypeInboundCapped = "bridge_in_capped"
+	// EventTypeTierDispatchUnderfunded fires when this module's account cannot
+	// cover the interchain gas for a tier release. Page-worthy: tier releases
+	// run from EndBlock, so without this the release stops silently -- no failed
+	// transaction, no error in any query, just a number that stops moving.
+	EventTypeTierDispatchUnderfunded = "tier_dispatch_underfunded"
 
 	AttributeKeyMessageID         = "message_id"
 	AttributeKeyBridgeDelta       = "bridge_delta_erc20"
@@ -28,4 +33,7 @@ const (
 	AttributeKeyErc20Amount       = "erc20_amount"
 	AttributeKeyUsedInbound       = "used_inbound"
 	AttributeKeyInboundCap        = "inbound_cap"
+	AttributeKeyAddress           = "address"
+	AttributeKeyBalance           = "balance"
+	AttributeKeyRequired          = "required"
 )
