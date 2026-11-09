@@ -43,6 +43,17 @@ const (
 	DefaultMigrationRefillThresholdBps = 2_000
 )
 
+// DefaultMaxCommissionRate is the chain-wide commission ceiling: 30%.
+//
+// Chosen against the 21-day unbonding period rather than against any particular
+// validator. A delegator who objects to a commission change cannot leave for
+// three weeks, so this is the most they can be charged while they wait, and 30%
+// of staking rewards for three weeks is a loss rather than a wipeout.
+//
+// For scale, the SDK CLI defaults max_rate to 20% and min_commission_rate on
+// this chain is 5%, so the band a validator may choose from becomes 5%-30%.
+var DefaultMaxCommissionRate = math.LegacyNewDecWithPrec(30, 2)
+
 // DefaultParams returns the genesis tokenomics parameters.
 // Pool layout, as fractions of the 10 trillion ATOS supply. Each pool is backed
 // 100:1 by ERC20 ATOS on Ethereum, and the three add up to the whole supply:
@@ -96,6 +107,12 @@ func DefaultParams() Params {
 		// 100 million ATOS. Backed 100:1 by 1 million ERC20 ATOS on Ethereum,
 		// which is the figure the self-stake requirement was specified in.
 		ValidatorMinSelfDelegation: math.NewIntWithDecimal(1, 26),
+
+		// 30%. The counterpart to x/staking's min_commission_rate, which is 5%
+		// on this chain. Above the SDK CLI's own default max_rate of 20% and far
+		// below the 100% our validators were created with, which no message can
+		// lower -- see the proto comment.
+		MaxCommissionRate: DefaultMaxCommissionRate,
 	}
 }
 
@@ -163,6 +180,20 @@ func (p Params) Validate() error {
 	}
 	if p.ValidatorMinSelfDelegation.IsNil() || p.ValidatorMinSelfDelegation.IsNegative() {
 		return fmt.Errorf("validator min self delegation cannot be negative")
+	}
+	// Nil is tolerated and means "disabled", the same as zero: MsgUpdateParams
+	// replaces the whole struct, so a proposal written against the params as
+	// they were before this field existed leaves it nil, and refusing that would
+	// fail the proposal rather than the field. Negative and above-one are
+	// refused -- a commission is a fraction, and a ceiling above 100% would be a
+	// ceiling that cannot bind.
+	if !p.MaxCommissionRate.IsNil() {
+		if p.MaxCommissionRate.IsNegative() {
+			return fmt.Errorf("max commission rate cannot be negative")
+		}
+		if p.MaxCommissionRate.GT(math.LegacyOneDec()) {
+			return fmt.Errorf("max commission rate cannot exceed 1: %s", p.MaxCommissionRate)
+		}
 	}
 	return nil
 }

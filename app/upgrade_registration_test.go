@@ -39,6 +39,35 @@ func TestUpgradeHandlerIsRegistered(t *testing.T) {
 	require.True(t, nw.App.UpgradeKeeper.HasHandler("v20.4"))
 }
 
+// TestCommissionCeilingIsWired is the assertion that the setter in app.go was
+// actually called.
+//
+// The chain-wide commission ceiling reaches x/staking through
+// SetCommissionCeilingKeeper, because app.go builds the staking keeper before
+// x/tokenomics and hands the staking keeper to it -- the dependency only runs
+// one way at construction. An unwired source reads as a zero ceiling, which
+// disables the check: no panic, no log, no failing test anywhere else, just a
+// ceiling that silently permits 100% again.
+//
+// The copy matters too. app.StakingKeeper is assigned by dereferencing the
+// pointer the setter is called on, and the staking precompile takes its own
+// copy from that field, so a setter call placed after the assignment would
+// leave both copies nil while the original looked correct.
+func TestCommissionCeilingIsWired(t *testing.T) {
+	nw := network.NewUnitTestNetwork()
+	ctx := nw.GetContext()
+
+	require.Equal(t, "0.300000000000000000",
+		nw.App.StakingKeeper.MaxCommissionRate(ctx).String(),
+		"the staking keeper must read the ceiling from tokenomics params")
+
+	// Through the copy the precompile and the rest of the app actually hold,
+	// not just through the pointer the setter was called on.
+	require.Equal(t,
+		nw.App.TokenomicsKeeper.GetMaxCommissionRate(ctx).String(),
+		nw.App.StakingKeeper.MaxCommissionRate(ctx).String())
+}
+
 // TestUpgradeHandler_CompensationIsMainnetOnly pins the gate that keeps every
 // other network out of the payout.
 //

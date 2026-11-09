@@ -21,6 +21,12 @@ type BankKeeper interface {
 	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
 }
 
+// TokenomicsKeeper is the subset of x/tokenomics this upgrade needs.
+type TokenomicsKeeper interface {
+	GetParams(ctx sdk.Context) tokenomicstypes.Params
+	SetParams(ctx sdk.Context, p tokenomicstypes.Params) error
+}
+
 // AccountKeeper is the subset of x/auth this upgrade needs.
 type AccountKeeper interface {
 	GetModuleAccount(ctx context.Context, moduleName string) sdk.ModuleAccountI
@@ -60,6 +66,7 @@ func CreateUpgradeHandler(
 	ak AccountKeeper,
 	bk BankKeeper,
 	bak bakeeper.Keeper,
+	tk TokenomicsKeeper,
 ) upgradetypes.UpgradeHandler {
 	return func(c context.Context, _ upgradetypes.Plan, vm module.VersionMap) (module.VersionMap, error) {
 		ctx := sdk.UnwrapSDKContext(c)
@@ -80,6 +87,13 @@ func CreateUpgradeHandler(
 			return createSlashPool(ctx, ak, log)
 		}); err != nil {
 			log.Error("slash_pool instantiation skipped; it will be created on first use", "err", err)
+		}
+
+		if err := isolate(ctx, "max_commission_rate", log, func(ctx sdk.Context) error {
+			return setMaxCommissionRate(ctx, tk, log)
+		}); err != nil {
+			log.Error("max_commission_rate write skipped; the ceiling stays disabled "+
+				"until governance sets it", "err", err)
 		}
 
 		if err := isolate(ctx, "TotalBridgedIn correction", log, func(ctx sdk.Context) error {
@@ -116,6 +130,34 @@ func setDestinationGas(ctx sdk.Context, bak bakeeper.Keeper, log logger) error {
 		return err
 	}
 	log.Info("destination_gas written", "was", was, "now", DestinationGas)
+	return nil
+}
+
+// setMaxCommissionRate turns the commission ceiling on.
+//
+// Unlike every other step here this one has no fallback. The staking keeper
+// reads a nil parameter as zero and a zero ceiling disables the check, so
+// without this write the upgrade ships the enforcement code with nothing to
+// enforce -- and the failure is silent: validator creation keeps accepting
+// max_rate 100%, exactly as before, with no log to say the rule is inert.
+//
+// Only written when unset. A chain that already carries a figure got it from
+// governance, and an upgrade handler is not the place to overrule that.
+func setMaxCommissionRate(ctx sdk.Context, tk TokenomicsKeeper, log logger) error {
+	p := tk.GetParams(ctx)
+	if !p.MaxCommissionRate.IsNil() && !p.MaxCommissionRate.IsZero() {
+		log.Info("max_commission_rate already set; leaving it alone",
+			"rate", p.MaxCommissionRate.String())
+		return nil
+	}
+
+	p.MaxCommissionRate = tokenomicstypes.DefaultMaxCommissionRate
+	if err := tk.SetParams(ctx, p); err != nil {
+		return err
+	}
+	log.Info("max_commission_rate set",
+		"rate", p.MaxCommissionRate.String(),
+		"note", "existing validators keep max_rate 100%; the ceiling bounds the rate they can reach")
 	return nil
 }
 

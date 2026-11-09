@@ -596,6 +596,16 @@ func NewAtoshi(
 		app.AtoxKeeper,
 	)
 
+	// Wire the commission ceiling back into staking now that tokenomics holds
+	// the parameter. It has to be the pointer and it has to be before
+	// `app.StakingKeeper = *stakingKeeper` below: that assignment copies the
+	// struct, and the precompile takes its own copy from the field, so a copy
+	// made before this call would carry a nil source and silently enforce
+	// nothing. The direction is forced -- tokenomics is constructed with
+	// stakingKeeper above, so staking cannot receive tokenomics at
+	// construction.
+	stakingKeeper.SetCommissionCeilingKeeper(app.TokenomicsKeeper)
+
 	// After atox and tokenomics: the adapter releases into the ATOX conversion
 	// pool and reads what tier judgments authorized.
 	app.BridgeAdapterKeeper = bakeeper.NewKeeper(
@@ -1656,6 +1666,7 @@ func (app *Atoshi) setupUpgradeHandlers() {
 			app.AccountKeeper,
 			app.BankKeeper,
 			app.BridgeAdapterKeeper,
+			app.TokenomicsKeeper,
 		),
 	)
 

@@ -169,6 +169,42 @@ message Params {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+
+  // max_commission_rate is the chain-wide ceiling on a validator's commission.
+  //
+  // It is the counterpart to x/staking's min_commission_rate, which is a
+  // chain-wide floor. The SDK ships the floor and no ceiling, so without this
+  // there is nothing above a validator's own max_rate -- and max_rate is written
+  // once, by the validator, in MsgCreateValidator, and is never writable again:
+  // MsgEditValidator carries only commission_rate and min_self_delegation, and
+  // UpdateValidatorCommission assigns only Rate and UpdateTime. Our seven
+  // validators declared 100%, which therefore cannot be lowered by any message,
+  // parameter or proposal that exists.
+  //
+  // What this makes enforceable instead:
+  //
+  //   - MsgCreateValidator may not declare a max_rate above this ceiling, so no
+  //     future validator repeats the 100%.
+  //   - MsgEditValidator may not raise commission_rate above it, which bounds
+  //     the seven that already did. Their max_rate stays 100% forever; this
+  //     simply means it can never be reached.
+  //
+  // Lowering a rate is always allowed, including from above the ceiling. A
+  // ceiling tightened below a validator's current rate must still leave that
+  // validator able to comply.
+  //
+  // Zero disables the check.
+  //
+  // Set against the 21-day unbonding period: a delegator who disagrees with a
+  // commission change needs three weeks to leave, so the ceiling is what bounds
+  // what they can be charged while they wait. The SDK CLI's own default max_rate
+  // is 20% (x/staking/client/cli/tx.go), which is the scale this belongs on --
+  // the 100% on our validators came from explicitly overriding that default.
+  string max_commission_rate = 23 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
 }
 
 // ReleaseState tracks the global price-unlock state machine.
