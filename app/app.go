@@ -147,6 +147,7 @@ import (
 	v20_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_2"
 	v20_3 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_3"
 	v20_4 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_4"
+	v21_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v21_2"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -231,6 +232,12 @@ var (
 		tokenomicstypes.MinerPoolName:     {authtypes.Minter},
 		tokenomicstypes.ProjectPoolName:   {authtypes.Minter},
 		tokenomicstypes.MigrationPoolName: {authtypes.Minter},
+		// No permissions, and that is the point. slash_pool receives confiscated
+		// validator stake from x/staking's Slash override and gives it up only
+		// through MsgSpendSlashPool, which is governance. Burner would let the
+		// penalty be destroyed, which is the behaviour being replaced; Minter
+		// would let it be conjured.
+		tokenomicstypes.SlashPoolName: nil,
 		// Minter to emit ATOX as block rewards; Burner because the ATOX transfer
 		// fee is burned, which is what recycles it back into the mining pool.
 		atoxtypes.ModuleName:       {authtypes.Minter, authtypes.Burner},
@@ -588,6 +595,16 @@ func NewAtoshi(
 		app.OracleKeeper,
 		app.AtoxKeeper,
 	)
+
+	// Wire the commission ceiling back into staking now that tokenomics holds
+	// the parameter. It has to be the pointer and it has to be before
+	// `app.StakingKeeper = *stakingKeeper` below: that assignment copies the
+	// struct, and the precompile takes its own copy from the field, so a copy
+	// made before this call would carry a nil source and silently enforce
+	// nothing. The direction is forced -- tokenomics is constructed with
+	// stakingKeeper above, so staking cannot receive tokenomics at
+	// construction.
+	stakingKeeper.SetCommissionCeilingKeeper(app.TokenomicsKeeper)
 
 	// After atox and tokenomics: the adapter releases into the ATOX conversion
 	// pool and reads what tier judgments authorized.
@@ -1632,6 +1649,24 @@ func (app *Atoshi) setupUpgradeHandlers() {
 			app.BridgeAdapterKeeper,
 			app.ICAHostKeeper,
 			app.EvmKeeper,
+		),
+	)
+
+	// v21.2 writes destination_gas explicitly, instantiates slash_pool,
+	// corrects TotalBridgedIn for the clawback v20.4 already performed, and
+	// pays the 2026-10-18 slashing compensation. Every step logs and continues
+	// on failure rather than aborting -- see the handler for why none of them
+	// is worth halting the chain over. The compensation runs on the mainnet
+	// chain id only; everywhere else it logs and skips, so a test network runs
+	// this same binary.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v21_2.UpgradeName,
+		v21_2.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.AccountKeeper,
+			app.BankKeeper,
+			app.BridgeAdapterKeeper,
+			app.TokenomicsKeeper,
 		),
 	)
 

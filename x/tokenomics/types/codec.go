@@ -10,6 +10,7 @@ import (
 func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 	cdc.RegisterConcrete(&MsgClaimMigrationTokens{}, "atoshi/tokenomics/MsgClaimMigrationTokens", nil)
 	cdc.RegisterConcrete(&MsgUpdateParams{}, "atoshi/tokenomics/MsgUpdateParams", nil)
+	cdc.RegisterConcrete(&MsgSpendSlashPool{}, "atoshi/tokenomics/MsgSpendSlashPool", nil)
 }
 
 // RegisterInterfaces registers tokenomics Msg types so the SDK can decode and
@@ -18,6 +19,7 @@ func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 	registry.RegisterImplementations((*sdk.Msg)(nil),
 		&MsgClaimMigrationTokens{},
 		&MsgUpdateParams{},
+		&MsgSpendSlashPool{},
 	)
 	msgservice.RegisterMsgServiceDesc(registry, &_Msg_serviceDesc)
 }

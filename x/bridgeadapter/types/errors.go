@@ -47,4 +47,17 @@ var (
 	// ErrNotGuardian rejects MsgEmergencyHalt from an address that is not in
 	// params.guardians.
 	ErrNotGuardian = errorsmod.Register(ModuleName, 25, "signer is not a configured guardian")
+
+	// ErrInsufficientDispatchFee means this module's own account cannot cover
+	// the interchain gas a tier release offers to pay. Unlike the user-facing
+	// errors above, nobody sees this one returned: tier releases run from
+	// EndBlock. It travels with a log line and an event for that reason.
+	ErrInsufficientDispatchFee = errorsmod.Register(ModuleName, 26, "module account cannot cover the tier dispatch fee")
+
+	// ErrStrandableInboundCeiling rejects a parameter set whose per-transfer
+	// inbound ceiling sits above the per-address daily allowance, which would
+	// leave a band of amounts that Ethereum accepts and this chain can never
+	// deliver. It is returned to a proposal author, never to a bridge user --
+	// the point is to fail while somebody is still reading the proposal.
+	ErrStrandableInboundCeiling = errorsmod.Register(ModuleName, 27, "inbound ceilings would strand funds in the Ethereum vault")
 )

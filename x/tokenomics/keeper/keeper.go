@@ -215,3 +215,17 @@ func (k Keeper) getValidatorVotingPower(ctx sdk.Context, validator stakingtypes.
 func (k Keeper) GetValidatorMinSelfDelegation(ctx sdk.Context) math.Int {
 	return k.GetParams(ctx).ValidatorMinSelfDelegation
 }
+
+// GetMaxCommissionRate returns the chain-wide ceiling on validator commission.
+//
+// A nil or non-positive result means the check is disabled. Nil is reachable:
+// MsgUpdateParams replaces the whole params struct, so a proposal written
+// against the struct as it was before this field existed stores it unset, and
+// LegacyDec's zero value wraps a nil pointer that panics on comparison.
+func (k Keeper) GetMaxCommissionRate(ctx sdk.Context) math.LegacyDec {
+	rate := k.GetParams(ctx).MaxCommissionRate
+	if rate.IsNil() {
+		return math.LegacyZeroDec()
+	}
+	return rate
+}

@@ -38,6 +38,10 @@ func newTestBankKeeper() *testBankKeeper {
 
 func (bk *testBankKeeper) key(addr sdk.AccAddress) string { return addr.String() }
 
+// BlockedAddr: nothing is blocked in these tests. The real bank blocks module
+// accounts and precompiles; MsgSpendSlashPool is the only caller.
+func (bk *testBankKeeper) BlockedAddr(_ sdk.AccAddress) bool { return false }
+
 func (bk *testBankKeeper) GetBalance(_ context.Context, addr sdk.AccAddress, denom string) sdk.Coin {
 	coins := bk.balances[bk.key(addr)]
 	return sdk.NewCoin(denom, coins.AmountOf(denom))
@@ -198,8 +202,8 @@ type testAtoxKeeper struct {
 
 func newTestAtoxKeeper() *testAtoxKeeper {
 	return &testAtoxKeeper{
-		minted:      map[string]math.Int{},
-		pooled:      map[string]math.Int{},
+		minted:           map[string]math.Int{},
+		pooled:           map[string]math.Int{},
 		supply:           math.ZeroInt(),
 		cap:              math.NewIntWithDecimal(1, 30),
 		totalMinted:      math.ZeroInt(),

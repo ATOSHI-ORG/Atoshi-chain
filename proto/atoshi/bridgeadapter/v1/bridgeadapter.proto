@@ -224,6 +224,39 @@ message Params {
   // asymmetry is the whole design: a stolen guardian key costs availability,
   // which governance can undo, rather than funds, which it cannot.
   repeated string guardians = 23;
+
+  // destination_gas is the gas limit this module declares for the Ethereum-side
+  // handle() call. An interchain gas paymaster prices against it.
+  //
+  // It has to be set even while no paying hook is attached. The figure travels
+  // in StandardHookMetadata.GasLimit, which is a math.Int, and the zero value of
+  // that type is a nil big.Int rather than zero -- the paymaster's first act is
+  // gasLimit.Add(gas_overhead) (hyperlane-cosmos v1.1.0,
+  // x/core/02_post_dispatch/keeper/hook_igp.go:118), which panics on nil. So
+  // leaving this at zero does not mean "free"; it means the first bridge-out
+  // after anyone attaches a hook aborts, and the reason will not be obvious.
+  //
+  // 200,000 covers AtosCollateral.handle measured at 150k-250k. Raising it only
+  // raises what a paymaster quotes; it is not consumed on this chain.
+  uint64 destination_gas = 24;
+
+  // tier_dispatch_max_fee is the ceiling, in liao, that this module will pay in
+  // interchain gas for one tier release.
+  //
+  // Tier releases are triggered by the chain rather than by a user, so there is
+  // no account to charge and the fee comes from this module's own balance.
+  // Zero is correct only while no paying hook is attached: PayForGas rejects an
+  // empty maxFee outright (hook_igp.go:46), and a tier release that fails does
+  // so inside EndBlock, where no transaction result carries the error.
+  //
+  // A ceiling, not a price. Only the quoted amount is ever taken, so setting
+  // this well above the expected quote costs nothing and absorbs a gas spike
+  // between two releases.
+  string tier_dispatch_max_fee = 25 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
 }
 
 // ReceiptState tracks what Ethereum has confirmed, in ERC20 units.

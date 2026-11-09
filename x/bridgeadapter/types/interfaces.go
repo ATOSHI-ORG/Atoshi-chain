@@ -54,6 +54,10 @@ type TokenomicsKeeper interface {
 type BankKeeper interface {
 	SendCoinsFromAccountToModule(ctx context.Context, sender sdk.AccAddress, module string, amt sdk.Coins) error
 	SendCoinsFromModuleToAccount(ctx context.Context, module string, recipient sdk.AccAddress, amt sdk.Coins) error
+	// GetBalance checks this module's own account before a tier dispatch offers
+	// to pay interchain gas out of it. The bank would refuse an overdraft
+	// anyway, but that refusal happens in EndBlock where nothing reports it.
+	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
 }
 
 // CoreKeeper is the slice of Hyperlane x/core this module needs.

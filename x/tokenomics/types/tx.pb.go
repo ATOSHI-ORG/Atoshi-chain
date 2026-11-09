@@ -8,6 +8,8 @@ import (
 	cosmossdk_io_math "cosmossdk.io/math"
 	fmt "fmt"
 	_ "github.com/cosmos/cosmos-proto"
+	github_com_cosmos_cosmos_sdk_types "github.com/cosmos/cosmos-sdk/types"
+	types "github.com/cosmos/cosmos-sdk/types"
 	_ "github.com/cosmos/cosmos-sdk/types/msgservice"
 	_ "github.com/cosmos/cosmos-sdk/types/tx/amino"
 	_ "github.com/cosmos/gogoproto/gogoproto"
@@ -210,48 +212,172 @@ func (m *MsgUpdateParamsResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_MsgUpdateParamsResponse proto.InternalMessageInfo
 
+// MsgSpendSlashPool pays out of slash_pool, which holds stake confiscated from
+// validators that were slashed.
+//
+// Slashing used to burn. Burning cost the chain two things at once: the ATOS
+// was gone, so compensating the delegators who lost share value meant minting
+// against a supply that is pegged 100:1 to a fixed ERC20 total; and the 2026-10-18
+// events destroyed 41,965,283.22 ATOS owed to 1,841 people with no on-chain way
+// to give it back. Confiscating into a module account instead keeps the supply
+// and the peg intact and leaves the decision about what to do with the proceeds
+// where it belongs, which is here.
+//
+// Governance-only, and deliberately a separate message from any community-pool
+// spend: the community pool already receives the 2% distribution tax in ATOX,
+// and mixing penalty money into it would make "how much was confiscated, how
+// much was returned, how much is left" unanswerable from chain state.
+type MsgSpendSlashPool struct {
+	Authority string `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
+	// recipient receives the coins. A compensation run addresses one proposal per
+	// recipient rather than a list, so a single bad address cannot fail the batch.
+	Recipient string                                   `protobuf:"bytes,2,opt,name=recipient,proto3" json:"recipient,omitempty"`
+	Amount    github_com_cosmos_cosmos_sdk_types.Coins `protobuf:"bytes,3,rep,name=amount,proto3,castrepeated=github.com/cosmos/cosmos-sdk/types.Coins" json:"amount"`
+}
+
+func (m *MsgSpendSlashPool) Reset()         { *m = MsgSpendSlashPool{} }
+func (m *MsgSpendSlashPool) String() string { return proto.CompactTextString(m) }
+func (*MsgSpendSlashPool) ProtoMessage()    {}
+func (*MsgSpendSlashPool) Descriptor() ([]byte, []int) {
+	return fileDescriptor_b68954b02b82a837, []int{4}
+}
+func (m *MsgSpendSlashPool) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *MsgSpendSlashPool) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_MsgSpendSlashPool.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *MsgSpendSlashPool) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_MsgSpendSlashPool.Merge(m, src)
+}
+func (m *MsgSpendSlashPool) XXX_Size() int {
+	return m.Size()
+}
+func (m *MsgSpendSlashPool) XXX_DiscardUnknown() {
+	xxx_messageInfo_MsgSpendSlashPool.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_MsgSpendSlashPool proto.InternalMessageInfo
+
+func (m *MsgSpendSlashPool) GetAuthority() string {
+	if m != nil {
+		return m.Authority
+	}
+	return ""
+}
+
+func (m *MsgSpendSlashPool) GetRecipient() string {
+	if m != nil {
+		return m.Recipient
+	}
+	return ""
+}
+
+func (m *MsgSpendSlashPool) GetAmount() github_com_cosmos_cosmos_sdk_types.Coins {
+	if m != nil {
+		return m.Amount
+	}
+	return nil
+}
+
+type MsgSpendSlashPoolResponse struct {
+}
+
+func (m *MsgSpendSlashPoolResponse) Reset()         { *m = MsgSpendSlashPoolResponse{} }
+func (m *MsgSpendSlashPoolResponse) String() string { return proto.CompactTextString(m) }
+func (*MsgSpendSlashPoolResponse) ProtoMessage()    {}
+func (*MsgSpendSlashPoolResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_b68954b02b82a837, []int{5}
+}
+func (m *MsgSpendSlashPoolResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *MsgSpendSlashPoolResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_MsgSpendSlashPoolResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *MsgSpendSlashPoolResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_MsgSpendSlashPoolResponse.Merge(m, src)
+}
+func (m *MsgSpendSlashPoolResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *MsgSpendSlashPoolResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_MsgSpendSlashPoolResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_MsgSpendSlashPoolResponse proto.InternalMessageInfo
+
 func init() {
 	proto.RegisterType((*MsgClaimMigrationTokens)(nil), "atoshi.tokenomics.v1.MsgClaimMigrationTokens")
 	proto.RegisterType((*MsgClaimMigrationTokensResponse)(nil), "atoshi.tokenomics.v1.MsgClaimMigrationTokensResponse")
 	proto.RegisterType((*MsgUpdateParams)(nil), "atoshi.tokenomics.v1.MsgUpdateParams")
 	proto.RegisterType((*MsgUpdateParamsResponse)(nil), "atoshi.tokenomics.v1.MsgUpdateParamsResponse")
+	proto.RegisterType((*MsgSpendSlashPool)(nil), "atoshi.tokenomics.v1.MsgSpendSlashPool")
+	proto.RegisterType((*MsgSpendSlashPoolResponse)(nil), "atoshi.tokenomics.v1.MsgSpendSlashPoolResponse")
 }
 
 func init() { proto.RegisterFile("atoshi/tokenomics/v1/tx.proto", fileDescriptor_b68954b02b82a837) }
 
 var fileDescriptor_b68954b02b82a837 = []byte{
-	// 495 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x53, 0x31, 0x6f, 0xd3, 0x40,
-	0x14, 0x8e, 0x89, 0x08, 0xca, 0x35, 0x12, 0xc2, 0x0a, 0x6a, 0x6a, 0x81, 0xd3, 0x1a, 0x55, 0xaa,
-	0x22, 0xc5, 0x47, 0x83, 0xda, 0x21, 0x0b, 0x22, 0x4c, 0x0c, 0x11, 0x55, 0x80, 0x85, 0x05, 0x5d,
-	0xed, 0xe3, 0x7c, 0x4a, 0xcf, 0x67, 0xf9, 0x5d, 0xa2, 0x56, 0x62, 0x40, 0x8c, 0x4c, 0xfc, 0x0c,
-	0xc6, 0x0c, 0x4c, 0x8c, 0x4c, 0x1d, 0x2b, 0x26, 0xc4, 0x50, 0xa1, 0x64, 0xc8, 0xca, 0x4f, 0x40,
-	0xe7, 0xb3, 0x95, 0x14, 0x25, 0x82, 0x2e, 0x96, 0xdf, 0xf7, 0xbe, 0xf7, 0xde, 0xf7, 0xbd, 0xa7,
-	0x43, 0xf7, 0x89, 0x92, 0x10, 0x71, 0xac, 0xe4, 0x90, 0xc6, 0x52, 0xf0, 0x00, 0xf0, 0x78, 0x1f,
-	0xab, 0x53, 0x3f, 0x49, 0xa5, 0x92, 0x76, 0xdd, 0xa4, 0xfd, 0x45, 0xda, 0x1f, 0xef, 0x3b, 0x77,
-	0x88, 0xe0, 0xb1, 0xc4, 0xd9, 0xd7, 0x10, 0x9d, 0xcd, 0x40, 0x82, 0x90, 0x80, 0x05, 0x30, 0xdd,
-	0x40, 0x00, 0xcb, 0x13, 0x5b, 0x26, 0xf1, 0x26, 0x8b, 0xb0, 0x09, 0xf2, 0x54, 0x9d, 0x49, 0x26,
-	0x0d, 0xae, 0xff, 0x72, 0x74, 0x77, 0xb5, 0xa2, 0x85, 0x80, 0x8c, 0xe6, 0x7d, 0xb5, 0xd0, 0x66,
-	0x1f, 0xd8, 0xd3, 0x13, 0xc2, 0x45, 0x9f, 0xb3, 0x94, 0x28, 0x2e, 0xe3, 0x97, 0x9a, 0x05, 0x76,
-	0x07, 0xdd, 0x0a, 0x34, 0x4e, 0xd3, 0x86, 0xb5, 0x6d, 0xed, 0x55, 0x7b, 0x8d, 0xef, 0x5f, 0xda,
-	0xf5, 0x7c, 0xf6, 0x93, 0x30, 0x4c, 0x29, 0xc0, 0x0b, 0x95, 0xf2, 0x98, 0x0d, 0x0a, 0xa2, 0xdd,
-	0x45, 0x15, 0x22, 0xe4, 0x28, 0x56, 0x8d, 0x1b, 0x59, 0x89, 0x77, 0x7e, 0xd9, 0x2c, 0xfd, 0xbc,
-	0x6c, 0xde, 0x35, 0x65, 0x10, 0x0e, 0x7d, 0x2e, 0xb1, 0x20, 0x2a, 0xf2, 0x9f, 0xc5, 0xea, 0xf3,
-	0x7c, 0xd2, 0xb2, 0x06, 0x79, 0x85, 0xbd, 0x83, 0x6a, 0x82, 0xa6, 0xc3, 0x13, 0xaa, 0x5d, 0xca,
-	0xb7, 0x8d, 0xf2, 0x76, 0x79, 0xaf, 0x36, 0xd8, 0x30, 0xd8, 0x91, 0x86, 0xba, 0xb5, 0x0f, 0xf3,
-	0x49, 0xab, 0x18, 0xe6, 0xed, 0xa0, 0xe6, 0x1a, 0xed, 0x03, 0x0a, 0x89, 0x8c, 0x81, 0x7a, 0xdf,
-	0x2c, 0x74, 0xbb, 0x0f, 0xec, 0x55, 0x12, 0x12, 0x45, 0x8f, 0x48, 0x4a, 0x04, 0xd8, 0x87, 0xa8,
-	0x4a, 0x46, 0x2a, 0x92, 0x29, 0x57, 0x67, 0xff, 0x74, 0xb6, 0xa0, 0xda, 0x8f, 0x51, 0x25, 0xc9,
-	0x3a, 0x64, 0xde, 0x36, 0x3a, 0xf7, 0xfc, 0x55, 0x67, 0xf5, 0xcd, 0x94, 0x5e, 0x55, 0x3b, 0xcf,
-	0x0d, 0x9a, 0xb2, 0xee, 0xa1, 0x56, 0xbf, 0x68, 0xf8, 0x71, 0x3e, 0x69, 0x3d, 0xc8, 0xcf, 0x74,
-	0xba, 0x7c, 0xa8, 0xbf, 0x04, 0x7b, 0x5b, 0xd9, 0x8d, 0x96, 0xa1, 0xc2, 0x5f, 0xe7, 0xb7, 0x85,
-	0xca, 0x7d, 0x60, 0xf6, 0x3b, 0x54, 0x5f, 0x79, 0xc3, 0xf6, 0x6a, 0x8d, 0x6b, 0xd6, 0xe6, 0x1c,
-	0x5c, 0x8b, 0x5e, 0xa8, 0xb0, 0x43, 0x54, 0xbb, 0xb2, 0xe1, 0xdd, 0xb5, 0x6d, 0x96, 0x69, 0x4e,
-	0xfb, 0xbf, 0x68, 0xc5, 0x14, 0xe7, 0xe6, 0x7b, 0xbd, 0xcd, 0xde, 0xf3, 0xf3, 0xa9, 0x6b, 0x5d,
-	0x4c, 0x5d, 0xeb, 0xd7, 0xd4, 0xb5, 0x3e, 0xcd, 0xdc, 0xd2, 0xc5, 0xcc, 0x2d, 0xfd, 0x98, 0xb9,
-	0xa5, 0xd7, 0x07, 0x8c, 0xab, 0x68, 0x74, 0xec, 0x07, 0x52, 0x60, 0xd3, 0xb9, 0x1d, 0x44, 0x84,
-	0xc7, 0x79, 0x80, 0xc7, 0x9d, 0x87, 0x57, 0x17, 0xad, 0xce, 0x12, 0x0a, 0xc7, 0x95, 0xec, 0x29,
-	0x3c, 0xfa, 0x13, 0x00, 0x00, 0xff, 0xff, 0x49, 0x9a, 0x26, 0x29, 0xc5, 0x03, 0x00, 0x00,
+	// 630 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x54, 0xbf, 0x6f, 0xd3, 0x4e,
+	0x14, 0x8f, 0x5b, 0x7d, 0xfb, 0x55, 0xae, 0x11, 0xa8, 0x56, 0x50, 0x13, 0x03, 0x4e, 0x6b, 0x54,
+	0x11, 0x45, 0x8a, 0x8f, 0x04, 0x25, 0x42, 0x59, 0x10, 0xe9, 0xc4, 0x10, 0x11, 0x25, 0xb0, 0xb0,
+	0xa0, 0x8b, 0x7d, 0xd8, 0x47, 0x62, 0x9f, 0xe5, 0xbb, 0x44, 0xad, 0xc4, 0x80, 0x18, 0x99, 0xf8,
+	0x2f, 0x40, 0x4c, 0x19, 0x98, 0x18, 0x99, 0x3a, 0x56, 0x4c, 0x08, 0xa1, 0x82, 0x92, 0x21, 0xff,
+	0x06, 0x3a, 0xfb, 0xf2, 0xab, 0x4d, 0xa0, 0xb0, 0x24, 0xbe, 0xf7, 0x3e, 0xef, 0xdd, 0xe7, 0xbd,
+	0xcf, 0xc7, 0x06, 0x37, 0x11, 0xa7, 0xcc, 0x25, 0x90, 0xd3, 0x2e, 0xf6, 0xa9, 0x47, 0x2c, 0x06,
+	0x07, 0x25, 0xc8, 0x8f, 0xcc, 0x20, 0xa4, 0x9c, 0xaa, 0xe9, 0x38, 0x6d, 0xce, 0xd3, 0xe6, 0xa0,
+	0xa4, 0xed, 0x20, 0x8f, 0xf8, 0x14, 0x46, 0xbf, 0x31, 0x50, 0xdb, 0xb5, 0x28, 0xf3, 0x28, 0x83,
+	0x1e, 0x73, 0x44, 0x03, 0x8f, 0x39, 0x32, 0x91, 0x8d, 0x13, 0xcf, 0xa2, 0x13, 0x8c, 0x0f, 0x32,
+	0x95, 0x76, 0xa8, 0x43, 0xe3, 0xb8, 0x78, 0x92, 0x51, 0x5d, 0x76, 0xea, 0x20, 0x86, 0xe1, 0xa0,
+	0xd4, 0xc1, 0x1c, 0x95, 0xa0, 0x45, 0x89, 0x2f, 0xf3, 0x07, 0xab, 0x19, 0xcf, 0x09, 0x46, 0x30,
+	0xe3, 0x93, 0x02, 0x76, 0x1b, 0xcc, 0x39, 0xec, 0x21, 0xe2, 0x35, 0x88, 0x13, 0x22, 0x4e, 0xa8,
+	0xff, 0x58, 0xa0, 0x98, 0x5a, 0x06, 0xff, 0x5b, 0x22, 0x8e, 0xc3, 0x8c, 0xb2, 0xa7, 0xe4, 0x93,
+	0xf5, 0xcc, 0x97, 0x8f, 0xc5, 0xb4, 0xe4, 0xf6, 0xc0, 0xb6, 0x43, 0xcc, 0x58, 0x9b, 0x87, 0xc4,
+	0x77, 0x5a, 0x53, 0xa0, 0x5a, 0x03, 0x5b, 0xc8, 0xa3, 0x7d, 0x9f, 0x67, 0x36, 0xa2, 0x12, 0xe3,
+	0xe4, 0x2c, 0x97, 0xf8, 0x76, 0x96, 0xbb, 0x16, 0x97, 0x31, 0xbb, 0x6b, 0x12, 0x0a, 0x3d, 0xc4,
+	0x5d, 0xf3, 0xa1, 0xcf, 0xdf, 0x4f, 0x86, 0x05, 0xa5, 0x25, 0x2b, 0xd4, 0x7d, 0x90, 0xf2, 0x70,
+	0xd8, 0xed, 0x61, 0xb1, 0x05, 0xfa, 0x3c, 0xb3, 0xb9, 0xb7, 0x99, 0x4f, 0xb5, 0xb6, 0xe3, 0x58,
+	0x53, 0x84, 0x6a, 0xa9, 0xd7, 0x93, 0x61, 0x61, 0x7a, 0x99, 0xb1, 0x0f, 0x72, 0x6b, 0xb8, 0xb7,
+	0x30, 0x0b, 0xa8, 0xcf, 0xb0, 0xf1, 0x59, 0x01, 0x57, 0x1b, 0xcc, 0x79, 0x12, 0xd8, 0x88, 0xe3,
+	0x26, 0x0a, 0x91, 0xc7, 0xd4, 0x2a, 0x48, 0xa2, 0x3e, 0x77, 0x69, 0x48, 0xf8, 0xf1, 0x1f, 0x27,
+	0x9b, 0x43, 0xd5, 0xfb, 0x60, 0x2b, 0x88, 0x3a, 0x44, 0xb3, 0x6d, 0x97, 0x6f, 0x98, 0xab, 0x64,
+	0x37, 0xe3, 0x5b, 0xea, 0x49, 0x31, 0xb9, 0x1c, 0x30, 0x2e, 0xab, 0x55, 0x05, 0xfb, 0x79, 0xc3,
+	0x37, 0x93, 0x61, 0xe1, 0x96, 0x94, 0xe9, 0x68, 0x51, 0xa8, 0x73, 0x84, 0x8d, 0x6c, 0xa4, 0xd1,
+	0x62, 0x68, 0x36, 0xdf, 0xbb, 0x0d, 0xb0, 0xd3, 0x60, 0x4e, 0x3b, 0xc0, 0xbe, 0xdd, 0xee, 0x21,
+	0xe6, 0x36, 0x29, 0xed, 0xfd, 0xf3, 0x84, 0x55, 0x90, 0x0c, 0xb1, 0x45, 0x02, 0x82, 0x67, 0x02,
+	0xfe, 0xa6, 0x6e, 0x06, 0x55, 0xdd, 0x99, 0xea, 0x42, 0xb3, 0xed, 0x72, 0xd6, 0x94, 0x15, 0xc2,
+	0x9d, 0xa6, 0x74, 0xa7, 0x79, 0x48, 0x89, 0x5f, 0xaf, 0x88, 0xb5, 0x7c, 0xf8, 0x91, 0xcb, 0x3b,
+	0x84, 0xbb, 0xfd, 0x8e, 0x69, 0x51, 0x4f, 0xda, 0x5d, 0xfe, 0x15, 0x99, 0xdd, 0x85, 0xfc, 0x38,
+	0xc0, 0x2c, 0x2a, 0x60, 0x4b, 0x1e, 0xa9, 0xdd, 0xbb, 0xb8, 0xc2, 0x83, 0x35, 0x2b, 0x5c, 0xde,
+	0x89, 0x71, 0x1d, 0x64, 0x2f, 0x04, 0xa7, 0x6b, 0x2c, 0x7f, 0xdf, 0x00, 0x9b, 0x0d, 0xe6, 0xa8,
+	0x2f, 0x41, 0x7a, 0xe5, 0xab, 0x50, 0x5c, 0x2d, 0xf5, 0x1a, 0xf7, 0x69, 0x95, 0xbf, 0x82, 0x4f,
+	0x59, 0xa8, 0x36, 0x48, 0x2d, 0x19, 0xf5, 0x60, 0x6d, 0x9b, 0x45, 0x98, 0x56, 0xbc, 0x14, 0x6c,
+	0x76, 0xcb, 0x0b, 0x70, 0xe5, 0x9c, 0x5d, 0x6e, 0xaf, 0x6d, 0xb0, 0x0c, 0xd4, 0xe0, 0x25, 0x81,
+	0xd3, 0xbb, 0xb4, 0xff, 0x5e, 0x09, 0xf5, 0xea, 0x8f, 0x4e, 0x46, 0xba, 0x72, 0x3a, 0xd2, 0x95,
+	0x9f, 0x23, 0x5d, 0x79, 0x3b, 0xd6, 0x13, 0xa7, 0x63, 0x3d, 0xf1, 0x75, 0xac, 0x27, 0x9e, 0x56,
+	0x16, 0x6c, 0x10, 0xf7, 0x2e, 0x5a, 0x2e, 0x22, 0xbe, 0x3c, 0xc0, 0x41, 0xf9, 0xce, 0xb2, 0xb0,
+	0x91, 0x33, 0x3a, 0x5b, 0xd1, 0xd7, 0xeb, 0xee, 0xaf, 0x00, 0x00, 0x00, 0xff, 0xff, 0xa3, 0xbc,
+	0x5e, 0x66, 0x98, 0x05, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -271,6 +397,8 @@ type MsgClient interface {
 	// UpdateParams updates module parameters via governance (including rotating the
 	// project treasury address and migration Merkle root).
 	UpdateParams(ctx context.Context, in *MsgUpdateParams, opts ...grpc.CallOption) (*MsgUpdateParamsResponse, error)
+	// SpendSlashPool pays confiscated validator stake out of slash_pool.
+	SpendSlashPool(ctx context.Context, in *MsgSpendSlashPool, opts ...grpc.CallOption) (*MsgSpendSlashPoolResponse, error)
 }
 
 type msgClient struct {
@@ -299,6 +427,15 @@ func (c *msgClient) UpdateParams(ctx context.Context, in *MsgUpdateParams, opts 
 	return out, nil
 }
 
+func (c *msgClient) SpendSlashPool(ctx context.Context, in *MsgSpendSlashPool, opts ...grpc.CallOption) (*MsgSpendSlashPoolResponse, error) {
+	out := new(MsgSpendSlashPoolResponse)
+	err := c.cc.Invoke(ctx, "/atoshi.tokenomics.v1.Msg/SpendSlashPool", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MsgServer is the server API for Msg service.
 type MsgServer interface {
 	// ClaimMigrationTokens lets a user redeem the pre-mine migration airdrop via Merkle proof.
@@ -306,6 +443,8 @@ type MsgServer interface {
 	// UpdateParams updates module parameters via governance (including rotating the
 	// project treasury address and migration Merkle root).
 	UpdateParams(context.Context, *MsgUpdateParams) (*MsgUpdateParamsResponse, error)
+	// SpendSlashPool pays confiscated validator stake out of slash_pool.
+	SpendSlashPool(context.Context, *MsgSpendSlashPool) (*MsgSpendSlashPoolResponse, error)
 }
 
 // UnimplementedMsgServer can be embedded to have forward compatible implementations.
@@ -317,6 +456,9 @@ func (*UnimplementedMsgServer) ClaimMigrationTokens(ctx context.Context, req *Ms
 }
 func (*UnimplementedMsgServer) UpdateParams(ctx context.Context, req *MsgUpdateParams) (*MsgUpdateParamsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateParams not implemented")
+}
+func (*UnimplementedMsgServer) SpendSlashPool(ctx context.Context, req *MsgSpendSlashPool) (*MsgSpendSlashPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SpendSlashPool not implemented")
 }
 
 func RegisterMsgServer(s grpc1.Server, srv MsgServer) {
@@ -359,6 +501,24 @@ func _Msg_UpdateParams_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Msg_SpendSlashPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MsgSpendSlashPool)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MsgServer).SpendSlashPool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/atoshi.tokenomics.v1.Msg/SpendSlashPool",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MsgServer).SpendSlashPool(ctx, req.(*MsgSpendSlashPool))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 var Msg_serviceDesc = _Msg_serviceDesc
 var _Msg_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "atoshi.tokenomics.v1.Msg",
@@ -371,6 +531,10 @@ var _Msg_serviceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateParams",
 			Handler:    _Msg_UpdateParams_Handler,
+		},
+		{
+			MethodName: "SpendSlashPool",
+			Handler:    _Msg_SpendSlashPool_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -512,6 +676,80 @@ func (m *MsgUpdateParamsResponse) MarshalToSizedBuffer(dAtA []byte) (int, error)
 	return len(dAtA) - i, nil
 }
 
+func (m *MsgSpendSlashPool) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *MsgSpendSlashPool) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *MsgSpendSlashPool) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.Amount) > 0 {
+		for iNdEx := len(m.Amount) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Amount[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintTx(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x1a
+		}
+	}
+	if len(m.Recipient) > 0 {
+		i -= len(m.Recipient)
+		copy(dAtA[i:], m.Recipient)
+		i = encodeVarintTx(dAtA, i, uint64(len(m.Recipient)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.Authority) > 0 {
+		i -= len(m.Authority)
+		copy(dAtA[i:], m.Authority)
+		i = encodeVarintTx(dAtA, i, uint64(len(m.Authority)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *MsgSpendSlashPoolResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *MsgSpendSlashPoolResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *MsgSpendSlashPoolResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintTx(dAtA []byte, offset int, v uint64) int {
 	offset -= sovTx(v)
 	base := offset
@@ -569,6 +807,38 @@ func (m *MsgUpdateParams) Size() (n int) {
 }
 
 func (m *MsgUpdateParamsResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	return n
+}
+
+func (m *MsgSpendSlashPool) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Authority)
+	if l > 0 {
+		n += 1 + l + sovTx(uint64(l))
+	}
+	l = len(m.Recipient)
+	if l > 0 {
+		n += 1 + l + sovTx(uint64(l))
+	}
+	if len(m.Amount) > 0 {
+		for _, e := range m.Amount {
+			l = e.Size()
+			n += 1 + l + sovTx(uint64(l))
+		}
+	}
+	return n
+}
+
+func (m *MsgSpendSlashPoolResponse) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -923,6 +1193,204 @@ func (m *MsgUpdateParamsResponse) Unmarshal(dAtA []byte) error {
 		}
 		if fieldNum <= 0 {
 			return fmt.Errorf("proto: MsgUpdateParamsResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTx(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTx
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *MsgSpendSlashPool) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTx
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: MsgSpendSlashPool: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: MsgSpendSlashPool: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Authority", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Authority = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Recipient", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Recipient = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Amount", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Amount = append(m.Amount, types.Coin{})
+			if err := m.Amount[len(m.Amount)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTx(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTx
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *MsgSpendSlashPoolResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTx
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: MsgSpendSlashPoolResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: MsgSpendSlashPoolResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		default:

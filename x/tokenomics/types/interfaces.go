@@ -24,6 +24,10 @@ type AccountKeeper interface {
 type BankKeeper interface {
 	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
 	GetAllBalances(ctx context.Context, addr sdk.AccAddress) sdk.Coins
+	// BlockedAddr reports addresses the bank refuses to credit: module accounts
+	// and precompiles. MsgSpendSlashPool checks it so a proposal naming one fails
+	// at submission rather than after the vote.
+	BlockedAddr(addr sdk.AccAddress) bool
 	SendCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
 	SendCoinsFromModuleToModule(ctx context.Context, senderModule, recipientModule string, amt sdk.Coins) error
 	MintCoins(ctx context.Context, name string, amt sdk.Coins) error

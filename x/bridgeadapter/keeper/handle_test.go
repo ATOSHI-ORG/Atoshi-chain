@@ -54,6 +54,13 @@ type fakeTokenomics struct {
 	authMiner   math.Int
 	authProject math.Int
 	claimable   math.Int
+
+	// poolBalance overrides what MigrationPoolBalance reports. Nil -- the zero
+	// value -- keeps the 300-billion default, so every test written before the
+	// pool mattered is unaffected. Only the inbound-ceiling tests set it, and
+	// they need a pool small enough that pool x bps_of_pool binds ahead of
+	// inbound_daily_cap, which is the whole case they exercise.
+	poolBalance math.Int
 }
 
 func newFakeTokenomics(miner, project math.Int) *fakeTokenomics {
@@ -68,6 +75,9 @@ func (t *fakeTokenomics) SetProjectClaimable(_ sdk.Context, a math.Int) { t.clai
 func (t *fakeTokenomics) MinerPoolName() string                         { return minerPool }
 func (t *fakeTokenomics) MigrationPoolName() string                     { return "migration_pool" }
 func (t *fakeTokenomics) MigrationPoolBalance(_ sdk.Context) math.Int {
+	if !t.poolBalance.IsNil() {
+		return t.poolBalance
+	}
 	return math.NewIntWithDecimal(3, 29)
 }
 
@@ -77,7 +87,12 @@ func (t *fakeTokenomics) MigrationPoolTotal(_ sdk.Context) math.Int {
 func (t *fakeTokenomics) BaseDenom() string { return "liao" }
 
 // fakeBank records ATOS movement for the asset-bridge paths.
-type fakeBank struct{}
+type fakeBank struct {
+	// balance is what GetBalance reports for every address. Only the tier
+	// dispatch reads it, and only when tier_dispatch_max_fee is positive, so the
+	// zero value is right for every test that does not set that parameter.
+	balance math.Int
+}
 
 func (fakeBank) SendCoinsFromAccountToModule(_ context.Context, _ sdk.AccAddress, _ string, _ sdk.Coins) error {
 	return nil
@@ -87,11 +102,23 @@ func (fakeBank) SendCoinsFromModuleToAccount(_ context.Context, _ string, _ sdk.
 	return nil
 }
 
+func (b *fakeBank) GetBalance(_ context.Context, _ sdk.AccAddress, denom string) sdk.Coin {
+	if b.balance.IsNil() {
+		return sdk.NewCoin(denom, math.ZeroInt())
+	}
+	return sdk.NewCoin(denom, b.balance)
+}
+
 // fakeCore stands in for the app router. Genesis only needs an address back.
 type fakeCore struct {
 	router      *util.Router[util.HyperlaneApp]
 	dispatched  [][]byte
 	dispatchErr error
+	// Last call's fee and hook metadata. Recorded because what this module puts
+	// in them is the thing an interchain gas paymaster reads, and getting either
+	// wrong fails at the paymaster rather than here.
+	lastMaxFee   sdk.Coins
+	lastMetadata util.StandardHookMetadata
 }
 
 func (c *fakeCore) AppRouter() *util.Router[util.HyperlaneApp] { return c.router }
@@ -100,13 +127,15 @@ func (c *fakeCore) DispatchMessage(
 	_ sdk.Context,
 	_ util.HexAddress,
 	_ util.HexAddress,
-	_ sdk.Coins,
+	maxFee sdk.Coins,
 	_ uint32,
 	_ util.HexAddress,
 	body []byte,
-	_ util.StandardHookMetadata,
+	metadata util.StandardHookMetadata,
 	_ *util.HexAddress,
 ) (util.HexAddress, error) {
+	c.lastMaxFee = maxFee
+	c.lastMetadata = metadata
 	if c.dispatchErr != nil {
 		return util.HexAddress{}, c.dispatchErr
 	}

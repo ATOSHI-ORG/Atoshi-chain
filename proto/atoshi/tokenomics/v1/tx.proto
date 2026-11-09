@@ -5,6 +5,7 @@ import "amino/amino.proto";
 import "cosmos/msg/v1/msg.proto";
 import "cosmos_proto/cosmos.proto";
 import "gogoproto/gogo.proto";
+import "cosmos/base/v1beta1/coin.proto";
 import "atoshi/tokenomics/v1/tokenomics.proto";
 
 option go_package = "github.com/atoshi-chain/atoshi/v20/x/tokenomics/types";
@@ -33,6 +34,9 @@ service Msg {
   // UpdateParams updates module parameters via governance (including rotating the
   // project treasury address and migration Merkle root).
   rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+
+  // SpendSlashPool pays confiscated validator stake out of slash_pool.
+  rpc SpendSlashPool(MsgSpendSlashPool) returns (MsgSpendSlashPoolResponse);
 }
 
 message MsgClaimMigrationTokens {
@@ -57,3 +61,34 @@ message MsgUpdateParams {
   Params params = 2 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
 }
 message MsgUpdateParamsResponse {}
+
+// MsgSpendSlashPool pays out of slash_pool, which holds stake confiscated from
+// validators that were slashed.
+//
+// Slashing used to burn. Burning cost the chain two things at once: the ATOS
+// was gone, so compensating the delegators who lost share value meant minting
+// against a supply that is pegged 100:1 to a fixed ERC20 total; and the 2026-10-18
+// events destroyed 41,965,283.22 ATOS owed to 1,841 people with no on-chain way
+// to give it back. Confiscating into a module account instead keeps the supply
+// and the peg intact and leaves the decision about what to do with the proceeds
+// where it belongs, which is here.
+//
+// Governance-only, and deliberately a separate message from any community-pool
+// spend: the community pool already receives the 2% distribution tax in ATOX,
+// and mixing penalty money into it would make "how much was confiscated, how
+// much was returned, how much is left" unanswerable from chain state.
+message MsgSpendSlashPool {
+  option (amino.name) = "atoshi/x/tokenomics/MsgSpendSlashPool";
+  option (cosmos.msg.v1.signer) = "authority";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  // recipient receives the coins. A compensation run addresses one proposal per
+  // recipient rather than a list, so a single bad address cannot fail the batch.
+  string recipient = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  repeated cosmos.base.v1beta1.Coin amount = 3 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true,
+    (gogoproto.castrepeated) = "github.com/cosmos/cosmos-sdk/types.Coins"
+  ];
+}
+message MsgSpendSlashPoolResponse {}
