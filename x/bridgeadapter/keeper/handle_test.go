@@ -54,6 +54,13 @@ type fakeTokenomics struct {
 	authMiner   math.Int
 	authProject math.Int
 	claimable   math.Int
+
+	// poolBalance overrides what MigrationPoolBalance reports. Nil -- the zero
+	// value -- keeps the 300-billion default, so every test written before the
+	// pool mattered is unaffected. Only the inbound-ceiling tests set it, and
+	// they need a pool small enough that pool x bps_of_pool binds ahead of
+	// inbound_daily_cap, which is the whole case they exercise.
+	poolBalance math.Int
 }
 
 func newFakeTokenomics(miner, project math.Int) *fakeTokenomics {
@@ -68,6 +75,9 @@ func (t *fakeTokenomics) SetProjectClaimable(_ sdk.Context, a math.Int) { t.clai
 func (t *fakeTokenomics) MinerPoolName() string                         { return minerPool }
 func (t *fakeTokenomics) MigrationPoolName() string                     { return "migration_pool" }
 func (t *fakeTokenomics) MigrationPoolBalance(_ sdk.Context) math.Int {
+	if !t.poolBalance.IsNil() {
+		return t.poolBalance
+	}
 	return math.NewIntWithDecimal(3, 29)
 }
 

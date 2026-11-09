@@ -308,6 +308,15 @@ func (p Params) Validate() error {
 			return fmt.Errorf("%s must not be negative", c.name)
 		}
 	}
+	// The two inbound shares were missing from this list. They are the only bps
+	// fields that feed the inbound ceilings, so an out-of-range figure here is
+	// the one that can strand funds rather than merely throttle them -- see
+	// ValidateInboundCeilings.
+	//
+	// Zero stays legal for all of them: CheckInbound gates every ceiling through
+	// set(), so a resolved zero means "no limit", and DefaultParams ships
+	// inbound_per_address_daily_bps at zero on purpose. Rejecting zero here
+	// would make genesis invalid.
 	for _, c := range []struct {
 		name string
 		v    uint32
@@ -316,6 +325,8 @@ func (p Params) Validate() error {
 		{"per_address_daily_bps", p.PerAddressDailyBps},
 		{"small_quota_bps", p.SmallQuotaBps},
 		{"crisis_pool_bps", p.CrisisPoolBps},
+		{"inbound_daily_cap_bps_of_pool", p.InboundDailyCapBpsOfPool},
+		{"inbound_per_address_daily_bps", p.InboundPerAddressDailyBps},
 	} {
 		if c.v > BpsDenominator {
 			return fmt.Errorf("%s must be <= %d, got %d", c.name, BpsDenominator, c.v)
@@ -336,7 +347,123 @@ func (p Params) Validate() error {
 	if !p.TierDispatchMaxFee.IsNil() && p.TierDispatchMaxFee.IsNegative() {
 		return fmt.Errorf("tier_dispatch_max_fee must not be negative")
 	}
-	return nil
+
+	// The remaining amount fields, on the same terms: negative is rejected, nil
+	// and zero are not. Every one of them postdates the original params record,
+	// so a proposal written against the older struct leaves them nil, and
+	// MsgUpdateParams replaces the whole struct -- refusing nil would turn an
+	// omitted field into a failed emergency proposal.
+	for _, c := range []struct {
+		name string
+		v    math.Int
+	}{
+		{"inbound_daily_cap", p.InboundDailyCap},
+		{"inbound_small_threshold", p.InboundSmallThreshold},
+		{"max_transfer_in", p.MaxTransferIn},
+		{"max_transfer_out", p.MaxTransferOut},
+	} {
+		if !c.v.IsNil() && c.v.IsNegative() {
+			return fmt.Errorf("%s must not be negative", c.name)
+		}
+	}
+
+	return p.ValidateInboundCeilings()
+}
+
+// intOrZero reads an amount field that may predate its own introduction.
+//
+// math.Int's zero value wraps a nil big.Int, and every comparison on one
+// panics. Params records written before a field existed unmarshal it as nil, so
+// any arithmetic over the newer fields has to go through this.
+func intOrZero(v math.Int) math.Int {
+	if v.IsNil() {
+		return math.ZeroInt()
+	}
+	return v
+}
+
+// ParamsOnlyInboundPerAddressCap is the per-address daily inbound allowance
+// these parameters imply, ignoring the migration pool.
+//
+// It is deliberately the most permissive figure the parameters can produce.
+// ResolveLimits takes min(inbound_daily_cap, pool x bps_of_pool) first, so the
+// live pool can only ever drive the real allowance below this. That makes it
+// the right bound for Params.Validate, which is a pure function of Params and
+// cannot see a balance -- and it also means passing the check here is necessary
+// but not sufficient. The pool-aware half lives in the UpdateParams handler.
+func (p Params) ParamsOnlyInboundPerAddressCap() math.Int {
+	cap := intOrZero(p.InboundDailyCap)
+	if !cap.IsPositive() || p.InboundPerAddressDailyBps == 0 {
+		return math.ZeroInt()
+	}
+	out := cap.MulRaw(int64(p.InboundPerAddressDailyBps)).QuoRaw(BpsDenominator)
+	// Matching ResolveLimits: a configured share never rounds down to zero,
+	// because a resolved zero would read as "no limit" rather than "allow
+	// almost nothing".
+	if !out.IsPositive() {
+		return math.OneInt()
+	}
+	return out
+}
+
+// ValidateInboundCeilings refuses a parameter set under which an inbound
+// transfer could be accepted by Ethereum and then never be deliverable here.
+//
+// # Why this one asymmetry matters
+//
+// Both inbound ceilings reject, but the two rejections are not equivalent:
+//
+//	per-address DAILY cap   recipient_used resets at the next day boundary, so
+//	                        the same message delivers on a later retry
+//	per-transfer ceiling    every retry meets the same wall, forever
+//
+// That would be survivable if the ERC20 stayed with its owner. It does not.
+// AtosCollateral.transferRemote takes the tokens with safeTransferFrom and only
+// then dispatches, and the contract has no cancel and no user withdrawal. So a
+// transfer above max_transfer_in leaves the ERC20 in the Ethereum vault with the
+// matching ATOS never released and no way to return either -- recoverable only
+// by a governance proposal that moves the ceiling. One such transfer, 1,500,000
+// ERC20, stuck on 2026-10-31.
+//
+// Keeping max_transfer_in at or below the per-address daily allowance removes
+// that state entirely: anything large enough to be refused per-transfer would
+// have been refused per-address first, and that refusal is retryable.
+//
+// CertiK ATO-03 states the general rule -- whatever Atoshi will refuse must be
+// refused on Ethereum before any funds move. The recipient-format case was fixed
+// then; this is the amount case, which was missed.
+func (p Params) ValidateInboundCeilings() error {
+	return CheckInboundCeilings(
+		intOrZero(p.MaxTransferIn),
+		p.ParamsOnlyInboundPerAddressCap(),
+		"inbound_daily_cap x inbound_per_address_daily_bps",
+	)
+}
+
+// CheckInboundCeilings compares a per-transfer inbound ceiling against a
+// per-address daily allowance.
+//
+// Shared by Params.Validate and the UpdateParams handler so both report the
+// same thing in the same words; they differ only in how the allowance was
+// derived, which is what `derivation` names.
+//
+// A zero on either side means that ceiling is not configured, which CheckInbound
+// reads as "no limit" (ratelimit.go, via set()). With no per-transfer ceiling
+// nothing can be permanently refused; with no per-address allowance there is no
+// retryable refusal to shelter behind. Neither case can strand funds by this
+// route, so both pass.
+func CheckInboundCeilings(maxTransferIn, inboundPerAddress math.Int, derivation string) error {
+	if !maxTransferIn.IsPositive() || !inboundPerAddress.IsPositive() {
+		return nil
+	}
+	if maxTransferIn.LTE(inboundPerAddress) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: max_transfer_in %s exceeds the per-address daily inbound allowance %s (%s); "+
+			"a transfer between the two would be refused on every retry while its ERC20 stays "+
+			"locked in the Ethereum vault with no way to return it",
+		ErrStrandableInboundCeiling, maxTransferIn, inboundPerAddress, derivation)
 }
 
 // EffectiveDestinationGas is the gas limit to declare for the Ethereum-side

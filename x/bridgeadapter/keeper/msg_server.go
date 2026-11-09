@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/atoshi-chain/atoshi/v20/x/bridgeadapter/types"
@@ -81,11 +82,87 @@ func (k msgServer) UpdateParams(goCtx context.Context, msg *types.MsgUpdateParam
 			"cannot clear a configured ism_id: carry it over or set a replacement")
 	}
 
+	// The pool-aware half of the stranding check in
+	// types.ValidateInboundCeilings.
+	//
+	// Params.Validate can only compare max_transfer_in against
+	// inbound_daily_cap x inbound_per_address_daily_bps, because it is a pure
+	// function of Params. The allowance actually enforced is
+	// min(inbound_daily_cap, pool x inbound_daily_cap_bps_of_pool) x
+	// inbound_per_address_daily_bps, so the migration pool can push it below
+	// what Validate saw. Here there is a keeper, so the real figure is
+	// available.
+	//
+	// # Why a failing check can still be accepted
+	//
+	// The pool moves on its own: bridge-ins drain it, bridge-outs refill it,
+	// and no parameter controls either. So this condition can arrive with no
+	// proposal involved and already be true when a proposal arrives. Rejecting
+	// unconditionally would then refuse the very proposal that fixes it, and
+	// the only way out of that deadlock is a chain upgrade.
+	//
+	// So the test is directional, not absolute: a proposal that widens the gap
+	// -- or creates one where there was none -- is refused, and one that
+	// narrows a gap that already exists is accepted with an event, because
+	// partial progress beats no progress. It is still wrong afterwards, and the
+	// event says so.
+	poolBalance := k.tokenomicsKeeper.MigrationPoolBalance(ctx)
+	poolTotal := k.tokenomicsKeeper.MigrationPoolTotal(ctx)
+	proposed := types.ResolveLimits(msg.Params, poolBalance, poolTotal)
+
+	if err := types.CheckInboundCeilings(
+		proposed.MaxTransferIn, proposed.InboundPerAddress, "the live migration pool",
+	); err != nil {
+		live := types.ResolveLimits(current, poolBalance, poolTotal)
+		liveGap, liveCanStrand := inboundGap(live)
+		proposedGap, _ := inboundGap(proposed)
+
+		// !liveCanStrand is the "safe today, broken tomorrow" case: the current
+		// parameters cannot strand anything, so there is no deadlock to escape
+		// and no reason to accept this.
+		if !liveCanStrand || proposedGap.LTE(liveGap) {
+			return nil, err
+		}
+
+		k.Logger(ctx).Error(
+			"accepting params that still leave inbound ceilings able to strand funds; "+
+				"the gap narrowed but is not closed",
+			"max_transfer_in", proposed.MaxTransferIn.String(),
+			"inbound_per_address", proposed.InboundPerAddress.String(),
+			"previous_gap", liveGap.String(),
+			"gap", proposedGap.String(),
+		)
+		ctx.EventManager().EmitEvent(sdk.NewEvent(
+			types.EventTypeInboundCeilingStranding,
+			sdk.NewAttribute(types.AttributeKeyMaxTransferIn, proposed.MaxTransferIn.String()),
+			sdk.NewAttribute(types.AttributeKeyInboundPerAddress, proposed.InboundPerAddress.String()),
+			sdk.NewAttribute(types.AttributeKeyPreviousGap, liveGap.String()),
+			sdk.NewAttribute(types.AttributeKeyGap, proposedGap.String()),
+		))
+	}
+
 	if err := k.SetParams(ctx, msg.Params); err != nil {
 		return nil, err
 	}
 	ctx.EventManager().EmitEvent(sdk.NewEvent(types.EventTypeUpdateParams))
 	return &types.MsgUpdateParamsResponse{}, nil
+}
+
+// inboundGap reports inbound_per_address minus max_transfer_in, and whether the
+// pair can strand funds at all.
+//
+// Negative means there is a band of amounts Ethereum accepts and this chain can
+// never deliver; the more negative, the wider the band. The bool is false when
+// either ceiling resolves to zero, which CheckInbound reads as "no limit" -- and
+// with no per-transfer ceiling, or no per-address allowance to retry against,
+// this failure mode does not exist. A false here is therefore "cannot strand",
+// not "gap of zero", and the two must not be conflated: a zero gap is the
+// tightest configuration that is still correct.
+func inboundGap(l types.Limits) (math.Int, bool) {
+	if !l.MaxTransferIn.IsPositive() || !l.InboundPerAddress.IsPositive() {
+		return math.ZeroInt(), false
+	}
+	return l.InboundPerAddress.Sub(l.MaxTransferIn), true
 }
 
 // EmergencyHalt closes the bridge from a guardian key instead of a governance
