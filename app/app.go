@@ -147,6 +147,7 @@ import (
 	v20_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_2"
 	v20_3 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_3"
 	v20_4 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_4"
+	v21_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v21_2"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -1638,6 +1639,23 @@ func (app *Atoshi) setupUpgradeHandlers() {
 			app.BridgeAdapterKeeper,
 			app.ICAHostKeeper,
 			app.EvmKeeper,
+		),
+	)
+
+	// v21.2 writes destination_gas explicitly, instantiates slash_pool,
+	// corrects TotalBridgedIn for the clawback v20.4 already performed, and
+	// pays the 2026-10-18 slashing compensation. Every step logs and continues
+	// on failure rather than aborting -- see the handler for why none of them
+	// is worth halting the chain over. The compensation runs on the mainnet
+	// chain id only; everywhere else it logs and skips, so a test network runs
+	// this same binary.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v21_2.UpgradeName,
+		v21_2.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.AccountKeeper,
+			app.BankKeeper,
+			app.BridgeAdapterKeeper,
 		),
 	)
 
