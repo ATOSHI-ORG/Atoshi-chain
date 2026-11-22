@@ -9,6 +9,7 @@ import (
 
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
+	storetypes "cosmossdk.io/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	evmostypes "github.com/atoshi-chain/atoshi/v20/types"
@@ -277,6 +278,14 @@ func (k *Keeper) ApplyMessageWithConfig(
 	stateDB := statedb.New(ctx, k, txConfig)
 	evm := k.NewEVM(ctx, msg, cfg, tracer, stateDB)
 
+	// Native supply before execution; checked against after commit. Read on an
+	// infinite gas meter so the guard costs the sender nothing and leaves gas
+	// accounting exactly as it was.
+	var supplyBefore math.Int
+	if commit {
+		supplyBefore = k.evmDenomSupply(ctx)
+	}
+
 	leftoverGas := msg.Gas()
 
 	// Allow the tracer captures the tx level events, mainly the gas consumption.
@@ -355,6 +364,19 @@ func (k *Keeper) ApplyMessageWithConfig(
 		if err := stateDB.Commit(); err != nil {
 			return nil, errorsmod.Wrap(err, "failed to commit stateDB")
 		}
+
+		// EVM execution moves the native coin; it never creates it. Every
+		// legitimate path -- transfers, precompile sends, refunds -- leaves the
+		// supply where it was or lower (a self-destruct to itself burns). The
+		// evm module mints only to settle balances in SetBalance, so a rise
+		// here means the two views of state fell out of sync and the commit
+		// paid the difference out of thin air. That is how 2026-11-22 minted
+		// ~10.6 trillion ATOS. Whatever the path, fail the tx: the error
+		// discards everything this message wrote.
+		if supplyAfter := k.evmDenomSupply(ctx); supplyAfter.GT(supplyBefore) {
+			return nil, errorsmod.Wrapf(types.ErrSupplyInflation,
+				"evm execution raised %s supply by %s", types.GetEVMCoinDenom(), supplyAfter.Sub(supplyBefore))
+		}
 	}
 
 	// calculate a minimum amount of gas to be charged to sender if GasLimit
@@ -383,4 +405,11 @@ func (k *Keeper) ApplyMessageWithConfig(
 		Logs:    types.NewLogsFromEth(stateDB.Logs()),
 		Hash:    txConfig.TxHash.Hex(),
 	}, nil
+}
+
+// evmDenomSupply returns the bank supply of the EVM coin, read on an infinite
+// gas meter so that checking it does not change what a transaction is charged.
+func (k *Keeper) evmDenomSupply(ctx sdk.Context) math.Int {
+	readCtx := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter())
+	return k.bankWrapper.GetSupply(readCtx, types.GetEVMCoinDenom()).Amount
 }

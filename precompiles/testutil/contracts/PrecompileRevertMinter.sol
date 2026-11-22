@@ -25,7 +25,7 @@ contract PrecompileRevertMinter {
         inner = new PrecompileRevertInner();
     }
 
-    function attack(address precompile, uint256 amount) external {
+    function attack(address precompile, uint256 amount) external payable {
         try inner.poke{value: amount}(precompile) {} catch {}
     }
 

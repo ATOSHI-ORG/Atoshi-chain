@@ -32,6 +32,7 @@ const (
 	codeErrInactivePrecompile
 	codeErrABIPack
 	codeErrABIUnpack
+	codeErrSupplyInflation
 )
 
 var (
@@ -88,6 +89,10 @@ var (
 
 	// ErrABIUnpack returns an error if the contract ABI unpacking fails
 	ErrABIUnpack = errorsmod.Register(ModuleName, codeErrABIUnpack, "contract ABI unpack failed")
+
+	// ErrSupplyInflation returns an error if executing a message raised the
+	// native coin supply, which no legitimate EVM path does.
+	ErrSupplyInflation = errorsmod.Register(ModuleName, codeErrSupplyInflation, "evm execution raised the native supply")
 )
 
 // NewExecErrorWithReason unpacks the revert return bytes and returns a wrapped error

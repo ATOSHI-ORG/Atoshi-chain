@@ -77,10 +77,15 @@ var _ = Describe("Reverted value transfer around a failing precompile call", fun
 		Expect(balanceOf(innerAddr)).To(Equal(math.ZeroInt()))
 		supplyBefore := supply()
 
+		// The 1 wei is not decoration. It keeps the minter dirty in the EVM
+		// journal after the inner frame reverts, so the final commit rewrites
+		// its restored balance while the cache context still credits the inner
+		// contract. Without it the desync only moves the value; with it the
+		// value is minted. The mainnet calls carried 1 ATOS for this reason.
 		passCheck := testutil.LogCheckArgs{ABIEvents: s.precompile.ABI.Events}.WithExpPass(true)
 		_, _, err := s.factory.CallContractAndCheckLogs(
 			s.keyring.GetPrivKey(0),
-			evmtypes.EvmTxArgs{To: &minterAddr, GasPrice: big.NewInt(1e9)},
+			evmtypes.EvmTxArgs{To: &minterAddr, GasPrice: big.NewInt(1e9), Amount: big.NewInt(1)},
 			factory.CallArgs{
 				ContractABI: minter.ABI,
 				MethodName:  "attack",
@@ -93,7 +98,7 @@ var _ = Describe("Reverted value transfer around a failing precompile call", fun
 
 		Expect(balanceOf(innerAddr)).To(Equal(math.ZeroInt()),
 			"the reverted transfer must not leave the value with the inner contract")
-		Expect(balanceOf(minterAddr)).To(Equal(amount),
+		Expect(balanceOf(minterAddr)).To(Equal(amount.AddRaw(1)),
 			"the reverted transfer must leave the value with the minter")
 
 		// Fees go to the fee collector, not to a burn, so the supply is flat.
@@ -113,6 +118,6 @@ var _ = Describe("Reverted value transfer around a failing precompile call", fun
 		)
 		Expect(err).To(BeNil())
 		Expect(s.network.NextBlock()).To(BeNil())
-		Expect(balanceOf(minterAddr)).To(Equal(amount))
+		Expect(balanceOf(minterAddr)).To(Equal(amount.AddRaw(1)))
 	})
 })
