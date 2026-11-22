@@ -147,6 +147,7 @@ import (
 	v20_2 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_2"
 	v20_3 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_3"
 	v20_4 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_4"
+	v20_5 "github.com/atoshi-chain/atoshi/v20/app/upgrades/v20_5"
 	srvflags "github.com/atoshi-chain/atoshi/v20/server/flags"
 	"github.com/atoshi-chain/atoshi/v20/x/erc20"
 	erc20keeper "github.com/atoshi-chain/atoshi/v20/x/erc20/keeper"
@@ -1638,6 +1639,17 @@ func (app *Atoshi) setupUpgradeHandlers() {
 			app.BridgeAdapterKeeper,
 			app.ICAHostKeeper,
 			app.EvmKeeper,
+		),
+	)
+
+	// v20.5: the response to the 2026-11-22 precompile mint and the audit
+	// after it. The fixes are code; the handler revokes the vesting grants the
+	// old tx.origin-based vesting approve could have planted.
+	app.UpgradeKeeper.SetUpgradeHandler(
+		v20_5.UpgradeName,
+		v20_5.CreateUpgradeHandler(
+			app.mm, app.configurator,
+			app.AuthzKeeper,
 		),
 	)
 
