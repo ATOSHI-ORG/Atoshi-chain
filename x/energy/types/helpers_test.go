@@ -132,3 +132,17 @@ func TestSaturatingMulU64(t *testing.T) {
 // saturatingMul from the keeper package). The TxEnergyCapacity
 // overflow tests above (Issue-11) cover the same arithmetic shape
 // in the types-package surface that IS exercised in production.
+
+func TestIsSubsidizedTx(t *testing.T) {
+	p := DefaultParams()
+	claim := "/atoshi.tokenomics.v1.MsgClaimMigrationTokens"
+	send := "/cosmos.bank.v1beta1.MsgSend"
+
+	require.True(t, p.IsSubsidizedTx([]string{claim}, MaxSubsidizedTxGas))
+	require.True(t, p.IsSubsidizedTx([]string{claim}, 1))
+	require.False(t, p.IsSubsidizedTx([]string{claim}, MaxSubsidizedTxGas+1), "over the cap")
+	require.False(t, p.IsSubsidizedTx([]string{claim, claim}, 100_000), "more than one msg")
+	require.False(t, p.IsSubsidizedTx([]string{claim, send}, 100_000), "mixed msgs")
+	require.False(t, p.IsSubsidizedTx([]string{send}, 100_000), "not whitelisted")
+	require.False(t, p.IsSubsidizedTx(nil, 100_000), "no msgs")
+}

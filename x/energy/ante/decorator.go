@@ -12,7 +12,6 @@ package ante
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 
 	"cosmossdk.io/math"
@@ -24,26 +23,6 @@ import (
 
 	"github.com/atoshi-chain/atoshi/v20/x/energy/keeper"
 )
-
-// txHashFromCtx returns the sha256 hash of the raw tx bytes carried in
-// the context, matching the canonical Cosmos tx-hash format used by
-// CometBFT (tmhash = sha256 truncated to the first 20 bytes — we keep
-// the full 32-byte digest here because the KV key only needs
-// collision-resistance, not interoperability with CometBFT's lookup).
-//
-// Returns nil when ctx.TxBytes() is empty (Simulate path, or in tests
-// that synthesize a ctx without going through BaseApp); callers MUST
-// treat that as "no marker, skip the audit Issue-1 pending-reservation
-// write" because two distinct simulated txs could otherwise collide on
-// an empty key.
-func txHashFromCtx(ctx sdk.Context) []byte {
-	bz := ctx.TxBytes()
-	if len(bz) == 0 {
-		return nil
-	}
-	sum := sha256.Sum256(bz)
-	return sum[:]
-}
 
 // FeegrantKeeper matches the SDK x/auth/ante.FeegrantKeeper interface
 // exactly so we can be passed the same instance.
@@ -82,10 +61,16 @@ const (
 // the energy keeper before falling through to fee deduction.
 //
 // Behavior:
-//   - Subsidized msg type: skip both energy and fee deduction
+//   - Subsidized tx (exactly one whitelisted msg, gas limit <=
+//     types.MaxSubsidizedTxGas): skip both energy and fee deduction
 //   - Energy module disabled: behave exactly like stock DeductFee
-//   - Otherwise: settle, consume energy up to gas_limit, deduct only
-//     the gas not covered by energy as ATOS using the standard path
+//   - Otherwise: settle, consume the fee payer's energy up to gas_limit,
+//     deduct only the gas not covered by energy as ATOS using the
+//     standard path (the fee granter, if any, pays only this ATOS part,
+//     through x/feegrant)
+//
+// Energy taken here is a fee: it is refunded (unused part only) by the
+// PostHandler when the tx succeeds, and kept in full when it fails.
 type EnergyDeductDecorator struct {
 	energyKeeper   keeper.Keeper
 	accountKeeper  AccountKeeper
@@ -135,22 +120,32 @@ func (d EnergyDeductDecorator) AnteHandle(
 		msgUrls = append(msgUrls, sdk.MsgTypeURL(m))
 	}
 
-	// Resolve the fee payer (handles --fee-granter / x/feegrant).
+	// Energy is only ever drawn from the fee PAYER -- never from the fee
+	// granter.
+	//
+	// The granter used to be the account charged for everything: when a tx
+	// named one, Consume() drained the granter's energy, and the x/feegrant
+	// allowance (UseGrantedFees) was only consulted further down, on the
+	// branch that charges ATOS. Whenever energy covered the whole gas limit
+	// that branch never ran, so any tx could name any account as granter
+	// and burn that account's energy without a grant ever existing. The
+	// granter is a third party; nothing in the tx is signed by it, and a
+	// fee grant authorizes paying *fees* in coins, not spending the
+	// granter's energy.
+	//
+	// So: energy comes from the payer (who signs the tx); the granter can
+	// only cover the ATOS shortfall, and only through UseGrantedFees below.
+	// Every later use of "whose energy was taken" -- the ctx value the
+	// PostHandler refunds against -- uses this same feePayer.
 	feePayer := sdk.AccAddress(feeTx.FeePayer())
 	feeGranter := sdk.AccAddress(feeTx.FeeGranter())
-	deductFrom := feePayer
-	if !feeGranter.Empty() {
-		// Honor the grant; allowance check happens below before any
-		// state mutation.
-		deductFrom = feeGranter
-	}
-	if deductFrom.Empty() {
-		return ctx, sdkerrors.ErrInvalidAddress.Wrap("fee payer / granter address required")
+	if feePayer.Empty() {
+		return ctx, sdkerrors.ErrInvalidAddress.Wrap("fee payer address required")
 	}
 
 	// Make sure the account exists; required for sequence + fee deduction.
-	if d.accountKeeper.GetAccount(ctx, deductFrom) == nil {
-		return ctx, sdkerrors.ErrUnknownAddress.Wrapf("fee payer account %s does not exist", deductFrom)
+	if d.accountKeeper.GetAccount(ctx, feePayer) == nil {
+		return ctx, sdkerrors.ErrUnknownAddress.Wrapf("fee payer account %s does not exist", feePayer)
 	}
 
 	// Probe energy first.
@@ -174,35 +169,29 @@ func (d EnergyDeductDecorator) AnteHandle(
 		probeGas = 1
 	}
 
-	consumed, err := d.energyKeeper.Consume(ctx, deductFrom, probeGas, isDeploy, msgUrls)
+	consumed, err := d.energyKeeper.Consume(ctx, feePayer, probeGas, isDeploy, msgUrls)
 	if err != nil {
 		return ctx, err
 	}
 
-	// Stash reserved-energy info for the PostHandler refund pass.
+	// Stash reserved-energy info for the PostHandler refund pass. The
+	// refund goes back to the account the energy was taken from: feePayer.
 	ctx = ctx.WithValue(CtxKeyEnergyReserved, consumed)
-	ctx = ctx.WithValue(CtxKeyEnergySigner, deductFrom)
+	ctx = ctx.WithValue(CtxKeyEnergySigner, feePayer)
 
-	// Audit Issue-1 (round2): persist a pending-reservation marker. The
-	// AnteHandler's writes (including the energy deduction inside
-	// Consume()) commit before runMsgs executes. If runMsgs returns an
-	// error, the cosmos-sdk BaseApp discards the msg-context state and
-	// does NOT invoke the PostHandler — so the refund call scheduled in
-	// post.go never runs, and the user's deducted energy is permanently
-	// lost. We side-step this by writing a marker here (in ante state,
-	// which IS committed) keyed by tx hash; the PostHandler deletes it
-	// on success, and EndBlocker refunds any leftover markers as
-	// failed-tx compensations. CheckTx and Simulate paths roll back
-	// before commit so marker writes there are harmless.
-	if !consumed.Free && !simulate {
-		if txHash := txHashFromCtx(ctx); len(txHash) > 0 {
-			if err := d.energyKeeper.SetPendingReservation(ctx, txHash, deductFrom, gasLimit, consumed); err != nil {
-				return ctx, err
-			}
-		}
-	}
+	// No pending-reservation marker is written any more. Energy is a fee
+	// substitute, and a failed tx pays its fee on the full gas limit -- the
+	// SDK charges the fee in ante and never refunds it when runMsgs fails.
+	// The energy reserved here therefore stays spent when the msgs fail,
+	// exactly like ATOS would: the ante write commits, the PostHandler
+	// (success-only) never runs, and nothing gives it back. The old marker
+	// existed only so EndBlocker could refund failed txs in full, which made
+	// failing txs free and let the same energy be reused every block. See
+	// keeper.EndBlocker for the cleanup of markers left in state.
 
-	// Fully subsidized → no fee at all. Set the priority and return.
+	// Fully subsidized: no fee at all. Consume only reports Free for a
+	// single whitelisted msg under types.MaxSubsidizedTxGas; anything else
+	// was charged above like a normal tx.
 	if consumed.Free {
 		return next(ctx, tx, simulate)
 	}
@@ -257,7 +246,9 @@ func (d EnergyDeductDecorator) AnteHandle(
 		return next(ctx, tx, simulate)
 	}
 
-	// Use feegrant if applicable.
+	// The ATOS shortfall is the only thing a fee granter can pay for, and
+	// only within an x/feegrant allowance it gave this payer.
+	atosPayer := feePayer
 	if !feeGranter.Empty() && !feeGranter.Equals(feePayer) {
 		if d.feegrantKeeper == nil {
 			return ctx, sdkerrors.ErrInvalidRequest.Wrap("fee grants are not enabled")
@@ -265,11 +256,12 @@ func (d EnergyDeductDecorator) AnteHandle(
 		if err := d.feegrantKeeper.UseGrantedFees(ctx, feeGranter, feePayer, chargeAtos, msgs); err != nil {
 			return ctx, err
 		}
+		atosPayer = feeGranter
 	}
 
-	// Move the shortfall ATOS from payer to fee_collector.
+	// Move the shortfall ATOS to fee_collector.
 	if err := d.bankKeeper.SendCoinsFromAccountToModule(
-		ctx, deductFrom, authtypes.FeeCollectorName, chargeAtos,
+		ctx, atosPayer, authtypes.FeeCollectorName, chargeAtos,
 	); err != nil {
 		return ctx, sdkerrors.ErrInsufficientFee.Wrapf("shortfall fee transfer: %v", err)
 	}

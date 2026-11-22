@@ -364,3 +364,32 @@ func TestConsume_AfterBalanceDrop_PreservesDelegatedCommitment(t *testing.T) {
 	require.EqualValues(t, 20_000, res.ShortfallGas,
 		"all 20k must fall through to shortfall; pre-fix this could have produced inconsistent accounting")
 }
+
+// H7 regression: a subsidized msg is free only when it is the tx's ONLY
+// msg and the gas limit is within types.MaxSubsidizedTxGas. Before the fix
+// a zero-balance account could send one MsgReportPrice with gas limit =
+// block max gas, let it fail, and fill the block for free.
+func TestConsume_SubsidyRequiresSingleMsgUnderGasCap(t *testing.T) {
+	k, ctx, _ := newKeeperForTest(t)
+	a := addr("zero-balance____________")
+	report := "/atoshi.oracle.v1.MsgReportPrice"
+
+	res, err := k.Consume(ctx, a, types.MaxSubsidizedTxGas, false, []string{report})
+	require.NoError(t, err)
+	require.True(t, res.Free, "at the cap the subsidy still applies")
+
+	res, err = k.Consume(ctx, a, 30_000_000, false, []string{report})
+	require.NoError(t, err)
+	require.False(t, res.Free, "above the cap the tx must not be free")
+	require.EqualValues(t, 30_000_000, res.ShortfallGas, "zero-energy account owes the whole limit in ATOS")
+
+	res, err = k.Consume(ctx, a, 21_000, false, []string{report, report})
+	require.NoError(t, err)
+	require.False(t, res.Free, "two subsidized msgs in one tx are not free")
+	require.EqualValues(t, 21_000, res.ShortfallGas)
+
+	// EstimateConsume (the EstimateFee query) must agree with Consume.
+	require.True(t, k.EstimateConsume(ctx, a, types.MaxSubsidizedTxGas, false, []string{report}).Free)
+	require.False(t, k.EstimateConsume(ctx, a, types.MaxSubsidizedTxGas+1, false, []string{report}).Free)
+	require.False(t, k.EstimateConsume(ctx, a, 21_000, false, []string{report, report}).Free)
+}

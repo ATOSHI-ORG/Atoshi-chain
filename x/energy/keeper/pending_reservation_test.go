@@ -1,62 +1,55 @@
 package keeper
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	"cosmossdk.io/math"
+	storetypes "cosmossdk.io/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
+
+	"github.com/atoshi-chain/atoshi/v20/x/energy/types"
 )
 
-// Audit Issue-1 (round2) regression: marker round-trips through Set →
-// Iterate → Delete with every field preserved (including the LIFO
-// DelegationConsumptions slice). The marker is the only state that
-// connects an AnteHandler reservation to an EndBlocker refund, so a
-// serialization bug here would silently re-introduce the permanent-
-// loss issue.
-func TestPendingReservation_RoundTrip(t *testing.T) {
-	k, ctx, _ := newKeeperForTest(t)
-	signer := addr("signer__________________")
-	txHash := []byte("32-byte-txhash-deterministic-fix")
-
-	res := ConsumeResult{
-		EnergyDeducted:    12_000,
-		OwnDeducted:       10_000,
-		DelegatedDeducted: 2_000,
-		DeployEnergyUsed:  0,
-		ShortfallGas:      0,
-		Free:              false,
-		DelegationConsumptions: []DelegationConsumption{
-			{DelegationID: 7, Amount: 2_000},
+// plantLegacyMarker writes a pending-reservation marker in the exact JSON
+// shape the pre-fix AnteHandler wrote, so the tests exercise the state an
+// upgraded node actually finds.
+func plantLegacyMarker(t *testing.T, k Keeper, ctx sdk.Context, txHash []byte, signer sdk.AccAddress, gasLimit uint64, res ConsumeResult) {
+	t.Helper()
+	bz, err := json.Marshal(map[string]any{
+		"signer":    signer.String(),
+		"gas_limit": gasLimit,
+		"consume_result": map[string]any{
+			"energy_deducted":    res.EnergyDeducted,
+			"own_deducted":       res.OwnDeducted,
+			"delegated_deducted": res.DelegatedDeducted,
+			"deploy_energy_used": res.DeployEnergyUsed,
+			"shortfall_gas":      res.ShortfallGas,
+			"free":               res.Free,
 		},
-	}
-	require.NoError(t, k.SetPendingReservation(ctx, txHash, signer, 50_000, res))
-
-	var seen int
-	k.IteratePendingReservations(ctx, func(gotHash []byte, gotSigner sdk.AccAddress, gotGasLimit uint64, gotRes ConsumeResult) bool {
-		seen++
-		require.Equal(t, txHash, gotHash, "tx hash must be preserved verbatim")
-		require.Equal(t, signer, gotSigner)
-		require.EqualValues(t, 50_000, gotGasLimit)
-		require.Equal(t, res, gotRes, "ConsumeResult must round-trip including DelegationConsumptions")
-		return false
 	})
-	require.Equal(t, 1, seen)
-
-	k.DeletePendingReservation(ctx, txHash)
-	seen = 0
-	k.IteratePendingReservations(ctx, func(_ []byte, _ sdk.AccAddress, _ uint64, _ ConsumeResult) bool {
-		seen++
-		return false
-	})
-	require.Equal(t, 0, seen, "delete must remove the marker")
+	require.NoError(t, err)
+	ctx.KVStore(k.storeKey).Set(types.PendingReservationKey(txHash), bz)
 }
 
-// Audit Issue-1 (round2) regression: EndBlocker refunds the FULL
-// reservation when a marker is left behind (= failed tx). Without this
-// behavior the signer permanently loses gas_limit worth of energy on
-// every failed tx — exactly what the auditor flagged.
-func TestEndBlocker_RefundsLeftoverReservation(t *testing.T) {
+func countMarkers(k Keeper, ctx sdk.Context) int {
+	it := storetypes.KVStorePrefixIterator(ctx.KVStore(k.storeKey), types.KeyPrefixPendingReservation)
+	defer it.Close()
+	n := 0
+	for ; it.Valid(); it.Next() {
+		n++
+	}
+	return n
+}
+
+// M3 regression: a failed tx keeps its energy spent. The pre-fix
+// EndBlocker found the failed tx's marker and refunded the full
+// reservation, so failing txs cost nothing and the same energy could be
+// reused every block. A marker left in state (by an older binary) must now
+// be deleted WITHOUT refund.
+func TestEndBlocker_LeftoverReservationIsNotRefunded(t *testing.T) {
 	k, ctx, bank := newKeeperForTest(t)
 	signer := addr("signer__________________")
 
@@ -65,40 +58,56 @@ func TestEndBlocker_RefundsLeftoverReservation(t *testing.T) {
 	acct.TxEnergyAccrued = 10_000
 	k.SetEnergyAccount(ctx, acct)
 
-	// Simulate the ante path: consume 10k own energy, write a marker.
+	// The ante path of a tx whose msgs then fail: energy is consumed, and
+	// (under the old binary) a marker was left behind.
 	res, err := k.Consume(ctx, signer, 10_000, false,
 		[]string{"/cosmos.bank.v1beta1.MsgSend"})
 	require.NoError(t, err)
 	require.EqualValues(t, 10_000, res.OwnDeducted)
-	require.EqualValues(t, 0, res.DelegatedDeducted)
+	require.EqualValues(t, 0, k.GetEnergyAccount(ctx, signer).TxEnergyAccrued)
+	plantLegacyMarker(t, k, ctx, []byte("simulated-failed-tx-hash--------"), signer, 10_000, res)
 
-	post := k.GetEnergyAccount(ctx, signer)
-	require.EqualValues(t, 0, post.TxEnergyAccrued, "ante drained own bucket")
-
-	txHash := []byte("simulated-failed-tx-hash--------")
-	require.NoError(t, k.SetPendingReservation(ctx, txHash, signer, 10_000, res))
-
-	// Simulate "PostHandler did NOT run" (msgs failed): marker is still
-	// present at EndBlocker time. EndBlocker must refund the full 10k.
 	k.EndBlocker(ctx)
 
-	postEnd := k.GetEnergyAccount(ctx, signer)
-	require.EqualValues(t, 10_000, postEnd.TxEnergyAccrued,
-		"audit Issue-1: leftover marker must be refunded in full at EndBlocker")
-
-	// Marker must be gone — sweeping twice should not double-refund.
-	var still int
-	k.IteratePendingReservations(ctx, func(_ []byte, _ sdk.AccAddress, _ uint64, _ ConsumeResult) bool {
-		still++
-		return false
-	})
-	require.Equal(t, 0, still, "EndBlocker must delete consumed markers")
+	require.EqualValues(t, 0, k.GetEnergyAccount(ctx, signer).TxEnergyAccrued,
+		"a failed tx's energy is a fee: EndBlocker must not give it back")
+	require.Equal(t, 0, countMarkers(k, ctx), "EndBlocker must delete leftover markers")
 }
 
-// Audit Issue-1 (round2) companion: when no markers are present (the
-// happy path where every tx in the block completed PostHandler and
-// deleted its own marker), EndBlocker must be a no-op for the user's
-// energy state.
+// Old binaries accumulated markers while EnergyEnabled was false (their
+// EndBlocker returned before sweeping). The cleanup must run regardless of
+// the flag, and must also remove values it cannot parse.
+func TestEndBlocker_PrunesLegacyMarkersEvenWhenDisabled(t *testing.T) {
+	k, ctx, _ := newKeeperForTest(t)
+	p := k.GetParams(ctx)
+	p.EnergyEnabled = false
+	require.NoError(t, k.SetParams(ctx, p))
+
+	signer := addr("signer__________________")
+	plantLegacyMarker(t, k, ctx, []byte("hash-a"), signer, 21_000, ConsumeResult{ShortfallGas: 21_000})
+	ctx.KVStore(k.storeKey).Set(types.PendingReservationKey([]byte("hash-garbage")), []byte("{not json"))
+	require.Equal(t, 2, countMarkers(k, ctx))
+
+	k.EndBlocker(ctx)
+	require.Equal(t, 0, countMarkers(k, ctx))
+}
+
+// A backlog larger than one batch drains over consecutive blocks.
+func TestEndBlocker_PrunesLegacyMarkersInBatches(t *testing.T) {
+	k, ctx, _ := newKeeperForTest(t)
+	signer := addr("signer__________________")
+	total := legacyReservationPruneBatch + 7
+	for i := 0; i < total; i++ {
+		plantLegacyMarker(t, k, ctx, []byte(fmt.Sprintf("hash-%05d", i)), signer, 1, ConsumeResult{})
+	}
+
+	k.EndBlocker(ctx)
+	require.Equal(t, 7, countMarkers(k, ctx))
+	k.EndBlocker(ctx)
+	require.Equal(t, 0, countMarkers(k, ctx))
+}
+
+// When no markers are present EndBlocker must not touch user energy.
 func TestEndBlocker_NoMarkersIsNoop(t *testing.T) {
 	k, ctx, bank := newKeeperForTest(t)
 	signer := addr("signer__________________")

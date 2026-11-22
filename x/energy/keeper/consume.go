@@ -50,7 +50,10 @@ type DelegationConsumption struct {
 // tx.GetGas()). For deploy txs the deploy bucket is consulted first.
 //
 // Order of preference:
-//  1. Subsidized whitelist → free = true, nothing consumed
+//  1. Subsidized tx (types.Params.IsSubsidizedTx: one whitelisted msg and
+//     gasNeeded <= types.MaxSubsidizedTxGas) → free = true, nothing consumed.
+//     A whitelisted msg that misses either condition is NOT free and
+//     continues down this list like any other tx.
 //  2. Module disabled → free = false, all gas → ShortfallGas
 //  3. is_deploy: drain DeployEnergyAccrued, then TxEnergyAccrued, then DelegatedInUsable
 //  4. otherwise: drain TxEnergyAccrued, then DelegatedInUsable
@@ -67,8 +70,9 @@ func (k Keeper) Consume(
 ) (ConsumeResult, error) {
 	params := k.GetParams(ctx)
 
-	// Whitelisted msg types: free, no state mutation.
-	if allSubsidized(params, msgTypeUrls) {
+	// Subsidized tx: free, no state mutation. Over the gas cap or batched
+	// with other msgs it is charged normally below -- see IsSubsidizedTx.
+	if params.IsSubsidizedTx(msgTypeUrls, gasNeeded) {
 		return ConsumeResult{Free: true}, nil
 	}
 	if !params.EnergyEnabled {
@@ -255,7 +259,7 @@ func (k Keeper) EstimateConsume(
 	ctx sdk.Context, signer sdk.AccAddress, gasNeeded uint64, isDeploy bool, msgTypeUrls []string,
 ) ConsumeResult {
 	params := k.GetParams(ctx)
-	if allSubsidized(params, msgTypeUrls) {
+	if params.IsSubsidizedTx(msgTypeUrls, gasNeeded) {
 		return ConsumeResult{Free: true}
 	}
 	if !params.EnergyEnabled {
@@ -358,16 +362,4 @@ func (k Keeper) attributeDelegatedConsumption(ctx sdk.Context, delegatee sdk.Acc
 		return attribution, fmt.Errorf("delegated_in_usable accounting drift: %d unattributed", remaining)
 	}
 	return attribution, nil
-}
-
-func allSubsidized(p types.Params, urls []string) bool {
-	if len(urls) == 0 {
-		return false
-	}
-	for _, u := range urls {
-		if !p.IsSubsidizedMsg(u) {
-			return false
-		}
-	}
-	return true
 }

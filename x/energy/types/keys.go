@@ -30,13 +30,11 @@ const (
 	prefixDelegationsByDelegator
 	prefixDelegationsByDelegatee
 	prefixNextDelegationID
-	// Audit Issue-1 (round2): per-tx energy reservation marker. Written
-	// by the AnteHandler after Consume() and deleted by the PostHandler
-	// on successful tx commit. Any marker left at end-of-block belongs
-	// to a tx whose runMsgs failed (post-handler did not run, msg state
-	// was discarded), so EndBlocker iterates and refunds the reserved
-	// amount in full — otherwise the user permanently loses energy that
-	// the chain never charged them for.
+	// Retired. Held the Audit Issue-1 (round2) per-tx reservation marker
+	// that let EndBlocker refund the energy of failed txs. Failed txs now
+	// keep their energy spent (like a fee), so nothing writes here any
+	// more; EndBlocker only deletes markers an older binary left behind.
+	// The byte stays reserved -- never reuse it for another store.
 	prefixPendingReservation
 )
 
@@ -51,9 +49,9 @@ var (
 	KeyPrefixPendingReservation   = []byte{prefixPendingReservation}
 )
 
-// PendingReservationKey indexes a pending reservation by the tx hash.
-// tx hash is 32 bytes (sha256 of raw tx bytes) so the resulting key is
-// fixed-width and safe for prefix iteration.
+// PendingReservationKey is the key a legacy reservation marker was
+// stored under (prefix + sha256 of the raw tx bytes). Only tests write
+// it now, to plant markers for the EndBlocker cleanup.
 func PendingReservationKey(txHash []byte) []byte {
 	out := make([]byte, 0, 1+len(txHash))
 	out = append(out, KeyPrefixPendingReservation...)

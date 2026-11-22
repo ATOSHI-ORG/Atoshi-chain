@@ -183,7 +183,7 @@ echo "  chain at height $HEIGHT"
 # Use a fixed gas limit (--gas auto needs the simulate gRPC path, which
 # atoshid does not expose; it returns "unknown query path"). 500k covers
 # every tx in this script.
-TX_FLAGS=( --home "$HOME_DIR" --chain-id "$CHAIN_ID" --keyring-backend "$KEYRING" --node "$NODE_RPC" --yes --gas 500000 --gas-prices "1$DENOM" --output json )
+TX_FLAGS=( --home "$HOME_DIR" --chain-id "$CHAIN_ID" --keyring-backend "$KEYRING" --node "$NODE_RPC" --yes --gas 400000 --gas-prices "1$DENOM" --output json )
 QUERY_FLAGS=( --home "$HOME_DIR" --node "$NODE_RPC" --output json )
 
 log "1) feeder reports price"

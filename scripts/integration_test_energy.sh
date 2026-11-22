@@ -188,7 +188,7 @@ QFL=( --home "$HOME_DIR" --node "$NODE_RPC" --output json )
 # returns "unknown query path: unknown request"). 500k is plenty for
 # normal sends and oracle reports; tweak per-tx if needed.
 TFL=( --home "$HOME_DIR" --chain-id "$CHAIN_ID" --keyring-backend $KEYRING --node "$NODE_RPC" --yes \
-      --gas 500000 --gas-prices "1$DENOM" --output json )
+      --gas 400000 --gas-prices "1$DENOM" --output json )
 
 # helper: query alice's bank balance in liao (string)
 bank_bal() {

@@ -16,9 +16,10 @@ import (
 // between the deploy bucket and the tx bucket adds complexity
 // without proportional value.
 //
-// The PostHandler runs only in DeliverTx; CheckTx pre-charges and
-// does not refund — but CheckTx state is rolled back, so this is
-// invisible to the user.
+// The PostHandler runs only in DeliverTx, and only for txs whose msgs
+// succeeded; CheckTx pre-charges and does not refund — but CheckTx state
+// is rolled back, so this is invisible to the user. Failed txs are not
+// refunded anywhere (see EnergyDeductDecorator).
 type EnergyRefundDecorator struct {
 	energyKeeper keeper.Keeper
 }
@@ -30,30 +31,21 @@ func NewEnergyRefundDecorator(ek keeper.Keeper) EnergyRefundDecorator {
 func (d EnergyRefundDecorator) PostHandle(
 	ctx sdk.Context, tx sdk.Tx, simulate bool, success bool, next sdk.PostHandler,
 ) (sdk.Context, error) {
-	// Audit Issue-1 (round2): Reaching PostHandler at all means runMsgs
-	// did NOT error — the cosmos-sdk BaseApp only invokes the
-	// post-handler on the success branch. So regardless of which early
-	// return we take below (no reservation stashed, fully-subsidized,
-	// gas_used >= gas_limit, etc.), the AnteHandler's pending-
-	// reservation marker MUST be deleted here. If we leave the marker,
-	// the EndBlocker sweep will incorrectly treat this successful tx
-	// as a failed one and refund the full reservation — silently
-	// gifting the user back the energy they actually consumed.
+	// The PostHandler only runs when runMsgs succeeded (BaseApp skips it
+	// on failure), so this is the success-path refund of the energy
+	// reserved beyond what the tx actually used. A failed tx never gets
+	// here and keeps its whole reservation spent -- energy is a fee
+	// substitute and a failed tx pays its fee on the full gas limit.
 	//
-	// `defer` covers every return path; the deletion is committed iff
-	// PostHandle's state changes commit, which itself only happens on
-	// successful tx finalization. Marker write was committed by ante
-	// (so it survives if a later decorator errors out), but in that
-	// case the EndBlocker treatment is still correct.
-	defer func() {
-		if txHash := txHashFromCtx(ctx); len(txHash) > 0 {
-			d.energyKeeper.DeletePendingReservation(ctx, txHash)
-		}
-	}()
-
-	// Even on tx failure we still refund — the energy was reserved
-	// optimistically; failed txs that did less work shouldn't penalize
-	// the user.
+	// The refund goes to CtxKeyEnergySigner, which the ante decorator sets
+	// to the fee payer: the only account energy is ever drawn from.
+	//
+	// The !success guard is defensive: today's BaseApp never calls a
+	// PostHandler with success=false, but if one ever did, a failed tx
+	// must not get energy back here either.
+	if !success {
+		return next(ctx, tx, simulate, success)
+	}
 	reservedV := ctx.Value(CtxKeyEnergyReserved)
 	signerV := ctx.Value(CtxKeyEnergySigner)
 	if reservedV == nil || signerV == nil {

@@ -34,6 +34,9 @@ func DefaultParams() Params {
 			// runs and try to lock some of it. Subsidizing these two
 			// messages is safe — both already require locking ATOS as
 			// collateral, which is the real anti-spam protection.
+			// The subsidy only holds within MaxSubsidizedTxGas: a
+			// delegate tx declared above it is charged energy first and
+			// can then fail for lack of energy to lend.
 			"/atoshi.energy.v1.MsgDelegateEnergy",
 			"/atoshi.energy.v1.MsgUndelegateEnergy",
 		},
@@ -91,7 +94,8 @@ func (p Params) Validate() error {
 }
 
 // IsSubsidizedMsg reports whether a Msg type URL is on the
-// "always-free" whitelist.
+// subsidized whitelist. Being on the list is necessary but not
+// sufficient for a tx to be free; see IsSubsidizedTx.
 func (p Params) IsSubsidizedMsg(typeUrl string) bool {
 	for _, t := range p.SubsidizedMsgTypeUrls {
 		if t == typeUrl {
@@ -99,6 +103,62 @@ func (p Params) IsSubsidizedMsg(typeUrl string) bool {
 		}
 	}
 	return false
+}
+
+// MaxSubsidizedTxGas is the largest gas limit a subsidized tx may declare
+// and still be free. A tx above it is not rejected; it simply loses the
+// subsidy and pays through the normal energy / ATOS path like any other tx.
+//
+// Why a cap exists at all: a free tx costs its sender nothing whether it
+// succeeds or fails, and a failed tx is still included in the block with its
+// full gas limit counted against the block. Without a cap, any account --
+// including one holding zero ATOS -- could sign a single MsgReportPrice or
+// MsgClaimMigrationTokens with gas limit = block max gas; the msg fails
+// (unauthorized feeder / bad proof), the tx still lands, and every block can
+// be filled for free.
+//
+// How the value was chosen: the real AnteHandler + msg handler + PostHandler
+// were run through app/ante/energy_fee_test.go
+// (TestSubsidizedMsgs_FitUnderTheCap) on a full app, measuring delivered gas
+// for each default subsidized msg on its success path:
+//
+//	MsgClaimMigrationTokens, Merkle proof depth 20 / 24 / 32  ~142k-164k
+//	  (depth barely matters, ~340 gas/level; the first claim on a chain
+//	  pays a one-off ~20k more)
+//	MsgDelegateEnergy (delegatee's first inbound delegation)   ~177k
+//	MsgUndelegateEnergy                                        ~118k
+//	MsgReportPrice, 0 / 60 / 180 fresh reports in the window   ~89k / ~107k / ~168k
+//	  (180 = three feeders at the documented once-a-minute cadence over
+//	  the default 1h MaxPriceAgeSeconds)
+//
+// MsgReportPrice grows by ~510 gas per report inside MaxPriceAgeSeconds,
+// because the handler re-reads the whole window for the median. The worst
+// realistic figure is ~177k; doubling it and rounding up gives 400k, which
+// also leaves room for ~600 fresh reports (ten feeders at once a minute).
+// A feeder deployment that outgrows that does not break -- its reports just
+// stop being free and are charged energy/ATOS like any other tx.
+//
+// The cap also bounds tx size for free txs: ConsumeGasForTxSize charges
+// 10 gas/byte before the energy decorator runs, so a free tx can carry at
+// most ~40 KB.
+const MaxSubsidizedTxGas uint64 = 400_000
+
+// IsSubsidizedTx reports whether a tx with the given msg type URLs and
+// declared gas limit is entirely free (no energy, no ATOS). All three must
+// hold:
+//
+//   - exactly one msg -- batching N subsidized msgs into one tx would let a
+//     single signature buy N msgs' worth of free execution, and nothing
+//     legitimate needs it;
+//   - that msg is on SubsidizedMsgTypeUrls;
+//   - gasLimit <= MaxSubsidizedTxGas.
+//
+// A tx failing any of these is not rejected -- it falls through to the
+// normal energy / ATOS path.
+func (p Params) IsSubsidizedTx(msgTypeUrls []string, gasLimit uint64) bool {
+	return len(msgTypeUrls) == 1 &&
+		gasLimit <= MaxSubsidizedTxGas &&
+		p.IsSubsidizedMsg(msgTypeUrls[0])
 }
 
 // NewEnergyAccount returns a fresh, zeroed energy account for an address.
