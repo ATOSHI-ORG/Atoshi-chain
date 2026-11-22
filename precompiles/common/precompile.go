@@ -98,6 +98,28 @@ func (p Precompile) RunSetup(
 		return sdk.Context{}, nil, s, nil, uint64(0), nil, err
 	}
 
+	// Journal the rollback point now, not on the way out.
+	//
+	// The commit above has just copied the tx's dirty EVM state -- balances
+	// included -- into the cache context. If this call then fails, the EVM
+	// reverts its own journal, but the cache context only goes back if a
+	// precompileCallChange entry is on that journal. This entry used to be added
+	// by AddJournalEntries, which every precompile calls only after its method
+	// succeeded, so any error from here on (bad calldata, failed ABI unpack, a
+	// method that errors) left the committed copy behind. A contract that sent
+	// value into a frame that called a precompile and then reverted came out
+	// with the value on both sides: the EVM restored the sender's balance, and
+	// the cache context still held the recipient's. That is how the evm module
+	// was made to mint on mainnet on 2026-11-22, doubling the amount each round.
+	//
+	// The entry has to precede everything that can fail after the commit. Its
+	// snapshot is the one taken before the commit, so reverting it discards the
+	// committed copy; the EVM journal still holds the dirty state and the next
+	// commit writes it again.
+	if err := stateDB.AddPrecompileFn(p.Address(), s.MultiStore, s.Events); err != nil {
+		return sdk.Context{}, nil, s, nil, uint64(0), nil, err
+	}
+
 	// NOTE: This is a special case where the calling transaction does not specify a function name.
 	// In this case we default to a `fallback` or `receive` function on the contract.
 
@@ -175,10 +197,12 @@ func HandleGasError(ctx sdk.Context, contract *vm.Contract, initialGas storetype
 	}
 }
 
-// AddJournalEntries adds the balanceChange (if corresponds)
-// and precompileCall entries on the stateDB journal
-// This allows to revert the call changes within an evm tx
-func (p Precompile) AddJournalEntries(stateDB *statedb.StateDB, s snapshot) error {
+// AddJournalEntries adds the balanceChange entries (if any) on the stateDB
+// journal. The precompileCall entry that rolls the cache context back is
+// added by RunSetup, before anything can fail, so it is not added again here:
+// a second entry would point at the same snapshot and only count the call
+// twice against MaxPrecompileCalls.
+func (p Precompile) AddJournalEntries(stateDB *statedb.StateDB, _ snapshot) error {
 	for _, entry := range p.journalEntries {
 		switch entry.Op {
 		case Sub:
@@ -188,10 +212,6 @@ func (p Precompile) AddJournalEntries(stateDB *statedb.StateDB, s snapshot) erro
 			// add the corresponding balance change to the journal
 			stateDB.AddBalance(entry.Account, entry.Amount)
 		}
-	}
-
-	if err := stateDB.AddPrecompileFn(p.Address(), s.MultiStore, s.Events); err != nil {
-		return err
 	}
 	return nil
 }
