@@ -56,7 +56,35 @@ func (k msgServer) CreateValidator(goCtx context.Context, msg *types.MsgCreateVa
 		return nil, err
 	}
 
+	// The chain-wide self-stake floor. The AnteHandler checks it too, to keep
+	// doomed txs out of the mempool, but only Cosmos txs pass through that
+	// decorator: the staking precompile reached this msg server directly from
+	// an EVM tx, so a validator could be created with 1 wei of self-stake.
+	if floor := k.minSelfDelegationFloor(sdk.UnwrapSDKContext(goCtx)); !floor.IsNil() && floor.IsPositive() {
+		if msg.MinSelfDelegation.IsNil() || msg.MinSelfDelegation.LT(floor) {
+			return nil, errorsmod.Wrapf(errortypes.ErrInvalidRequest,
+				"validator min_self_delegation must be at least %s, got %s", floor, msg.MinSelfDelegation)
+		}
+		if msg.Value.Amount.LT(floor) {
+			return nil, errorsmod.Wrapf(errortypes.ErrInvalidRequest,
+				"validator must self-delegate at least %s, got %s", floor, msg.Value.Amount)
+		}
+	}
+
 	return k.MsgServer.CreateValidator(goCtx, msg)
+}
+
+// EditValidator refuses to lower min_self_delegation below the chain-wide
+// floor, then relays to the Cosmos SDK. See CreateValidator for why this is
+// enforced here and not only in the AnteHandler.
+func (k msgServer) EditValidator(goCtx context.Context, msg *types.MsgEditValidator) (*types.MsgEditValidatorResponse, error) {
+	if msg.MinSelfDelegation != nil {
+		if floor := k.minSelfDelegationFloor(sdk.UnwrapSDKContext(goCtx)); !floor.IsNil() && floor.IsPositive() && msg.MinSelfDelegation.LT(floor) {
+			return nil, errorsmod.Wrapf(errortypes.ErrInvalidRequest,
+				"validator min_self_delegation must be at least %s, got %s", floor, *msg.MinSelfDelegation)
+		}
+	}
+	return k.MsgServer.EditValidator(goCtx, msg)
 }
 
 // validateDelegationAmountNotUnvested checks if the delegator is a clawback vesting account.

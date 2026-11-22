@@ -589,6 +589,12 @@ func NewAtoshi(
 		app.AtoxKeeper,
 	)
 
+	// The validator self-stake floor lives in x/tokenomics params; the staking
+	// msg server enforces it so the EVM staking precompile cannot skip it.
+	stakingKeeper.SetMinSelfDelegationSource(func(ctx sdk.Context) math.Int {
+		return app.TokenomicsKeeper.GetValidatorMinSelfDelegation(ctx)
+	})
+
 	// After atox and tokenomics: the adapter releases into the ATOX conversion
 	// pool and reads what tier judgments authorized.
 	app.BridgeAdapterKeeper = bakeeper.NewKeeper(
