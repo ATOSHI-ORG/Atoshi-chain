@@ -339,21 +339,9 @@ func (a appCreator) newApp(logger log.Logger, db dbm.DB, traceStore io.Writer, a
 		cast.ToUint32(appOpts.Get(sdkserver.FlagStateSyncSnapshotKeepRecent)),
 	)
 
-	// Setup chainId
-	chainID := cast.ToString(appOpts.Get(flags.FlagChainID))
-	if len(chainID) == 0 {
-		v := viper.New()
-		v.AddConfigPath(filepath.Join(home, "config"))
-		v.SetConfigName("client")
-		v.SetConfigType("toml")
-		if err := v.ReadInConfig(); err != nil {
-			panic(err)
-		}
-		conf := new(clientcfg.ClientConfig)
-		if err := v.Unmarshal(conf); err != nil {
-			panic(err)
-		}
-		chainID = conf.ChainID
+	chainID, err := resolveChainID(home, appOpts)
+	if err != nil {
+		panic(err)
 	}
 
 	atoshiApp := app.NewAtoshi(
@@ -397,17 +385,51 @@ func (a appCreator) appExport(
 		return servertypes.ExportedApp{}, errors.New("application home not set")
 	}
 
+	// NewAtoshi configures the EVM from the base app's chain ID and panics on an
+	// empty one ("unknown chain id"). newApp always set it; this path did not,
+	// so `atoshid export` could never run -- the one command a chain restart
+	// from exported state depends on.
+	chainID, err := resolveChainID(homePath, appOpts)
+	if err != nil {
+		return servertypes.ExportedApp{}, err
+	}
+	setChainID := baseapp.SetChainID(chainID)
+
 	if height != -1 {
-		atoshiApp = app.NewAtoshi(logger, db, traceStore, false, map[int64]bool{}, "", uint(1), appOpts, app.AtoshiAppOptions)
+		atoshiApp = app.NewAtoshi(logger, db, traceStore, false, map[int64]bool{}, "", uint(1), appOpts, app.AtoshiAppOptions, setChainID)
 
 		if err := atoshiApp.LoadHeight(height); err != nil {
 			return servertypes.ExportedApp{}, err
 		}
 	} else {
-		atoshiApp = app.NewAtoshi(logger, db, traceStore, true, map[int64]bool{}, "", uint(1), appOpts, app.AtoshiAppOptions)
+		atoshiApp = app.NewAtoshi(logger, db, traceStore, true, map[int64]bool{}, "", uint(1), appOpts, app.AtoshiAppOptions, setChainID)
 	}
 
 	return atoshiApp.ExportAppStateAndValidators(forZeroHeight, jailAllowedAddrs, modulesToExport)
+}
+
+// resolveChainID returns the --chain-id flag, falling back to the chain-id in
+// <home>/config/client.toml. Both the node and export need it before the app is
+// built.
+func resolveChainID(home string, appOpts servertypes.AppOptions) (string, error) {
+	if chainID := cast.ToString(appOpts.Get(flags.FlagChainID)); chainID != "" {
+		return chainID, nil
+	}
+	v := viper.New()
+	v.AddConfigPath(filepath.Join(home, "config"))
+	v.SetConfigName("client")
+	v.SetConfigType("toml")
+	if err := v.ReadInConfig(); err != nil {
+		return "", err
+	}
+	conf := new(clientcfg.ClientConfig)
+	if err := v.Unmarshal(conf); err != nil {
+		return "", err
+	}
+	if conf.ChainID == "" {
+		return "", errors.New("chain-id not set: pass --chain-id or set it in config/client.toml")
+	}
+	return conf.ChainID, nil
 }
 
 // initTendermintConfig helps to override default Tendermint Config values.
