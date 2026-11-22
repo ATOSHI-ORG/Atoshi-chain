@@ -168,3 +168,8 @@ func isAddrIncluded(addr common.Address, strAddrs []string) bool {
 	}
 	return false
 }
+
+// MaxAutoRegisteredDynamicPrecompiles caps how many dynamic precompiles may
+// exist before an incoming IBC coin stops getting one registered for it
+// automatically. Governance registration is not capped.
+const MaxAutoRegisteredDynamicPrecompiles = 100

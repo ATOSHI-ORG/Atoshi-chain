@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	errorsmod "cosmossdk.io/errors"
-	storetypes "cosmossdk.io/store/types"
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	errortypes "github.com/cosmos/cosmos-sdk/types/errors"
@@ -52,10 +51,9 @@ func (k Keeper) OnRecvPacket(
 		return channeltypes.NewErrorAcknowledgement(err)
 	}
 
-	// use a zero gas config to avoid extra costs for the relayers
-	ctx = ctx.
-		WithKVGasConfig(storetypes.GasConfig{}).
-		WithTransientKVGasConfig(storetypes.GasConfig{})
+	// KV access here is metered like any other. It used to run on a zero gas
+	// config to spare relayers, which let anyone with an IBC channel register
+	// dynamic precompiles for free (cosmos/evm #968, #1103).
 
 	sender, recipient, _, _, err := ibc.GetTransferSenderRecipient(data)
 	if err != nil {
@@ -114,6 +112,14 @@ func (k Keeper) OnRecvPacket(
 	// If the coin denom starts with `factory/` then it is a token factory coin, and we should not convert it
 	// NOTE: Check https://docs.osmosis.zone/osmosis-core/modules/tokenfactory/ for more information
 	case !found && strings.HasPrefix(coin.Denom, "ibc/") && ibc.IsBaseDenomFromSourceChain(data.Denom):
+		// Past the cap the coin is still received, just without an ERC20
+		// extension; governance can register one. Every EVM CALL scans the
+		// dynamic precompile list, and IBC clients, connections and channels
+		// are permissionless, so without a cap anyone could grow that list one
+		// denom per packet and slow every EVM call on the chain.
+		if len(k.GetParams(ctx).DynamicPrecompiles) >= types.MaxAutoRegisteredDynamicPrecompiles {
+			return ack
+		}
 		tokenPair, err := k.RegisterERC20Extension(ctx, coin.Denom)
 		if err != nil {
 			return channeltypes.NewErrorAcknowledgement(err)
@@ -210,11 +216,6 @@ func (k Keeper) ConvertCoinToERC20FromPacket(ctx sdk.Context, data transfertypes
 
 	// Case 2. if pair is native ERC20 -> unescrow
 	case pair.IsNativeERC20():
-		// use a zero gas config to avoid extra costs for the relayers
-		ctx = ctx.
-			WithKVGasConfig(storetypes.GasConfig{}).
-			WithTransientKVGasConfig(storetypes.GasConfig{})
-
 		params := k.GetParams(ctx)
 		if !params.EnableErc20 || !k.IsDenomRegistered(ctx, coin.Denom) {
 			// no-op, ERC20s are disabled or the denom is not registered

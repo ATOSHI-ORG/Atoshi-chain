@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/hashicorp/go-metrics"
 
-	storetypes "cosmossdk.io/store/types"
 	"github.com/cosmos/cosmos-sdk/telemetry"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -29,20 +28,8 @@ var _ types.MsgServer = Keeper{}
 func (k Keeper) Transfer(goCtx context.Context, msg *types.MsgTransfer) (*types.MsgTransferResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
-	// Temporarily save the KV and transient KV gas config. To avoid extra costs for relayers
-	// these two gas config are replaced with empty one and should be restored before exiting this function.
-	kvGasCfg := ctx.KVGasConfig()
-	transientKVGasCfg := ctx.TransientKVGasConfig()
-	ctx = ctx.
-		WithKVGasConfig(storetypes.GasConfig{}).
-		WithTransientKVGasConfig(storetypes.GasConfig{})
-
-	defer func() {
-		// Return the KV gas config to initial values
-		ctx = ctx.
-			WithKVGasConfig(kvGasCfg).
-			WithTransientKVGasConfig(transientKVGasCfg)
-	}()
+	// KV access is metered normally. A zero gas config here let anyone write
+	// packet commitments for free (cosmos/evm #968).
 
 	// use native denom or contract address
 	denom := strings.TrimPrefix(msg.Token.Denom, erc20types.ModuleName+"/")
