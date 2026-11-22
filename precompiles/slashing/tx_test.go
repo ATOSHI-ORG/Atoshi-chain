@@ -16,8 +16,13 @@ import (
 
 func (s *PrecompileTestSuite) TestUnjail() {
 	method := s.precompile.Methods[slashing.UnjailMethod]
+	// unknownAddr is used as both the caller and the validator argument of the
+	// "validator not found" case, so the call passes the caller check and
+	// reaches the staking lookup.
+	unknownAddr := utiltx.GenerateAddress()
 	testCases := []struct {
 		name        string
+		caller      func() common.Address // defaults to keyring account 0
 		malleate    func() []interface{}
 		postCheck   func()
 		gas         uint64
@@ -26,6 +31,7 @@ func (s *PrecompileTestSuite) TestUnjail() {
 	}{
 		{
 			"fail - empty input args",
+			nil,
 			func() []interface{} {
 				return []interface{}{}
 			},
@@ -36,6 +42,7 @@ func (s *PrecompileTestSuite) TestUnjail() {
 		},
 		{
 			"fail - invalid validator address",
+			nil,
 			func() []interface{} {
 				return []interface{}{
 					"",
@@ -47,7 +54,8 @@ func (s *PrecompileTestSuite) TestUnjail() {
 			"invalid validator hex address",
 		},
 		{
-			"fail - invalid validator address (empty address)",
+			"fail - invalid validator address (empty address) is rejected as a different caller",
+			nil,
 			func() []interface{} {
 				return []interface{}{
 					common.Address{},
@@ -56,13 +64,14 @@ func (s *PrecompileTestSuite) TestUnjail() {
 			func() {},
 			200000,
 			true,
-			"validator does not exist",
+			"unjail must be called by the validator",
 		},
 		{
-			"fail - validator not found",
+			"fail - validator not found (called by its own address)",
+			func() common.Address { return unknownAddr },
 			func() []interface{} {
 				return []interface{}{
-					utiltx.GenerateAddress(),
+					unknownAddr,
 				}
 			},
 			func() {},
@@ -72,6 +81,7 @@ func (s *PrecompileTestSuite) TestUnjail() {
 		},
 		{
 			"fail - validator not jailed",
+			nil,
 			func() []interface{} {
 				return []interface{}{
 					s.keyring.GetAddr(0),
@@ -83,7 +93,27 @@ func (s *PrecompileTestSuite) TestUnjail() {
 			"validator not jailed",
 		},
 		{
+			"fail - jailed validator cannot be unjailed by another account",
+			func() common.Address { return s.keyring.GetAddr(1) },
+			func() []interface{} {
+				validator, err := s.network.App.StakingKeeper.GetValidator(s.network.GetContext(), sdk.ValAddress(s.keyring.GetAccAddr(0)))
+				s.Require().NoError(err)
+				valConsAddr, err := validator.GetConsAddr()
+				s.Require().NoError(err)
+				s.Require().NoError(s.network.App.SlashingKeeper.Jail(s.network.GetContext(), valConsAddr))
+
+				return []interface{}{
+					s.keyring.GetAddr(0),
+				}
+			},
+			func() {},
+			200000,
+			true,
+			"unjail must be called by the validator",
+		},
+		{
 			"success - validator unjailed",
+			nil,
 			func() []interface{} {
 				validator, err := s.network.App.StakingKeeper.GetValidator(s.network.GetContext(), sdk.ValAddress(s.keyring.GetAccAddr(0)))
 				s.Require().NoError(err)
@@ -119,18 +149,30 @@ func (s *PrecompileTestSuite) TestUnjail() {
 		s.Run(tc.name, func() {
 			s.SetupTest()
 
+			caller := s.keyring.GetAddr(0)
+			if tc.caller != nil {
+				caller = tc.caller()
+			}
+			args := tc.malleate()
+
 			contract, ctx := testutil.NewPrecompileContract(
 				s.T(),
 				s.network.GetContext(),
-				s.keyring.GetAddr(0),
+				caller,
 				s.precompile,
 				tc.gas,
 			)
 
-			res, err := s.precompile.Unjail(ctx, &method, s.network.GetStateDB(), contract, tc.malleate())
+			res, err := s.precompile.Unjail(ctx, &method, s.network.GetStateDB(), contract, args)
 
 			if tc.expError {
 				s.Require().ErrorContains(err, tc.errContains)
+				if tc.caller != nil && tc.errContains == "unjail must be called by the validator" {
+					// the validator must still be jailed
+					val, err := s.network.App.StakingKeeper.GetValidator(s.network.GetContext(), sdk.ValAddress(s.keyring.GetAddr(0).Bytes()))
+					s.Require().NoError(err)
+					s.Require().True(val.IsJailed(), "validator must stay jailed after a rejected unjail")
+				}
 			} else {
 				s.Require().NoError(err)
 				s.Require().Equal(cmn.TrueValue, res)

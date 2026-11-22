@@ -574,5 +574,68 @@ contract StakingCaller {
 
         staking.STAKING_CONTRACT.delegate(msg.sender, _validatorAddr, _amount);
     }
+
+    // ----------------------------------------------------------------------------------
+    // The functions below are the approve-free counterparts of testDelegateIncrementCounter,
+    // approveDepositAndDelegate*, and callERC20AndDelegate. A contract may no longer call the
+    // staking precompile's approve/revoke/increaseAllowance/decreaseAllowance (they must be
+    // called directly by the transaction signer), so the approval is now made by the signer
+    // directly against the precompile before calling these.
+    // ----------------------------------------------------------------------------------
+
+    /// @dev Delegates the contract's own balance -- including any value deposited with this
+    /// call -- and changes EVM state (counter) in the same call. Requires a prior direct
+    /// approval from tx.origin to this contract.
+    /// @param _validatorAddr Address of the validator to delegate to
+    /// @param _amount Amount to delegate
+    function delegateAndIncrementCounter(
+        string memory _validatorAddr,
+        uint256 _amount
+    ) public payable {
+        staking.STAKING_CONTRACT.delegate(
+            address(this),
+            _validatorAddr,
+            _amount
+        );
+        counter += 1;
+    }
+
+    /// @dev Is supposed to fail. Requires a prior direct approval from tx.origin to this contract.
+    /// If _exceed is true, the precompile call fails because the amount to delegate is higher
+    /// than the deposit (and the approved amount). Otherwise the custom logic after the precompile
+    /// call fails, because the deposit was already spent by the delegation.
+    function depositDelegateAndFail(
+        string memory _validatorAddr,
+        bool _exceed
+    ) public payable {
+        staking.STAKING_CONTRACT.delegate(
+            address(this),
+            _validatorAddr,
+            _exceed ? msg.value + 1 : msg.value
+        );
+        payable(msg.sender).transfer(msg.value);
+    }
+
+    /// @dev Same as callERC20AndDelegate without the approval: transfers ERC20 tokens to
+    /// msg.sender and delegates on behalf of msg.sender (== tx.origin). Requires a prior direct
+    /// approval from tx.origin to this contract.
+    /// @param _contract Address of the ERC20 to call
+    /// @param _validatorAddr Address of the validator to delegate to
+    function callERC20AndDelegateWithoutApproval(
+        address _contract,
+        string memory _validatorAddr,
+        uint256 _amount
+    ) public {
+        (bool success, ) = _contract.call(
+            abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                msg.sender,
+                _amount
+            )
+        );
+        require(success, "transfer failed");
+
+        staking.STAKING_CONTRACT.delegate(msg.sender, _validatorAddr, _amount);
+    }
 }
 

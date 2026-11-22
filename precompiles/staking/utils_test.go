@@ -202,15 +202,36 @@ func (s *PrecompileTestSuite) SetupApproval(
 }
 
 // SetupApprovalWithContractCalls is a helper function used to setup the allowance for the given spender.
+//
+// The approval is sent DIRECTLY from the granter's EOA to the staking precompile:
+// approve/revoke/increaseAllowance/decreaseAllowance may only be called by the
+// transaction signer itself (cmn.RequireDirectCall), so a contract can no longer
+// set up a grant on behalf of tx.origin. The approvalArgs keep the contract's
+// testApprove(grantee, msgTypes, amount) layout so the callers stay unchanged;
+// only the grantee, message types and amount are taken from them. txArgs.To is
+// the contract the grant is for, and its gas limit (if any) is reused.
 func (s *PrecompileTestSuite) SetupApprovalWithContractCalls(
 	granter testkeyring.Key,
 	txArgs evmtypes.EvmTxArgs,
 	approvalArgs factory.CallArgs,
 ) {
+	grantee, ok := approvalArgs.Args[0].(common.Address)
+	Expect(ok).To(BeTrue(), "failed to convert grantee to common.Address")
 	msgTypes, ok := approvalArgs.Args[1].([]string)
 	Expect(ok).To(BeTrue(), "failed to convert msgTypes to []string")
 	expAmount, ok := approvalArgs.Args[2].(*big.Int)
 	Expect(ok).To(BeTrue(), "failed to convert amount to big.Int")
+
+	precompileAddr := s.precompile.Address()
+	directTxArgs := evmtypes.EvmTxArgs{
+		To:       &precompileAddr,
+		GasLimit: txArgs.GasLimit,
+	}
+	directApproveArgs := factory.CallArgs{
+		ContractABI: s.precompile.ABI,
+		MethodName:  authorization.ApproveMethod,
+		Args:        []interface{}{grantee, expAmount, msgTypes},
+	}
 
 	logCheckArgs := testutil.LogCheckArgs{
 		ABIEvents: s.precompile.Events,
@@ -220,8 +241,8 @@ func (s *PrecompileTestSuite) SetupApprovalWithContractCalls(
 
 	_, _, err := s.factory.CallContractAndCheckLogs(
 		granter.Priv,
-		txArgs,
-		approvalArgs,
+		directTxArgs,
+		directApproveArgs,
 		logCheckArgs,
 	)
 	Expect(err).To(BeNil(), "error while approving: %v", err)
@@ -240,7 +261,7 @@ func (s *PrecompileTestSuite) SetupApprovalWithContractCalls(
 		case staking.CancelUnbondingDelegationMsg:
 			expectedAuthz = staking.CancelUnbondingDelegationAuthz
 		}
-		authz, expirationTime, err := CheckAuthorization(s.grpcHandler, s.network.GetEncodingConfig().InterfaceRegistry, expectedAuthz, *txArgs.To, granter.Addr)
+		authz, expirationTime, err := CheckAuthorization(s.grpcHandler, s.network.GetEncodingConfig().InterfaceRegistry, expectedAuthz, grantee, granter.Addr)
 		Expect(err).To(BeNil())
 		Expect(authz).ToNot(BeNil(), "expected authorization to be set")
 		Expect(authz.MaxTokens.Amount).To(Equal(math.NewInt(expAmount.Int64())), "expected different allowance")

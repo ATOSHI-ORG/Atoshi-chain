@@ -57,8 +57,11 @@ func (p *Precompile) ClaimRewards(
 
 	// If the contract is the delegator, we don't need an origin check
 	// Otherwise check if the origin matches the delegator address
-	isContractDelegator := (contract.CallerAddress == delegatorAddr) && (origin != delegatorAddr)
-	if !isContractDelegator && origin != delegatorAddr {
+	// Only the account itself, as the direct caller, may act for it. This
+	// used to accept any caller whenever the account was tx.origin, so any
+	// contract a user called could act for the user without approval
+	// (cosmos/evm #183, #373).
+	if contract.CallerAddress != delegatorAddr {
 		return nil, fmt.Errorf(cmn.ErrDelegatorDifferentOrigin, origin.String(), delegatorAddr.String())
 	}
 
@@ -123,8 +126,11 @@ func (p Precompile) SetWithdrawAddress(
 
 	// If the contract is the delegator, we don't need an origin check
 	// Otherwise check if the origin matches the delegator address
-	isContractDelegator := (contract.CallerAddress == delegatorHexAddr) && (origin != delegatorHexAddr)
-	if !isContractDelegator && origin != delegatorHexAddr {
+	// Only the account itself, as the direct caller, may act for it. This
+	// used to accept any caller whenever the account was tx.origin, so any
+	// contract a user called could act for the user without approval
+	// (cosmos/evm #183, #373).
+	if contract.CallerAddress != delegatorHexAddr {
 		return nil, fmt.Errorf(cmn.ErrDelegatorDifferentOrigin, origin.String(), delegatorHexAddr.String())
 	}
 
@@ -156,8 +162,11 @@ func (p *Precompile) WithdrawDelegatorRewards(
 
 	// If the contract is the delegator, we don't need an origin check
 	// Otherwise check if the origin matches the delegator address
-	isContractDelegator := (contract.CallerAddress == delegatorHexAddr) && (origin != delegatorHexAddr)
-	if !isContractDelegator && origin != delegatorHexAddr {
+	// Only the account itself, as the direct caller, may act for it. This
+	// used to accept any caller whenever the account was tx.origin, so any
+	// contract a user called could act for the user without approval
+	// (cosmos/evm #183, #373).
+	if contract.CallerAddress != delegatorHexAddr {
 		return nil, fmt.Errorf(cmn.ErrDelegatorDifferentOrigin, origin.String(), delegatorHexAddr.String())
 	}
 
@@ -206,8 +215,11 @@ func (p *Precompile) WithdrawValidatorCommission(
 
 	// If the contract is the validator, we don't need an origin check
 	// Otherwise check if the origin matches the validator address
-	isContractValidator := contract.CallerAddress == validatorHexAddr && origin != validatorHexAddr
-	if !isContractValidator && origin != validatorHexAddr {
+	// Only the account itself, as the direct caller, may act for it. This
+	// used to accept any caller whenever the account was tx.origin, so any
+	// contract a user called could act for the user without approval
+	// (cosmos/evm #183, #373).
+	if contract.CallerAddress != validatorHexAddr {
 		return nil, fmt.Errorf(cmn.ErrDelegatorDifferentOrigin, origin.String(), validatorHexAddr.String())
 	}
 
@@ -256,8 +268,11 @@ func (p *Precompile) FundCommunityPool(
 
 	// If the contract is the depositor, we don't need an origin check
 	// Otherwise check if the origin matches the depositor address
-	isContractDepositor := contract.CallerAddress == depositorHexAddr && origin != depositorHexAddr
-	if !isContractDepositor && origin != depositorHexAddr {
+	// Only the account itself, as the direct caller, may act for it. This
+	// used to accept any caller whenever the account was tx.origin, so any
+	// contract a user called could act for the user without approval
+	// (cosmos/evm #183, #373).
+	if contract.CallerAddress != depositorHexAddr {
 		return nil, fmt.Errorf(cmn.ErrSpenderDifferentOrigin, origin.String(), depositorHexAddr.String())
 	}
 

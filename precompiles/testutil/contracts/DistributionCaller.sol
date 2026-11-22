@@ -63,6 +63,32 @@ contract DistributionCaller {
         return coins;
     }
 
+    /// @dev Withdraws this contract's own delegation rewards, sending 15 wei to
+    /// `_recipient` before and/or after the precompile call. The contract acts
+    /// for itself, so no origin check applies.
+    function testWithdrawDelegatorRewardsFromContractWithTransfer(
+        address payable _recipient,
+        string memory _valAddr,
+        bool _before,
+        bool _after
+    ) public returns (types.Coin[] memory coins) {
+        if (_before) {
+            counter++;
+            (bool sent, ) = _recipient.call{value: 15}("");
+            require(sent, "Failed to send Ether to recipient");
+        }
+        coins = distribution.DISTRIBUTION_CONTRACT.withdrawDelegatorRewards(
+            address(this),
+            _valAddr
+        );
+        if (_after) {
+            counter++;
+            (bool sent, ) = _recipient.call{value: 15}("");
+            require(sent, "Failed to send Ether to recipient");
+        }
+        return coins;
+    }
+
     function revertWithdrawRewardsAndTransfer(
         address payable _delAddr,
         address payable _withdrawer,
@@ -225,19 +251,15 @@ contract DistributionCaller {
     }
 
     /// @dev This function calls the staking precompile's delegate method.
+    /// The staking precompile requires a DELEGATE grant from tx.origin to this
+    /// contract. Approvals may only be made by tx.origin calling the staking
+    /// precompile directly, so the caller has to set it up before this call.
     /// @param _validatorAddr The validator address to delegate to.
     /// @param _amount The amount to delegate.
     function testDelegateFromContract(
         string memory _validatorAddr,
         uint256 _amount
     ) public {
-        // Create approval
-        bool success = staking.STAKING_CONTRACT.approve(
-            address(this),
-            _amount,
-            delegateMethod
-        );
-        require(success, "Failed to approve staking methods");
         staking.STAKING_CONTRACT.delegate(
             address(this),
             _validatorAddr,

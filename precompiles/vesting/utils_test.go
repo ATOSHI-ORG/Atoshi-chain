@@ -178,3 +178,25 @@ func mergeEventMaps(map1, map2 map[string]abi.Event) map[string]abi.Event {
 
 	return mergedMap
 }
+
+// ExpectContractActingForOriginRejected checks that a rejected call left no trace: the
+// vesting account has no schedule and every given address holds its expected balance.
+func (s *PrecompileTestSuite) ExpectContractActingForOriginRejected(vestingAddr common.Address, addrs []sdk.AccAddress, expBalances []math.Int) {
+	vestingAcc := s.GetVestingAccount(vestingAddr)
+	Expect(vestingAcc.LockupPeriods).To(BeNil(), "vesting account should not have a lockup period")
+	Expect(vestingAcc.VestingPeriods).To(BeNil(), "vesting account should not have a vesting period")
+
+	balances := s.GetBondBalances(addrs...)
+	for i, bal := range balances {
+		Expect(bal).To(Equal(expBalances[i]), "unexpected balance for %s", addrs[i])
+	}
+}
+
+// MakeVestingCallerTheFunder hands the vesting account to the vesting caller contract,
+// so the contract can call the precompile as the funder itself.
+func (s *PrecompileTestSuite) MakeVestingCallerTheFunder(vestingAcc sdk.AccAddress) {
+	err := s.factory.UpdateVestingFunder(funderKey.Priv, sdk.AccAddress(vestingCallerAddr.Bytes()), vestingAcc)
+	Expect(err).ToNot(HaveOccurred(), "error while updating the vesting funder")
+	Expect(s.network.NextBlock()).To(BeNil())
+	s.ExpectVestingFunder(common.BytesToAddress(vestingAcc.Bytes()), vestingCallerAddr)
+}

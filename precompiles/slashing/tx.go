@@ -28,7 +28,7 @@ func (p Precompile) Unjail(
 	ctx sdk.Context,
 	method *abi.Method,
 	stateDB vm.StateDB,
-	_ *vm.Contract,
+	contract *vm.Contract,
 	args []interface{},
 ) ([]byte, error) {
 	if len(args) != 1 {
@@ -38,6 +38,13 @@ func (p Precompile) Unjail(
 	validatorAddress, ok := args[0].(common.Address)
 	if !ok {
 		return nil, fmt.Errorf("invalid validator hex address")
+	}
+
+	// Only the validator's own account may unjail it (cosmos/evm #183). There
+	// was no check at all: anyone could unjail a validator that was still
+	// down, getting it jailed and slashed again at its delegators' expense.
+	if contract.CallerAddress != validatorAddress {
+		return nil, fmt.Errorf("unjail must be called by the validator %s, not %s", validatorAddress, contract.CallerAddress)
 	}
 
 	msg := &types.MsgUnjail{

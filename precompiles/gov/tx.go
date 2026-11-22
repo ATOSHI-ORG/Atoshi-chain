@@ -38,8 +38,11 @@ func (p Precompile) Vote(
 
 	// If the contract is the voter, we don't need an origin check
 	// Otherwise check if the origin matches the voter address
-	isContractVoter := contract.CallerAddress == voterHexAddr && contract.CallerAddress != origin
-	if !isContractVoter && origin != voterHexAddr {
+	// Only the account itself, as the direct caller, may act for it. This
+	// used to accept any caller whenever the account was tx.origin, so any
+	// contract a user called could act for the user without approval
+	// (cosmos/evm #183, #373).
+	if contract.CallerAddress != voterHexAddr {
 		return nil, fmt.Errorf(ErrDifferentOrigin, origin.String(), voterHexAddr.String())
 	}
 
@@ -71,8 +74,11 @@ func (p Precompile) VoteWeighted(
 
 	// If the contract is the voter, we don't need an origin check
 	// Otherwise check if the origin matches the voter address
-	isContractVoter := contract.CallerAddress == voterHexAddr && contract.CallerAddress != origin
-	if !isContractVoter && origin != voterHexAddr {
+	// Only the account itself, as the direct caller, may act for it. This
+	// used to accept any caller whenever the account was tx.origin, so any
+	// contract a user called could act for the user without approval
+	// (cosmos/evm #183, #373).
+	if contract.CallerAddress != voterHexAddr {
 		return nil, fmt.Errorf(ErrDifferentOrigin, origin.String(), voterHexAddr.String())
 	}
 

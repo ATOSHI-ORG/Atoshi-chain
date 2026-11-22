@@ -2019,8 +2019,6 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 		stakingCallerTwoContract evmtypes.CompiledContract
 		stakingReverterContract  evmtypes.CompiledContract
 
-		// approvalCheck is a configuration for the log checker to see if an approval event was emitted.
-		approvalCheck testutil.LogCheckArgs
 		// execRevertedCheck defines the default log checking arguments which include the
 		// standard revert message
 		execRevertedCheck testutil.LogCheckArgs
@@ -2116,7 +2114,6 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 		}
 		execRevertedCheck = defaultLogCheck.WithErrContains(vm.ErrExecutionReverted.Error())
 		passCheck = defaultLogCheck.WithExpPass(true)
-		approvalCheck = passCheck.WithExpEvents(authorization.EventTypeApproval)
 	})
 
 	Describe("when the precompile is not enabled in the EVM params", func() {
@@ -2159,18 +2156,36 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 	})
 
 	Context("approving methods", func() {
+		// approve may only be called directly by the transaction signer
+		// (cmn.RequireDirectCall). Called from a contract, any contract a user
+		// interacted with could grant itself a StakeAuthorization over the
+		// user's stake, so every contract call to approve must now fail and
+		// leave the granter's authorizations untouched. The direct EOA flow is
+		// covered by "Calling staking precompile directly" and by
+		// SetupApprovalWithContractCalls, which now approves directly.
 		Context("with valid input", func() {
-			It("should approve one method", func() {
+			It("should fail when a contract calls approve for one method", func() {
 				granter := s.keyring.GetKey(0)
 
 				approveCallArgs.Args = []interface{}{
 					contractAddr, []string{staking.DelegateMsg}, big.NewInt(1e18),
 				}
 
-				s.SetupApprovalWithContractCalls(granter, txArgs, approveCallArgs)
+				_, _, err = s.factory.CallContractAndCheckLogs(
+					granter.Priv,
+					txArgs, approveCallArgs,
+					execRevertedCheck,
+				)
+				Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
+				Expect(s.network.NextBlock()).To(BeNil())
+
+				// no authorization must have been created
+				allAuthz, err := s.grpcHandler.GetAuthorizations(sdk.AccAddress(contractAddr.Bytes()).String(), granter.AccAddr.String())
+				Expect(err).To(BeNil(), "error while reading authorizations")
+				Expect(allAuthz).To(HaveLen(0), "expected no authorizations")
 			})
 
-			It("should approve all methods", func() {
+			It("should fail when a contract calls approve for all methods", func() {
 				granter := s.keyring.GetKey(0)
 
 				approveCallArgs.Args = []interface{}{
@@ -2179,40 +2194,51 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 					big.NewInt(1e18),
 				}
 				txArgs.GasLimit = 1e8
-				s.SetupApprovalWithContractCalls(granter, txArgs, approveCallArgs)
+
+				_, _, err = s.factory.CallContractAndCheckLogs(
+					granter.Priv,
+					txArgs, approveCallArgs,
+					execRevertedCheck,
+				)
+				Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
+				Expect(s.network.NextBlock()).To(BeNil())
+
+				allAuthz, err := s.grpcHandler.GetAuthorizations(sdk.AccAddress(contractAddr.Bytes()).String(), granter.AccAddr.String())
+				Expect(err).To(BeNil(), "error while reading authorizations")
+				Expect(allAuthz).To(HaveLen(0), "expected no authorizations")
 			})
 
-			It("should update a previous approval", func() {
+			It("should not let a contract update a previous direct approval", func() {
 				granter := s.keyring.GetKey(0)
 
+				// direct approval by the granter's EOA
 				approveCallArgs.Args = []interface{}{
 					contractAddr, []string{staking.DelegateMsg}, big.NewInt(1e18),
 				}
-
 				s.SetupApprovalWithContractCalls(granter, txArgs, approveCallArgs)
 
-				// update approval
+				// try to update the approval through the contract
 				approveCallArgs.Args = []interface{}{
 					contractAddr, []string{staking.DelegateMsg}, big.NewInt(2e18),
 				}
 				_, _, err = s.factory.CallContractAndCheckLogs(
 					granter.Priv,
 					txArgs, approveCallArgs,
-					approvalCheck,
+					execRevertedCheck,
 				)
 				Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
 				Expect(s.network.NextBlock()).To(BeNil())
 
-				// check approvals
+				// the approval must be unchanged
 				authorization, expirationTime, err := CheckAuthorization(s.grpcHandler, s.network.GetEncodingConfig().InterfaceRegistry, staking.DelegateAuthz, contractAddr, granter.Addr)
 				Expect(err).To(BeNil())
 				Expect(authorization).ToNot(BeNil(), "expected authorization to not be nil")
 				Expect(expirationTime).ToNot(BeNil(), "expected expiration time to not be nil")
 				Expect(authorization.MsgTypeURL()).To(Equal(staking.DelegateMsg), "expected authorization msg type url to be %s", staking.DelegateMsg)
-				Expect(authorization.MaxTokens.Amount).To(Equal(math.NewInt(2e18)), "expected different max tokens after updated approval")
+				Expect(authorization.MaxTokens.Amount).To(Equal(math.NewInt(1e18)), "expected unchanged max tokens")
 			})
 
-			It("should remove approval when setting amount to zero", func() {
+			It("should not let a contract remove an approval by setting amount to zero", func() {
 				granter := s.keyring.GetKey(0)
 
 				approveCallArgs.Args = []interface{}{
@@ -2224,7 +2250,7 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 				// check approvals pre-removal
 				allAuthz, err := s.grpcHandler.GetAuthorizations(sdk.AccAddress(contractAddr.Bytes()).String(), granter.AccAddr.String())
 				Expect(err).To(BeNil(), "error while reading authorizations")
-				Expect(allAuthz).To(HaveLen(1), "expected no authorizations")
+				Expect(allAuthz).To(HaveLen(1), "expected one authorization")
 
 				approveCallArgs.Args = []interface{}{
 					contractAddr, []string{staking.DelegateMsg}, big.NewInt(0),
@@ -2233,15 +2259,15 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 				_, _, err = s.factory.CallContractAndCheckLogs(
 					granter.Priv,
 					txArgs, approveCallArgs,
-					approvalCheck,
+					execRevertedCheck,
 				)
 				Expect(err).To(BeNil(), "error while calling the smart contract")
 				Expect(s.network.NextBlock()).To(BeNil())
 
-				// check approvals after approving with amount 0
+				// the approval must still be there
 				allAuthz, err = s.grpcHandler.GetAuthorizations(sdk.AccAddress(contractAddr.Bytes()).String(), granter.AccAddr.String())
 				Expect(err).To(BeNil(), "error while reading authorizations")
-				Expect(allAuthz).To(HaveLen(0), "expected no authorizations")
+				Expect(allAuthz).To(HaveLen(1), "expected the authorization to remain")
 			})
 
 			It("should not approve if the gas is not enough", func() {
@@ -2311,33 +2337,35 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 			callArgs.MethodName = "testRevoke"
 		})
 
-		It("should revoke when sending as the granter", func() {
+		It("should fail when a contract calls revoke for the granter", func() {
 			granter := s.keyring.GetKey(0)
 
-			// set up an approval to be revoked
+			// set up an approval to be revoked (directly by the granter's EOA)
 			approveCallArgs.Args = []interface{}{
 				contractAddr, []string{staking.DelegateMsg}, big.NewInt(1e18),
 			}
 
 			s.SetupApprovalWithContractCalls(granter, txArgs, approveCallArgs)
 
+			// revoke may only be called directly by the transaction signer,
+			// so revoking through the contract must fail
 			callArgs.Args = []interface{}{contractAddr, []string{staking.DelegateMsg}}
-
-			revocationCheck := passCheck.WithExpEvents(authorization.EventTypeRevocation)
 
 			_, _, err = s.factory.CallContractAndCheckLogs(
 				granter.Priv,
 				txArgs, callArgs,
-				revocationCheck,
+				execRevertedCheck,
 			)
 			Expect(err).To(BeNil(), "error while calling the smart contract")
 			Expect(s.network.NextBlock()).To(BeNil())
 
-			// check approvals
-			authz, _, err := CheckAuthorization(s.grpcHandler, s.network.GetEncodingConfig().InterfaceRegistry, staking.DelegateAuthz, contractAddr, granter.Addr)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(fmt.Sprintf("no authorizations found for grantee %s and granter %s", contractAddr.Hex(), granter.Addr.Hex())))
-			Expect(authz).To(BeNil(), "expected authorization to be revoked")
+			// the approval must still be there
+			s.ExpectAuthorization(
+				staking.DelegateAuthz,
+				contractAddr,
+				granter.Addr,
+				&sdk.Coin{Denom: s.bondDenom, Amount: math.NewInt(1e18)},
+			)
 		})
 
 		It("should not revoke when approval is issued by a different granter", func() {
@@ -4242,7 +4270,10 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 			Expect(res.UnbondingResponses).To(HaveLen(0), "expected no unbonding delegations")
 		})
 
-		It("should write to state if all operations succeed", func() {
+		It("should fail when a contract approves and then undelegates in one call", func() {
+			// testApproveAndThenUndelegate calls approve from the contract, which may
+			// only be called directly by the transaction signer. The whole call must
+			// fail: no authorization is created and nothing is undelegated.
 			delegator := s.keyring.GetKey(0)
 
 			cArgs := factory.CallArgs{
@@ -4252,25 +4283,22 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 			}
 			txArgs.GasLimit = 1e8
 
-			logCheckArgs := passCheck.
-				WithExpEvents(authorization.EventTypeApproval, staking.EventTypeUnbond)
-
 			_, _, err := s.factory.CallContractAndCheckLogs(
 				delegator.Priv,
 				txArgs, cArgs,
-				logCheckArgs,
+				execRevertedCheck,
 			)
 			Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
 			Expect(s.network.NextBlock()).To(BeNil())
 
 			authz, _, err := CheckAuthorization(s.grpcHandler, s.network.GetEncodingConfig().InterfaceRegistry, staking.UndelegateAuthz, contractAddr, delegator.Addr)
-			Expect(err).To(BeNil())
-			Expect(authz).ToNot(BeNil(), "expected authorization not to be nil")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(fmt.Sprintf("no authorizations found for grantee %s and granter %s", contractAddr.Hex(), delegator.Addr.Hex())))
+			Expect(authz).To(BeNil(), "expected no authorization")
 
 			res, err := s.grpcHandler.GetDelegatorUnbondingDelegations(delegator.AccAddr.String())
 			Expect(err).To(BeNil())
-			Expect(res.UnbondingResponses).To(HaveLen(1), "expected one unbonding delegation")
-			Expect(res.UnbondingResponses[0].ValidatorAddress).To(Equal(valAddr.String()), "expected different validator address")
+			Expect(res.UnbondingResponses).To(HaveLen(0), "expected no unbonding delegations")
 		})
 	})
 
@@ -4402,21 +4430,52 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 			Expect(res).To(BeNil())
 		})
 
-		It("delegating and increasing counter should change the bank balance accordingly", func() {
+		It("should fail when the contract approves itself before delegating and increasing the counter", func() {
+			// testDelegateIncrementCounter calls approve from the contract, which may
+			// only be called directly by the transaction signer.
 			delegator := s.keyring.GetKey(0)
 
 			callArgs.MethodName = "testDelegateIncrementCounter"
 			callArgs.Args = []interface{}{valAddr.String(), delegationAmount}
 			txArgs.GasLimit = 1e9
 
-			approvalAndDelegationCheck := passCheck.WithExpEvents(
-				authorization.EventTypeApproval, staking.EventTypeDelegate,
+			_, _, err = s.factory.CallContractAndCheckLogs(
+				delegator.Priv,
+				txArgs, callArgs,
+				execRevertedCheck,
 			)
+			Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
+			Expect(s.network.NextBlock()).To(BeNil())
+
+			_, err := s.grpcHandler.GetDelegation(sdk.AccAddress(contractAddr.Bytes()).String(), valAddr.String())
+			Expect(err).To(HaveOccurred(), "expected no delegation from the contract")
+
+			auth, _ := s.network.App.AuthzKeeper.GetAuthorization(s.network.GetContext(), contractAddr.Bytes(), delegator.AccAddr, staking.DelegateMsg)
+			Expect(auth).To(BeNil(), "expected no authorization")
+
+			resBal, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
+			Expect(err).To(BeNil(), "error while getting balance")
+			Expect(resBal.Balance.Amount.BigInt()).To(Equal(delegationAmount), "expected contract balance to be unchanged")
+		})
+
+		It("delegating and increasing counter should change the bank balance accordingly", func() {
+			delegator := s.keyring.GetKey(0)
+
+			// the delegator approves the contract directly
+			s.SetupApprovalWithContractCalls(delegator, txArgs, factory.CallArgs{
+				Args: []interface{}{contractAddr, []string{staking.DelegateMsg}, delegationAmount},
+			})
+
+			callArgs.MethodName = "delegateAndIncrementCounter"
+			callArgs.Args = []interface{}{valAddr.String(), delegationAmount}
+			txArgs.GasLimit = 1e9
+
+			delegationCheck := passCheck.WithExpEvents(staking.EventTypeDelegate)
 
 			_, _, err = s.factory.CallContractAndCheckLogs(
 				delegator.Priv,
 				txArgs, callArgs,
-				approvalAndDelegationCheck,
+				delegationCheck,
 			)
 			Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
 			Expect(s.network.NextBlock()).To(BeNil())
@@ -4431,11 +4490,20 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 
 			postBalance := resBal.Balance
 			Expect(postBalance.Amount.Int64()).To(BeZero(), "expected balance to be 0 after contract call")
+
+			// the EVM state change in the same call must persist as well (counter is at slot 0)
+			counter := s.network.App.EvmKeeper.GetState(s.network.GetContext(), contractAddr, common.Hash{})
+			Expect(counter.Big().Int64()).To(Equal(int64(1)), "expected counter to be incremented")
 		})
 	})
 
 	Context("when updating the stateDB prior to calling the precompile", func() {
-		It("should utilize the same contract balance to delegate", func() {
+		// approveDepositAndDelegate* call approve from the contract, which may only be
+		// called directly by the transaction signer. The deposit+delegate flows are
+		// covered by the approve-free delegateAndIncrementCounter and depositDelegateAndFail
+		// functions, with the approval
+		// made directly by the delegator beforehand.
+		It("should fail when the contract approves itself before depositing and delegating", func() {
 			delegator := s.keyring.GetKey(0)
 
 			callArgs.MethodName = "approveDepositAndDelegate"
@@ -4444,13 +4512,42 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 			txArgs.Amount = big.NewInt(2e18)
 			txArgs.GasLimit = 1e9
 
-			approvalAndDelegationCheck := passCheck.WithExpEvents(
-				authorization.EventTypeApproval, staking.EventTypeDelegate,
-			)
 			_, _, err = s.factory.CallContractAndCheckLogs(
 				delegator.Priv,
 				txArgs, callArgs,
-				approvalAndDelegationCheck,
+				execRevertedCheck,
+			)
+			Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
+			Expect(s.network.NextBlock()).To(BeNil())
+
+			resBal, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
+			Expect(err).To(BeNil(), "error while getting balance")
+			Expect(resBal.Balance.Amount.Int64()).To(BeZero(), "expected the deposit to be reverted")
+			auth, _ := s.network.App.AuthzKeeper.GetAuthorization(s.network.GetContext(), contractAddr.Bytes(), delegator.AccAddr, staking.DelegateMsg)
+			Expect(auth).To(BeNil(), "expected no authorization")
+			res, err := s.grpcHandler.GetDelegatorDelegations(sdk.AccAddress(contractAddr.Bytes()).String())
+			Expect(err).To(BeNil())
+			Expect(res.DelegationResponses).To(HaveLen(0), "expected no delegations")
+		})
+
+		It("should utilize the same contract balance to delegate", func() {
+			delegator := s.keyring.GetKey(0)
+
+			s.SetupApprovalWithContractCalls(delegator, txArgs, factory.CallArgs{
+				Args: []interface{}{contractAddr, []string{staking.DelegateMsg}, big.NewInt(2e18)},
+			})
+
+			callArgs.MethodName = "delegateAndIncrementCounter"
+			callArgs.Args = []interface{}{valAddr.String(), big.NewInt(2e18)}
+
+			txArgs.Amount = big.NewInt(2e18)
+			txArgs.GasLimit = 1e9
+
+			delegationCheck := passCheck.WithExpEvents(staking.EventTypeDelegate)
+			_, _, err = s.factory.CallContractAndCheckLogs(
+				delegator.Priv,
+				txArgs, callArgs,
+				delegationCheck,
 			)
 			Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
 			Expect(s.network.NextBlock()).To(BeNil())
@@ -4465,67 +4562,47 @@ var _ = Describe("Calling staking precompile via Solidity", Ordered, func() {
 			Expect(res.DelegationResponses).To(HaveLen(1), "expected one delegation")
 			Expect(res.DelegationResponses[0].Delegation.GetShares().BigInt()).To(Equal(big.NewInt(2e18)), "expected different delegation shares")
 		})
-		//nolint:dupl
-		It("should revert the contract balance to the original value when the precompile fails", func() {
-			delegator := s.keyring.GetKey(0)
 
-			callArgs.MethodName = "approveDepositAndDelegateExceedingAllowance"
-			callArgs.Args = []interface{}{valAddr.String()}
+		DescribeTable("should revert the contract balance to the original value when the call fails",
+			func(exceed bool) {
+				delegator := s.keyring.GetKey(0)
 
-			txArgs.Amount = big.NewInt(2e18)
-			txArgs.GasLimit = 1e9
+				s.SetupApprovalWithContractCalls(delegator, txArgs, factory.CallArgs{
+					Args: []interface{}{contractAddr, []string{staking.DelegateMsg}, big.NewInt(2e18)},
+				})
 
-			approvalAndDelegationCheck := defaultLogCheck.WithErrContains(vm.ErrExecutionReverted.Error())
-			_, _, err = s.factory.CallContractAndCheckLogs(
-				delegator.Priv,
-				txArgs, callArgs,
-				approvalAndDelegationCheck,
-			)
-			Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
-			Expect(s.network.NextBlock()).To(BeNil())
+				callArgs.MethodName = "depositDelegateAndFail"
+				callArgs.Args = []interface{}{valAddr.String(), exceed}
 
-			resBal, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
-			Expect(err).To(BeNil(), "error while getting balance")
-			balance := resBal.Balance
+				txArgs.Amount = big.NewInt(2e18)
+				txArgs.GasLimit = 1e9
 
-			Expect(balance.Amount.Int64()).To(BeZero(), "expected different contract balance after funding")
-			auth, _ := s.network.App.AuthzKeeper.GetAuthorization(s.network.GetContext(), contractAddr.Bytes(), delegator.AccAddr, staking.DelegateMsg)
-			Expect(auth).To(BeNil(), "expected no authorization")
-			res, err := s.grpcHandler.GetDelegatorDelegations(sdk.AccAddress(contractAddr.Bytes()).String())
-			Expect(err).To(BeNil())
-			Expect(res.DelegationResponses).To(HaveLen(0), "expected no delegations")
-		})
+				_, _, err = s.factory.CallContractAndCheckLogs(
+					delegator.Priv,
+					txArgs, callArgs,
+					execRevertedCheck,
+				)
+				Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
+				Expect(s.network.NextBlock()).To(BeNil())
 
-		//nolint:dupl
-		It("should revert the contract balance to the original value when the custom logic after the precompile fails ", func() {
-			delegator := s.keyring.GetKey(0)
+				resBal, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
+				Expect(err).To(BeNil(), "error while getting balance")
+				Expect(resBal.Balance.Amount.Int64()).To(BeZero(), "expected different contract balance after funding")
 
-			callArgs.MethodName = "approveDepositDelegateAndFailCustomLogic"
-			callArgs.Args = []interface{}{valAddr.String()}
-
-			txArgs.Amount = big.NewInt(2e18)
-			txArgs.GasLimit = 1e9
-
-			approvalAndDelegationCheck := defaultLogCheck.WithErrContains(vm.ErrExecutionReverted.Error())
-			_, _, err = s.factory.CallContractAndCheckLogs(
-				delegator.Priv,
-				txArgs, callArgs,
-				approvalAndDelegationCheck,
-			)
-			Expect(err).To(BeNil(), "error while calling the smart contract: %v", err)
-			Expect(s.network.NextBlock()).To(BeNil())
-
-			resBal, err := s.grpcHandler.GetBalanceFromBank(contractAddr.Bytes(), s.bondDenom)
-			Expect(err).To(BeNil(), "error while getting balance")
-
-			balance := resBal.Balance
-			Expect(balance.Amount.Int64()).To(BeZero(), "expected different contract balance after funding")
-			auth, _ := s.network.App.AuthzKeeper.GetAuthorization(s.network.GetContext(), contractAddr.Bytes(), delegator.AccAddr, staking.DelegateMsg)
-			Expect(auth).To(BeNil(), "expected no authorization")
-			res, err := s.grpcHandler.GetDelegatorDelegations(sdk.AccAddress(contractAddr.Bytes()).String())
-			Expect(err).To(BeNil())
-			Expect(res.DelegationResponses).To(HaveLen(0), "expected no delegations")
-		})
+				// the direct approval must be untouched
+				s.ExpectAuthorization(
+					staking.DelegateAuthz,
+					contractAddr,
+					delegator.Addr,
+					&sdk.Coin{Denom: s.bondDenom, Amount: math.NewInt(2e18)},
+				)
+				res, err := s.grpcHandler.GetDelegatorDelegations(sdk.AccAddress(contractAddr.Bytes()).String())
+				Expect(err).To(BeNil())
+				Expect(res.DelegationResponses).To(HaveLen(0), "expected no delegations")
+			},
+			Entry("when the precompile fails (exceeding the deposit and allowance)", true),
+			Entry("when the custom logic after the precompile fails", false),
+		)
 	})
 })
 
@@ -4661,133 +4738,175 @@ var _ = Describe("Batching cosmos and eth interactions", func() {
 			_ = erc20ContractAddr
 		})
 
-		It("should revert both states if a staking transaction fails", func() {
+		It("should fail when the contract calls approve and change neither state", func() {
+			// callERC20AndDelegate calls approve from the contract, which may only be
+			// called directly by the transaction signer.
 			delegator := s.keyring.GetKey(0)
 
 			res, err := s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
 			Expect(err).To(BeNil())
 			Expect(res.DelegationResponse).NotTo(BeNil())
+			sharesPre := res.DelegationResponse.Delegation.GetShares()
 
-			delegationPre := res.DelegationResponse.Delegation
-			sharesPre := delegationPre.GetShares()
-
-			// NOTE: passing an invalid validator address here should fail AFTER the erc20 transfer was made in the smart contract.
-			// Therefore this can be used to check that both EVM and Cosmos states are reverted correctly.
-			callArgs.Args = []interface{}{erc20ContractAddr, "invalid validator", transferredAmount}
-
-			_, _, err = s.factory.CallContractAndCheckLogs(
-				delegator.Priv,
-				txArgs, callArgs,
-				execRevertedCheck)
-			Expect(err).To(BeNil(), "expected error while calling the smart contract")
-			Expect(s.network.NextBlock()).To(BeNil())
-
-			res, err = s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
-			Expect(err).To(BeNil())
-			Expect(res.DelegationResponse).NotTo(BeNil())
-			delegationPost := res.DelegationResponse.Delegation
-
-			auths, err := s.grpcHandler.GetAuthorizations(sdk.AccAddress(contractAddr.Bytes()).String(), delegator.AccAddr.String())
-			Expect(err).To(BeNil(), "error while getting authorizations: %v", err)
-			sharesPost := delegationPost.GetShares()
-			erc20BalancePost := s.network.App.Erc20Keeper.BalanceOf(s.network.GetContext(), erc20Contract.ABI, erc20ContractAddr, delegator.Addr)
-
-			Expect(auths).To(BeEmpty(), "expected no authorizations when reverting state")
-			Expect(sharesPost).To(Equal(sharesPre), "expected shares to be equal when reverting state")
-			Expect(erc20BalancePost.Int64()).To(BeZero(), "expected erc20 balance of target address to be zero when reverting state")
-		})
-
-		It("should revert both states if an ERC20 transaction fails", func() {
-			delegator := s.keyring.GetKey(0)
-
-			res, err := s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
-			Expect(err).To(BeNil())
-			Expect(res.DelegationResponse).NotTo(BeNil())
-
-			delegationPre := res.DelegationResponse.Delegation
-			sharesPre := delegationPre.GetShares()
-
-			// NOTE: trying to transfer more than the balance of the contract should fail AFTER the approval
-			// for delegating was made in the smart contract.
-			// Therefore this can be used to check that both EVM and Cosmos states are reverted correctly.
-			moreThanMintedAmount := new(big.Int).Add(mintAmount, big.NewInt(1))
-			callArgs.Args = []interface{}{erc20ContractAddr, s.network.GetValidators()[0].OperatorAddress, moreThanMintedAmount}
-
-			_, _, err = s.factory.CallContractAndCheckLogs(
-				delegator.Priv,
-				txArgs, callArgs,
-				execRevertedCheck)
-			Expect(err).To(BeNil(), "expected error while calling the smart contract")
-			Expect(s.network.NextBlock()).To(BeNil())
-
-			res, err = s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
-			Expect(err).To(BeNil())
-			Expect(res.DelegationResponse).NotTo(BeNil())
-			delegationPost := res.DelegationResponse.Delegation
-
-			auths, err := s.grpcHandler.GetAuthorizations(sdk.AccAddress(contractAddr.Bytes()).String(), delegator.AccAddr.String())
-			Expect(err).To(BeNil(), "error while getting authorizations: %v", err)
-			sharesPost := delegationPost.GetShares()
-			erc20BalancePost := s.network.App.Erc20Keeper.BalanceOf(s.network.GetContext(), erc20Contract.ABI, erc20ContractAddr, delegator.Addr)
-
-			Expect(auths).To(BeEmpty(), "expected no authorizations when reverting state")
-			Expect(sharesPost).To(Equal(sharesPre), "expected shares to be equal when reverting state")
-			Expect(erc20BalancePost.Int64()).To(BeZero(), "expected erc20 balance of target address to be zero when reverting state")
-		})
-
-		It("should persist changes in both the cosmos and eth states", func() {
-			delegator := s.keyring.GetKey(0)
-
-			res, err := s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
-			Expect(err).To(BeNil())
-			Expect(res.DelegationResponse).NotTo(BeNil())
-
-			delegationPre := res.DelegationResponse.Delegation
-			sharesPre := delegationPre.GetShares()
-
-			// NOTE: trying to transfer more than the balance of the contract should fail AFTER the approval
-			// for delegating was made in the smart contract.
-			// Therefore this can be used to check that both EVM and Cosmos states are reverted correctly.
 			callArgs.Args = []interface{}{erc20ContractAddr, s.network.GetValidators()[0].OperatorAddress, transferredAmount}
 
-			// Build combined map of ABI events to check for both ERC20 events as well as precompile events
-			//
-			// NOTE: only add the transfer event - when adding all contract events to the combined map,
-			// the ERC20 Approval event will overwrite the precompile Approval event, which will cause
-			// the check to fail because of unexpected events in the logs.
-			combinedABIEvents := s.precompile.Events
-			combinedABIEvents["Transfer"] = erc20Contract.ABI.Events["Transfer"]
-
-			successCheck := passCheck.
-				WithABIEvents(combinedABIEvents).
-				WithExpEvents(
-					authorization.EventTypeApproval, "Transfer", staking.EventTypeDelegate,
-				)
-
 			_, _, err = s.factory.CallContractAndCheckLogs(
 				delegator.Priv,
 				txArgs, callArgs,
-				successCheck)
-			Expect(err).ToNot(HaveOccurred(), "error while calling the smart contract")
+				execRevertedCheck)
+			Expect(err).To(BeNil(), "expected error while calling the smart contract")
 			Expect(s.network.NextBlock()).To(BeNil())
 
 			res, err = s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
 			Expect(err).To(BeNil())
-			Expect(res.DelegationResponse).NotTo(BeNil(),
-				"expected delegation from %s to validator %s to be found after calling the smart contract",
-				delegator.AccAddr.String(), validator.String(),
-			)
-			delegationPost := res.DelegationResponse.Delegation
+			Expect(res.DelegationResponse).NotTo(BeNil())
+			sharesPost := res.DelegationResponse.Delegation.GetShares()
 
 			auths, err := s.grpcHandler.GetAuthorizations(sdk.AccAddress(contractAddr.Bytes()).String(), delegator.AccAddr.String())
 			Expect(err).To(BeNil(), "error while getting authorizations: %v", err)
-			sharesPost := delegationPost.GetShares()
 			erc20BalancePost := s.network.App.Erc20Keeper.BalanceOf(s.network.GetContext(), erc20Contract.ABI, erc20ContractAddr, delegator.Addr)
 
-			Expect(sharesPost.GT(sharesPre)).To(BeTrue(), "expected shares to be more than before")
-			Expect(erc20BalancePost).To(Equal(transferredAmount), "expected different erc20 balance of target address")
-			// NOTE: there should be no authorizations because the full approved amount is delegated
-			Expect(auths).To(HaveLen(0), "expected no authorization to be found")
+			Expect(auths).To(BeEmpty(), "expected no authorizations")
+			Expect(sharesPost).To(Equal(sharesPre), "expected shares to be unchanged")
+			Expect(erc20BalancePost.Int64()).To(BeZero(), "expected erc20 balance of target address to be zero")
+		})
+
+		// The tests below use callERC20AndDelegateWithoutApproval: the delegator first
+		// approves the contract directly against the staking precompile (a contract may
+		// no longer call approve), then the contract transfers ERC20 tokens and delegates.
+		Context("with a direct approval by the delegator", func() {
+			BeforeEach(func() {
+				s.SetupApprovalWithContractCalls(
+					s.keyring.GetKey(0),
+					evmtypes.EvmTxArgs{To: &contractAddr},
+					factory.CallArgs{
+						Args: []interface{}{contractAddr, []string{staking.DelegateMsg}, transferredAmount},
+					},
+				)
+				callArgs.MethodName = "callERC20AndDelegateWithoutApproval"
+			})
+
+			It("should revert both states if a staking transaction fails", func() {
+				delegator := s.keyring.GetKey(0)
+
+				res, err := s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
+				Expect(err).To(BeNil())
+				Expect(res.DelegationResponse).NotTo(BeNil())
+
+				delegationPre := res.DelegationResponse.Delegation
+				sharesPre := delegationPre.GetShares()
+
+				// NOTE: passing an invalid validator address here should fail AFTER the erc20 transfer was made in the smart contract.
+				// Therefore this can be used to check that both EVM and Cosmos states are reverted correctly.
+				callArgs.Args = []interface{}{erc20ContractAddr, "invalid validator", transferredAmount}
+
+				_, _, err = s.factory.CallContractAndCheckLogs(
+					delegator.Priv,
+					txArgs, callArgs,
+					execRevertedCheck)
+				Expect(err).To(BeNil(), "expected error while calling the smart contract")
+				Expect(s.network.NextBlock()).To(BeNil())
+
+				res, err = s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
+				Expect(err).To(BeNil())
+				Expect(res.DelegationResponse).NotTo(BeNil())
+				delegationPost := res.DelegationResponse.Delegation
+
+				sharesPost := delegationPost.GetShares()
+				erc20BalancePost := s.network.App.Erc20Keeper.BalanceOf(s.network.GetContext(), erc20Contract.ABI, erc20ContractAddr, delegator.Addr)
+
+				// the direct approval must be untouched
+				s.ExpectAuthorization(staking.DelegateAuthz, contractAddr, delegator.Addr, &sdk.Coin{Denom: s.bondDenom, Amount: math.NewIntFromBigInt(transferredAmount)})
+				Expect(sharesPost).To(Equal(sharesPre), "expected shares to be equal when reverting state")
+				Expect(erc20BalancePost.Int64()).To(BeZero(), "expected erc20 balance of target address to be zero when reverting state")
+			})
+
+			It("should revert both states if an ERC20 transaction fails", func() {
+				delegator := s.keyring.GetKey(0)
+
+				res, err := s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
+				Expect(err).To(BeNil())
+				Expect(res.DelegationResponse).NotTo(BeNil())
+
+				delegationPre := res.DelegationResponse.Delegation
+				sharesPre := delegationPre.GetShares()
+
+				// NOTE: trying to transfer more than the balance of the contract should fail
+				// before the delegation is made in the smart contract.
+				// Therefore this can be used to check that both EVM and Cosmos states are reverted correctly.
+				moreThanMintedAmount := new(big.Int).Add(mintAmount, big.NewInt(1))
+				callArgs.Args = []interface{}{erc20ContractAddr, s.network.GetValidators()[0].OperatorAddress, moreThanMintedAmount}
+
+				_, _, err = s.factory.CallContractAndCheckLogs(
+					delegator.Priv,
+					txArgs, callArgs,
+					execRevertedCheck)
+				Expect(err).To(BeNil(), "expected error while calling the smart contract")
+				Expect(s.network.NextBlock()).To(BeNil())
+
+				res, err = s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
+				Expect(err).To(BeNil())
+				Expect(res.DelegationResponse).NotTo(BeNil())
+				delegationPost := res.DelegationResponse.Delegation
+
+				sharesPost := delegationPost.GetShares()
+				erc20BalancePost := s.network.App.Erc20Keeper.BalanceOf(s.network.GetContext(), erc20Contract.ABI, erc20ContractAddr, delegator.Addr)
+
+				s.ExpectAuthorization(staking.DelegateAuthz, contractAddr, delegator.Addr, &sdk.Coin{Denom: s.bondDenom, Amount: math.NewIntFromBigInt(transferredAmount)})
+				Expect(sharesPost).To(Equal(sharesPre), "expected shares to be equal when reverting state")
+				Expect(erc20BalancePost.Int64()).To(BeZero(), "expected erc20 balance of target address to be zero when reverting state")
+			})
+
+			It("should persist changes in both the cosmos and eth states", func() {
+				delegator := s.keyring.GetKey(0)
+
+				res, err := s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
+				Expect(err).To(BeNil())
+				Expect(res.DelegationResponse).NotTo(BeNil())
+
+				delegationPre := res.DelegationResponse.Delegation
+				sharesPre := delegationPre.GetShares()
+
+				callArgs.Args = []interface{}{erc20ContractAddr, s.network.GetValidators()[0].OperatorAddress, transferredAmount}
+
+				// Build combined map of ABI events to check for both ERC20 events as well as precompile events
+				//
+				// NOTE: only add the transfer event - when adding all contract events to the combined map,
+				// the ERC20 Approval event will overwrite the precompile Approval event.
+				combinedABIEvents := s.precompile.Events
+				combinedABIEvents["Transfer"] = erc20Contract.ABI.Events["Transfer"]
+
+				successCheck := passCheck.
+					WithABIEvents(combinedABIEvents).
+					WithExpEvents(
+						"Transfer", staking.EventTypeDelegate,
+					)
+
+				_, _, err = s.factory.CallContractAndCheckLogs(
+					delegator.Priv,
+					txArgs, callArgs,
+					successCheck)
+				Expect(err).ToNot(HaveOccurred(), "error while calling the smart contract")
+				Expect(s.network.NextBlock()).To(BeNil())
+
+				res, err = s.grpcHandler.GetDelegation(delegator.AccAddr.String(), validator.String())
+				Expect(err).To(BeNil())
+				Expect(res.DelegationResponse).NotTo(BeNil(),
+					"expected delegation from %s to validator %s to be found after calling the smart contract",
+					delegator.AccAddr.String(), validator.String(),
+				)
+				delegationPost := res.DelegationResponse.Delegation
+
+				auths, err := s.grpcHandler.GetAuthorizations(sdk.AccAddress(contractAddr.Bytes()).String(), delegator.AccAddr.String())
+				Expect(err).To(BeNil(), "error while getting authorizations: %v", err)
+				sharesPost := delegationPost.GetShares()
+				erc20BalancePost := s.network.App.Erc20Keeper.BalanceOf(s.network.GetContext(), erc20Contract.ABI, erc20ContractAddr, delegator.Addr)
+
+				Expect(sharesPost.GT(sharesPre)).To(BeTrue(), "expected shares to be more than before")
+				Expect(erc20BalancePost).To(Equal(transferredAmount), "expected different erc20 balance of target address")
+				// NOTE: there should be no authorizations because the full approved amount is delegated
+				Expect(auths).To(HaveLen(0), "expected no authorization to be found")
+			})
 		})
 	})
 })

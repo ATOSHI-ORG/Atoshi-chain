@@ -95,7 +95,12 @@ func (p Precompile) Run(evm *vm.EVM, contract *vm.Contract, readOnly bool) (bz [
 	switch method.Name {
 	// Approval transaction
 	case authorization.ApproveMethod:
-		bz, err = p.Approve(ctx, evm.Origin, stateDB, method, args)
+		// The granter is tx.origin, so only a direct call from tx.origin may
+		// grant: otherwise any contract a user calls could grant itself (or
+		// anyone) the right to move the user's funds.
+		if err = cmn.RequireDirectCall(evm, contract); err == nil {
+			bz, err = p.Approve(ctx, evm.Origin, stateDB, method, args)
+		}
 	// Vesting transactions
 	case CreateClawbackVestingAccountMethod:
 		bz, err = p.CreateClawbackVestingAccount(ctx, evm.Origin, stateDB, method, args)

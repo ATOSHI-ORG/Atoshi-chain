@@ -1,10 +1,21 @@
 package distribution_test
 
 import (
+	"math/big"
+
 	"cosmossdk.io/math"
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+	"github.com/ethereum/go-ethereum/common"
+	//nolint:revive // dot imports are fine for Ginkgo
+	. "github.com/onsi/gomega"
+
+	"github.com/atoshi-chain/atoshi/v20/precompiles/authorization"
+	"github.com/atoshi-chain/atoshi/v20/precompiles/testutil"
+	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/factory"
+	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
 
 	"github.com/atoshi-chain/atoshi/v20/precompiles/staking"
 	"github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/keyring"
@@ -93,4 +104,32 @@ func generateKeys(count int) []keyring.Key {
 		accs = append(accs, acc)
 	}
 	return accs
+}
+
+// approveDelegationDirectly grants `grantee` a DELEGATE StakeAuthorization from
+// the account of `granterPriv` by calling the staking precompile directly.
+// Approvals may only be made by tx.origin calling the precompile itself (a
+// contract calling approve is rejected), so contracts that delegate through the
+// staking precompile need this grant set up beforehand.
+func (s *PrecompileTestSuite) approveDelegationDirectly(granterPriv cryptotypes.PrivKey, grantee common.Address, amount *big.Int) {
+	stkPrecompile, err := s.getStakingPrecompile()
+	Expect(err).To(BeNil())
+
+	precompileAddr := stkPrecompile.Address()
+	_, _, err = s.factory.CallContractAndCheckLogs(
+		granterPriv,
+		evmtypes.EvmTxArgs{To: &precompileAddr},
+		factory.CallArgs{
+			ContractABI: stkPrecompile.ABI,
+			MethodName:  authorization.ApproveMethod,
+			Args:        []interface{}{grantee, amount, []string{staking.DelegateMsg}},
+		},
+		testutil.LogCheckArgs{
+			ABIEvents: stkPrecompile.ABI.Events,
+			ExpEvents: []string{authorization.EventTypeApproval},
+			ExpPass:   true,
+		},
+	)
+	Expect(err).To(BeNil(), "error while approving the delegation directly: %v", err)
+	Expect(s.network.NextBlock()).To(BeNil())
 }

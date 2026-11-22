@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/atoshi-chain/atoshi/v20/precompiles/authorization"
 	cmn "github.com/atoshi-chain/atoshi/v20/precompiles/common"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/core/vm"
 	evmtypes "github.com/atoshi-chain/atoshi/v20/x/evm/types"
@@ -83,11 +82,14 @@ func (p *Precompile) FundVestingAccount(
 
 	isContractCaller := contract.CallerAddress != origin
 
-	// funder can only be the origin or the contract.Caller
-	isContractFunder := contract.CallerAddress == funderAddr && isContractCaller
-
-	if !isContractFunder && origin != funderAddr {
-		return nil, fmt.Errorf(ErrDifferentFromOrigin, origin, funderAddr)
+	// Only the funder itself -- the direct caller of the precompile -- may fund
+	// from its own balance. This used to accept a contract acting for
+	// tx.origin when tx.origin had approved it, and approve took its granter
+	// from tx.origin too, so any contract a user called could approve itself
+	// and fund an attacker's vesting account from the user's whole balance.
+	// cosmos/evm removed the approval path the same way (#373).
+	if contract.CallerAddress != funderAddr {
+		return nil, fmt.Errorf(ErrDifferentFromOrigin, contract.CallerAddress, funderAddr)
 	}
 
 	p.Logger(ctx).Debug(
@@ -98,18 +100,6 @@ func (p *Precompile) FundVestingAccount(
 			msg.FunderAddress, msg.VestingAddress, msg.StartTime, msg.LockupPeriods, msg.VestingPeriods,
 		),
 	)
-
-	// in case the contract is the funder
-	// don't check for auth.
-	// The smart contract (funder) should handle who is authorized to make this call
-	if isContractCaller && !isContractFunder {
-		// if calling from a contract and the contract is not the funder (origin == funderAddr)
-		// check that an authorization exists
-		_, _, err := authorization.CheckAuthzExists(ctx, p.AuthzKeeper, contract.CallerAddress, funderAddr, FundVestingAccountMsgURL)
-		if err != nil {
-			return nil, fmt.Errorf(authorization.ErrAuthzDoesNotExistOrExpired, FundVestingAccountMsgURL, contract.CallerAddress)
-		}
-	}
 
 	_, err = p.vestingKeeper.FundVestingAccount(ctx, msg)
 	if err != nil {
@@ -158,12 +148,10 @@ func (p *Precompile) Clawback(
 
 	isContractCaller := contract.CallerAddress != origin
 
-	// funder can only be the origin or the contract.Caller
-	isContractFunder := contract.CallerAddress == funderAddr && isContractCaller
-
-	// if caller address is origin, the funder MUST match the origin
-	if !isContractFunder && origin != funderAddr {
-		return nil, fmt.Errorf(ErrDifferentFunderOrigin, origin, funderAddr)
+	// Only the funder itself, as the direct caller, may claw back. See
+	// FundVestingAccount for why the tx.origin approval path is gone.
+	if contract.CallerAddress != funderAddr {
+		return nil, fmt.Errorf(ErrDifferentFunderOrigin, contract.CallerAddress, funderAddr)
 	}
 
 	p.Logger(ctx).Debug(
@@ -174,18 +162,6 @@ func (p *Precompile) Clawback(
 			msg.FunderAddress, msg.AccountAddress, msg.DestAddress,
 		),
 	)
-
-	// in case the contract is the funder
-	// don't check for auth.
-	// The smart contract (funder) should handle who is authorized to make this call
-	if isContractCaller && !isContractFunder {
-		// if calling from a contract and the contract is not the funder (origin == funderAddr)
-		// check that an authorization exists.
-		_, _, err := authorization.CheckAuthzExists(ctx, p.AuthzKeeper, contract.CallerAddress, funderAddr, ClawbackMsgURL)
-		if err != nil {
-			return nil, fmt.Errorf(authorization.ErrAuthzDoesNotExistOrExpired, ClawbackMsgURL, contract.CallerAddress)
-		}
-	}
 
 	response, err := p.vestingKeeper.Clawback(ctx, msg)
 	if err != nil {
@@ -227,12 +203,11 @@ func (p *Precompile) UpdateVestingFunder(
 		return nil, err
 	}
 
-	isContractCall := contract.CallerAddress != origin
-	isContractFunder := contract.CallerAddress == funderAddr && isContractCall
-	// only the funder can update the funder
-	// if caller address is origin, the funder MUST match the origin
-	if !isContractFunder && origin != funderAddr {
-		return nil, fmt.Errorf(ErrDifferentFunderOrigin, origin, funderAddr)
+	// Only the funder itself, as the direct caller, may hand the account to a
+	// new funder. See FundVestingAccount for why the tx.origin approval path
+	// is gone.
+	if contract.CallerAddress != funderAddr {
+		return nil, fmt.Errorf(ErrDifferentFunderOrigin, contract.CallerAddress, funderAddr)
 	}
 
 	p.Logger(ctx).Debug(
@@ -243,18 +218,6 @@ func (p *Precompile) UpdateVestingFunder(
 			msg.FunderAddress, msg.NewFunderAddress, msg.VestingAddress,
 		),
 	)
-
-	// in case the contract is the funder
-	// don't check for auth.
-	// The smart contract (funder) should handle who is authorized to make this call
-	if isContractCall && !isContractFunder {
-		// if calling from a contract and the contract is not the funder (origin == funderAddr)
-		// check that an authorization exists
-		_, _, err := authorization.CheckAuthzExists(ctx, p.AuthzKeeper, contract.CallerAddress, funderAddr, UpdateVestingFunderMsgURL)
-		if err != nil {
-			return nil, fmt.Errorf(authorization.ErrAuthzDoesNotExistOrExpired, UpdateVestingFunderMsgURL, contract.CallerAddress)
-		}
-	}
 
 	_, err = p.vestingKeeper.UpdateVestingFunder(ctx, msg)
 	if err != nil {

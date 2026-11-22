@@ -97,14 +97,26 @@ func (p Precompile) Run(evm *vm.EVM, contract *vm.Contract, readOnly bool) (bz [
 
 	switch method.Name {
 	// Authorization transactions
+	// The granter of every allowance method is tx.origin, so each may only be
+	// called directly by tx.origin. Called from a contract, any contract a
+	// user interacted with could grant itself a standing StakeAuthorization
+	// over the user's stake, or strip the user's existing grants.
 	case authorization.ApproveMethod:
-		bz, err = p.Approve(ctx, evm.Origin, stateDB, method, args)
+		if err = cmn.RequireDirectCall(evm, contract); err == nil {
+			bz, err = p.Approve(ctx, evm.Origin, stateDB, method, args)
+		}
 	case authorization.RevokeMethod:
-		bz, err = p.Revoke(ctx, evm.Origin, stateDB, method, args)
+		if err = cmn.RequireDirectCall(evm, contract); err == nil {
+			bz, err = p.Revoke(ctx, evm.Origin, stateDB, method, args)
+		}
 	case authorization.IncreaseAllowanceMethod:
-		bz, err = p.IncreaseAllowance(ctx, evm.Origin, stateDB, method, args)
+		if err = cmn.RequireDirectCall(evm, contract); err == nil {
+			bz, err = p.IncreaseAllowance(ctx, evm.Origin, stateDB, method, args)
+		}
 	case authorization.DecreaseAllowanceMethod:
-		bz, err = p.DecreaseAllowance(ctx, evm.Origin, stateDB, method, args)
+		if err = cmn.RequireDirectCall(evm, contract); err == nil {
+			bz, err = p.DecreaseAllowance(ctx, evm.Origin, stateDB, method, args)
+		}
 	// Staking transactions
 	case CreateValidatorMethod:
 		bz, err = p.CreateValidator(ctx, evm.Origin, contract, stateDB, method, args)
