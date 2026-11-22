@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"testing"
 
+	sdkmath "cosmossdk.io/math"
 	"cosmossdk.io/store/prefix"
 	"github.com/cosmos/cosmos-sdk/client"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -14,6 +15,7 @@ import (
 	authsigning "github.com/cosmos/cosmos-sdk/x/auth/signing"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
 	"github.com/atoshi-chain/atoshi/v20/contracts"
 	testfactory "github.com/atoshi-chain/atoshi/v20/testutil/integration/evmos/factory"
@@ -1059,6 +1061,25 @@ func (suite *KeeperTestSuite) TestDeleteAccount() {
 			malleate: func() common.Address { return contractAddr },
 			expPass:  true,
 		},
+		// GHSA-c6xv: staking state outlives the auth account, so a contract
+		// that self-destructs with an open position leaves a claim the
+		// NotBondedPool pays into nothing, again and again.
+		{
+			name: "contract with a delegation cannot be removed",
+			malleate: func() common.Address {
+				suite.delegateFrom(ctx, contractAddr, false)
+				return contractAddr
+			},
+			errContains: "cannot self-destruct",
+		},
+		{
+			name: "contract with an unbonding delegation cannot be removed",
+			malleate: func() common.Address {
+				suite.delegateFrom(ctx, contractAddr, true)
+				return contractAddr
+			},
+			errContains: "cannot self-destruct",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1085,5 +1106,26 @@ func (suite *KeeperTestSuite) TestDeleteAccount() {
 				suite.Require().NotNil(acc, "expected account to still be found after failing to delete")
 			}
 		})
+	}
+}
+
+// delegateFrom funds addr, delegates from it to the first validator, and, if
+// unbond is set, undelegates all of it again so only an unbonding remains.
+func (suite *KeeperTestSuite) delegateFrom(ctx sdk.Context, addr common.Address, unbond bool) {
+	app := suite.network.App
+	bondDenom, err := app.StakingKeeper.BondDenom(ctx)
+	suite.Require().NoError(err)
+	amt := sdkmath.NewInt(1e18)
+	suite.Require().NoError(app.BankKeeper.SendCoins(ctx, suite.keyring.GetAccAddr(0), addr.Bytes(), sdk.NewCoins(sdk.NewCoin(bondDenom, amt))))
+
+	valAddr, err := sdk.ValAddressFromBech32(suite.network.GetValidators()[0].OperatorAddress)
+	suite.Require().NoError(err)
+	val, err := app.StakingKeeper.GetValidator(ctx, valAddr)
+	suite.Require().NoError(err)
+	shares, err := app.StakingKeeper.Delegate(ctx, addr.Bytes(), amt, stakingtypes.Unbonded, val, true)
+	suite.Require().NoError(err)
+	if unbond {
+		_, _, err = app.StakingKeeper.Undelegate(ctx, addr.Bytes(), valAddr, shares)
+		suite.Require().NoError(err)
 	}
 }

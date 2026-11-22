@@ -62,7 +62,7 @@ type StateDB struct {
 	accessList *accessList
 
 	// The count of calls to precompiles
-	precompileCallsCounter uint8
+	precompileCallsCounter uint64
 }
 
 // New creates a new state from a given trie.
@@ -349,9 +349,27 @@ func (s *StateDB) AddPrecompileFn(addr common.Address, cms storetypes.CacheMulti
 	if stateObject == nil {
 		return fmt.Errorf("could not add precompile call to address %s. State object not found", addr)
 	}
+	// Check before counting and before journaling. The counter used to be
+	// incremented first and compared after, as a uint8: calls past the limit
+	// kept advancing it, and the 256th wrapped it to zero and reopened the
+	// limit (cosmos/evm GHSA-wm4f). It is deliberately not restored when a
+	// call reverts, so a reverted call still uses up its slot.
+	if err := s.CheckPrecompileCallLimit(); err != nil {
+		return err
+	}
 	stateObject.AddPrecompileFn(cms, events)
 	s.precompileCallsCounter++
-	if s.precompileCallsCounter > types.MaxPrecompileCalls {
+	return nil
+}
+
+// CheckPrecompileCallLimit reports whether the tx may make another stateful
+// precompile call. Precompiles call it before doing anything expensive: each
+// call copies the whole cache multistore and flushes every dirty account and
+// storage slot into it, and those used to run before the limit was checked,
+// so a tx could make tens of thousands of zero-gas calls that each paid for a
+// full copy (one 21.5M-gas tx took 63.7s to execute).
+func (s *StateDB) CheckPrecompileCallLimit() error {
+	if s.precompileCallsCounter >= types.MaxPrecompileCalls {
 		return fmt.Errorf("max calls to precompiles (%d) reached", types.MaxPrecompileCalls)
 	}
 	return nil
@@ -511,14 +529,41 @@ func (s *StateDB) Commit() error {
 	if s.writeCache != nil {
 		s.writeCache()
 	}
-	return s.commitWithCtx(s.ctx)
+	return commitAtomically(s.ctx, s.commitWithCtx)
 }
 
 // CommitWithCacheCtx writes the dirty states to keeper using the cacheCtx.
 // This function is used before any precompile call to make sure the cacheCtx
 // is updated with the latest changes within the tx (StateDB's journal entries).
+//
+// The write is all or nothing: on error the cacheCtx is left exactly as it was.
 func (s *StateDB) CommitWithCacheCtx() error {
-	return s.commitWithCtx(s.cacheCtx)
+	return commitAtomically(s.cacheCtx, s.commitWithCtx)
+}
+
+// commitAtomically runs commit against a branch of ctx and writes the branch
+// back only if commit succeeded.
+//
+// commitWithCtx writes dirty accounts one at a time in address order and stops
+// at the first error, so on its own a failure leaves every account before the
+// failing one written. Writing to an address that may not receive funds (any
+// module account) fails part-way like this. Before a precompile call that
+// partial write landed in the cacheCtx with nothing on the journal to undo it:
+// an account credited earlier in the frame kept the credit after the frame
+// reverted, and the final commit persisted it (cosmos/evm GHSA-367m is the
+// same flaw on the final commit).
+func commitAtomically(ctx sdk.Context, commit func(sdk.Context) error) error {
+	if ctx.MultiStore() == nil {
+		// Only unit tests with a mock keeper get here; there is no store to
+		// branch and nothing is written through ctx.
+		return commit(ctx)
+	}
+	branch, write := ctx.CacheContext()
+	if err := commit(branch); err != nil {
+		return err
+	}
+	write()
+	return nil
 }
 
 // commitWithCtx writes the dirty states to keeper

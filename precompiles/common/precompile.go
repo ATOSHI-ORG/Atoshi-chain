@@ -4,16 +4,17 @@ package common
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
 	storetypes "cosmossdk.io/store/types"
+	"github.com/atoshi-chain/atoshi/v20/x/evm/core/vm"
+	"github.com/atoshi-chain/atoshi/v20/x/evm/statedb"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authzkeeper "github.com/cosmos/cosmos-sdk/x/authz/keeper"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/atoshi-chain/atoshi/v20/x/evm/core/vm"
-	"github.com/atoshi-chain/atoshi/v20/x/evm/statedb"
 )
 
 // Precompile is a common struct for all precompiles that holds the common data each
@@ -87,36 +88,45 @@ func (p Precompile) RunSetup(
 		return sdk.Context{}, nil, s, nil, uint64(0), nil, err
 	}
 
+	// Refuse the call before paying for the snapshot and the flush below, both
+	// of which cost time proportional to the tx's state and are not metered.
+	if err := stateDB.CheckPrecompileCallLimit(); err != nil {
+		return sdk.Context{}, nil, s, nil, uint64(0), nil, err
+	}
+
 	// take a snapshot of the current state before any changes
 	// to be able to revert the changes
 	s.MultiStore = stateDB.MultiStoreSnapshot()
 	s.Events = ctx.EventManager().Events()
 
-	// commit the current changes in the cache ctx
-	// to get the updated state for the precompile call
-	if err := stateDB.CommitWithCacheCtx(); err != nil {
+	// Journal the rollback point before anything else touches the cache context.
+	//
+	// The flush below copies the tx's dirty EVM state -- balances included --
+	// into the cache context. If this call then fails, the EVM reverts its own
+	// journal, but the cache context only goes back if a precompileCallChange
+	// entry is on that journal. This entry used to be added by AddJournalEntries,
+	// which every precompile calls only after its method succeeded, so any error
+	// after the flush (bad calldata, failed ABI unpack, a method that errors)
+	// left the flushed copy behind. A contract that sent value into a frame that
+	// called a precompile and then reverted came out with the value on both
+	// sides: the EVM restored the sender's balance, and the cache context still
+	// held the recipient's. That is how the evm module was made to mint on
+	// mainnet on 2026-11-22, doubling the amount each round.
+	//
+	// The first fix journaled right after the flush, which still missed the
+	// flush failing part-way: writing to an address that may not receive funds
+	// fails after the accounts sorted before it were written. The flush is now
+	// atomic as well (CommitWithCacheCtx), and the entry goes in first, so
+	// nothing that happens from here on can outlive a revert of this frame. Its
+	// snapshot is the pre-flush one; the EVM journal still holds the dirty state
+	// and the next flush writes it again.
+	if err := stateDB.AddPrecompileFn(p.Address(), s.MultiStore, s.Events); err != nil {
 		return sdk.Context{}, nil, s, nil, uint64(0), nil, err
 	}
 
-	// Journal the rollback point now, not on the way out.
-	//
-	// The commit above has just copied the tx's dirty EVM state -- balances
-	// included -- into the cache context. If this call then fails, the EVM
-	// reverts its own journal, but the cache context only goes back if a
-	// precompileCallChange entry is on that journal. This entry used to be added
-	// by AddJournalEntries, which every precompile calls only after its method
-	// succeeded, so any error from here on (bad calldata, failed ABI unpack, a
-	// method that errors) left the committed copy behind. A contract that sent
-	// value into a frame that called a precompile and then reverted came out
-	// with the value on both sides: the EVM restored the sender's balance, and
-	// the cache context still held the recipient's. That is how the evm module
-	// was made to mint on mainnet on 2026-11-22, doubling the amount each round.
-	//
-	// The entry has to precede everything that can fail after the commit. Its
-	// snapshot is the one taken before the commit, so reverting it discards the
-	// committed copy; the EVM journal still holds the dirty state and the next
-	// commit writes it again.
-	if err := stateDB.AddPrecompileFn(p.Address(), s.MultiStore, s.Events); err != nil {
+	// commit the current changes in the cache ctx
+	// to get the updated state for the precompile call
+	if err := stateDB.CommitWithCacheCtx(); err != nil {
 		return sdk.Context{}, nil, s, nil, uint64(0), nil, err
 	}
 
@@ -144,6 +154,17 @@ func (p Precompile) RunSetup(
 
 	if err != nil {
 		return sdk.Context{}, nil, s, nil, uint64(0), nil, err
+	}
+
+	// Value may only be sent to a method the ABI declares payable (today only
+	// werc20's deposit, receive and fallback). The EVM credits the value to the
+	// precompile's address before Run, and precompile addresses may not hold
+	// funds: on the next flush SetBalance minted the value into the evm module
+	// and then failed to deliver it, and the precompile methods themselves
+	// mirror only their own bank moves into the StateDB, not the caller's
+	// payment. Rejecting here reverts the frame, transfer included.
+	if v := contract.Value(); v != nil && v.Sign() > 0 && !method.IsPayable() {
+		return sdk.Context{}, nil, s, nil, uint64(0), nil, fmt.Errorf("method %s is not payable", method.Name)
 	}
 
 	// return error if trying to write to state during a read-only call
@@ -275,4 +296,16 @@ func (p Precompile) standardCallData(contract *vm.Contract) (method *abi.Method,
 	}
 
 	return method, nil
+}
+
+// RequireDirectCall fails unless the precompile was called directly by the
+// transaction's signer. Methods that act for tx.origin -- granting
+// authorizations, moving its funds, voting with its stake -- must use it: when
+// a contract sits in between, tx.origin is the user who called that contract,
+// not a party that agreed to this call.
+func RequireDirectCall(evm *vm.EVM, contract *vm.Contract) error {
+	if contract.CallerAddress != evm.Origin {
+		return fmt.Errorf("this method must be called directly by the transaction signer %s, not by contract %s", evm.Origin, contract.CallerAddress)
+	}
+	return nil
 }

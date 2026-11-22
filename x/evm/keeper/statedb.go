@@ -5,11 +5,14 @@ package keeper
 
 import (
 	"errors"
+	"math"
 	"math/big"
 
+	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/store/prefix"
 	storetypes "cosmossdk.io/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	errortypes "github.com/cosmos/cosmos-sdk/types/errors"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/statedb"
 	"github.com/atoshi-chain/atoshi/v20/x/evm/types"
@@ -113,6 +116,25 @@ func (k *Keeper) SetBalance(ctx sdk.Context, addr common.Address, amount *big.In
 	coin := k.bankWrapper.GetBalance(ctx, cosmosAddr, types.GetEVMCoinDenom())
 
 	delta := new(big.Int).Sub(amount, coin.Amount.BigInt())
+	if delta.Sign() == 0 {
+		return nil
+	}
+
+	// A module account's balance is never the EVM's to set, in either
+	// direction (cosmos/evm 3524ebc6). The StateDB reads an account once and
+	// keeps that value; a precompile that moves funds into a module account
+	// in the same tx (a delegation into the bonded pool, a deposit into the
+	// community pool) changes the bank balance behind it. If the EVM also
+	// touched that module account -- a 1-wei transfer is enough -- the commit
+	// wrote the stale value back, burning whatever the precompile had just
+	// put there. Crediting one used to mint first and fail second, leaving
+	// the minted coins in the evm module. Either way the tx now fails.
+	if acct := k.accountKeeper.GetAccount(ctx, cosmosAddr); acct != nil {
+		if _, isModule := acct.(sdk.ModuleAccountI); isModule {
+			return errorsmod.Wrapf(errortypes.ErrUnauthorized, "%s is a module account; its balance cannot be changed from the EVM", cosmosAddr)
+		}
+	}
+
 	switch delta.Sign() {
 	case 1:
 		// mint
@@ -235,6 +257,30 @@ func (k *Keeper) DeleteCode(ctx sdk.Context, codeHash []byte) {
 	)
 }
 
+// hasStakingPositions reports whether the account has any delegations,
+// redelegations or unbonding delegations.
+func (k *Keeper) hasStakingPositions(ctx sdk.Context, cosmosAddr sdk.AccAddress) (bool, error) {
+	delegations, err := k.stakingKeeper.GetAllDelegatorDelegations(ctx, cosmosAddr)
+	if err != nil {
+		return false, errorsmod.Wrapf(err, "failed to get delegations for account %s", cosmosAddr)
+	}
+	if len(delegations) > 0 {
+		return true, nil
+	}
+	redelegations, err := k.stakingKeeper.GetRedelegations(ctx, cosmosAddr, math.MaxUint16)
+	if err != nil {
+		return false, errorsmod.Wrapf(err, "failed to get redelegations for account %s", cosmosAddr)
+	}
+	if len(redelegations) > 0 {
+		return true, nil
+	}
+	ubds, err := k.stakingKeeper.GetAllUnbondingDelegations(ctx, cosmosAddr)
+	if err != nil {
+		return false, errorsmod.Wrapf(err, "failed to get unbonding delegations for account %s", cosmosAddr)
+	}
+	return len(ubds) > 0, nil
+}
+
 // DeleteAccount handles contract's suicide call:
 // - clear balance
 // - remove code
@@ -251,6 +297,21 @@ func (k *Keeper) DeleteAccount(ctx sdk.Context, addr common.Address) error {
 	// NOTE: only Ethereum contracts can be self-destructed
 	if !k.IsContract(ctx, addr) {
 		return errors.New("only smart contracts can be self-destructed")
+	}
+
+	// A contract that still holds staking positions may not be deleted
+	// (cosmos/evm GHSA-c6xv). Staking state is keyed by address and outlives
+	// the auth account: an unbonding that matures for an address with no
+	// account debits the NotBondedPool, fails to credit anyone, and stays in
+	// the queue, so the same claim destroys pool funds again on every queue
+	// reference. Self-destructing such a contract now fails the tx.
+	hasPositions, err := k.hasStakingPositions(ctx, cosmosAddr)
+	if err != nil {
+		return err
+	}
+	if hasPositions {
+		return errorsmod.Wrapf(errortypes.ErrInvalidRequest,
+			"cannot self-destruct %s: it has delegations, redelegations or unbonding delegations", cosmosAddr)
 	}
 
 	// clear balance
